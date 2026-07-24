@@ -70,7 +70,7 @@ jobs:
           test -z "$(git status --porcelain)"
 
       - name: Download four exact signed candidates
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: release-*
           path: candidates
@@ -79,7 +79,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download clean-machine evidence
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: clean-evidence-*
           path: evidence/clean
@@ -87,7 +87,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download safe HIL evidence
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           pattern: hil-safe-*
           path: evidence/hil-safe
@@ -95,7 +95,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download destructive HIL evidence
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: hil-destructive-linux-x86_64
           path: evidence/hil-destructive

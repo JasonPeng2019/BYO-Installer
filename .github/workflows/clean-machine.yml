@@ -36,7 +36,7 @@ jobs:
       RELEASE_RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
     steps:
       - name: Download exact signed candidate
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: release-${{ matrix.target }}
           path: candidate
@@ -44,7 +44,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download clean-test kit
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: clean-test-kit
           path: test-kit
@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload clean-machine evidence
         if: always()
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: clean-evidence-${{ matrix.target }}
           path: evidence/

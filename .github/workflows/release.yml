@@ -46,7 +46,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable clean-test kit
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: clean-test-kit
           path: |
@@ -185,18 +185,18 @@ jobs:
             "release/dist/${{ matrix.bundle }}.notarization.json"
 
       - name: Attest archive provenance
-        uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
           subject-path: release/dist/${{ matrix.archive }}
 
       - name: Attest SBOM
-        uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
+        uses: actions/attest-sbom@51e74621a501c89df81fc1391c5a8f4cfc9fab2f # v3
         with:
           subject-path: release/dist/${{ matrix.archive }}
           sbom-path: release/dist/${{ matrix.bundle }}/sbom.cdx.json
 
       - name: Upload signed candidate
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -316,18 +316,18 @@ jobs:
         run: python release/scripts/build_release.py --production --platform-signing-complete --reuse-launcher --reuse-sidecar --channel canary --version "$VERSION"
 
       - name: Attest archive provenance
-        uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
         with:
           subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.zip
 
       - name: Attest SBOM
-        uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
+        uses: actions/attest-sbom@51e74621a501c89df81fc1391c5a8f4cfc9fab2f # v3
         with:
           subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.zip
           sbom-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64/sbom.cdx.json
 
       - name: Upload signed Windows candidate
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-windows-x86_64
           path: |

@@ -103,7 +103,7 @@ jobs:
         run: python release/scripts/test_installed_e2e.py --bundle "release/dist/${{ matrix.bundle }}"
 
       - name: Upload target artifact and private symbols
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-${{ matrix.target }}
           path: |

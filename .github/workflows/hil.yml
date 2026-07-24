@@ -46,7 +46,7 @@ jobs:
       BYO_HIL_PROJECT: ${{ vars.BYO_HIL_PRIMARY_PROJECT }}
     steps:
       - name: Download exact signed candidate
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: release-${{ matrix.target }}
           path: candidate
@@ -54,7 +54,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download HIL test kit
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: clean-test-kit
           path: test-kit
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload HIL evidence
         if: always()
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: hil-safe-${{ matrix.target }}
           path: evidence/
@@ -111,7 +111,7 @@ jobs:
       BYO_HIL_ALLOW_DESTRUCTIVE: "1"
     steps:
       - name: Download exact signed candidate
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: release-linux-x86_64
           path: candidate
@@ -119,7 +119,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download HIL test kit
-        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: clean-test-kit
           path: test-kit
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload destructive HIL evidence
         if: always()
-        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: hil-destructive-linux-x86_64
           path: evidence/
