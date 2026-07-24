@@ -100,7 +100,9 @@ class Client:
             raise RuntimeError(f"MCP returned a malformed result: {response}")
         return result
 
-    def call(self, name: str, arguments: dict[str, object], expectation: str) -> dict[str, Any]:
+    def call(
+        self, name: str, arguments: dict[str, object], expectation: str
+    ) -> dict[str, Any]:
         result = self.request("tools/call", {"name": name, "arguments": arguments})
         is_error = bool(result.get("isError"))
         text = "\n".join(
@@ -132,7 +134,9 @@ def validate_fixture(path: Path, destructive: bool) -> dict[str, Any]:
     fixture = json.loads(path.read_text(encoding="utf-8"))
     rendered = json.dumps(fixture)
     if any(marker in rendered for marker in PLACEHOLDERS) or "0" * 64 in rendered:
-        raise RuntimeError("HIL fixture still contains placeholder identities or hashes")
+        raise RuntimeError(
+            "HIL fixture still contains placeholder identities or hashes"
+        )
     for field in ("firmware", "memory_map"):
         artifact = (path.parent / fixture[field]["path"]).resolve(strict=True)
         if digest(artifact) != fixture[field]["sha256"]:
@@ -164,10 +168,16 @@ def main() -> int:
     fixture = validate_fixture(args.fixture.resolve(strict=True), destructive)
     byo = args.byo.resolve(strict=True)
     if digest(byo) != args.artifact_sha256:
-        raise RuntimeError("installed launcher does not match the approved candidate hash")
+        raise RuntimeError(
+            "installed launcher does not match the approved candidate hash"
+        )
     project = args.project.resolve(strict=True)
 
-    lock = Path(os.environ.get("BYO_HIL_LOCK", str(Path.home() / f".byo-hil-{fixture['fixture_id']}")))
+    lock = Path(
+        os.environ.get(
+            "BYO_HIL_LOCK", str(Path.home() / f".byo-hil-{fixture['fixture_id']}")
+        )
+    )
     try:
         descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
@@ -178,9 +188,7 @@ def main() -> int:
     try:
         client = Client(byo, project)
         tools = client.request("tools/list", {}).get("tools", [])
-        available = {
-            item.get("name") for item in tools if isinstance(item, dict)
-        }
+        available = {item.get("name") for item in tools if isinstance(item, dict)}
         calls = fixture["safe_calls"] + (
             fixture["destructive_calls"] if destructive else []
         )
@@ -195,7 +203,9 @@ def main() -> int:
             if call["name"] in {"connect", "connect_override", "get_board_info"} and (
                 fixture["probe_uid"] not in result_text
             ):
-                raise RuntimeError("live probe identity does not match the allowlisted fixture")
+                raise RuntimeError(
+                    "live probe identity does not match the allowlisted fixture"
+                )
             results.append({"name": call["name"], "result": result})
     finally:
         try:

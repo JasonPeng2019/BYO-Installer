@@ -30,10 +30,16 @@ jobs:
         run: cargo test --manifest-path launcher/Cargo.toml --locked
 
       - name: Validate release Python
-        run: python3 -m compileall -q release/scripts
+        run: |
+          python3 -m compileall -q release/scripts hil
+          pipx run ruff==0.15.21 check release/scripts hil
+          pipx run ruff==0.15.21 format --check release/scripts hil
 
       - name: Validate shell bootstrap
         run: sh -n install.sh
+
+      - name: Validate GitHub workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -no-color
 
   agent-workspace:
     runs-on: ubuntu-24.04

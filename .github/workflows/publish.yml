@@ -174,10 +174,10 @@ jobs:
             ${{ steps.existing.outputs.argument }} \
             --history-output "channel/$CHANNEL/$sequence.json" \
             --pointer-output "channel/$CHANNEL.json" \
-            --release "candidates/release-macos-aarch64/release/dist/byo-$version-macos-aarch64" "candidates/release-macos-aarch64/release/dist/byo-$version-macos-aarch64.zip" "$base/byo-$version-macos-aarch64.zip" \
-            --release "candidates/release-macos-x86_64/release/dist/byo-$version-macos-x86_64" "candidates/release-macos-x86_64/release/dist/byo-$version-macos-x86_64.zip" "$base/byo-$version-macos-x86_64.zip" \
-            --release "candidates/release-windows-x86_64/release/dist/byo-$version-windows-x86_64" "candidates/release-windows-x86_64/release/dist/byo-$version-windows-x86_64.zip" "$base/byo-$version-windows-x86_64.zip" \
-            --release "candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64" "candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64.tar.gz" "$base/byo-$version-linux-x86_64.tar.gz"
+            --release "candidates/release-macos-aarch64/dist/byo-$version-macos-aarch64" "candidates/release-macos-aarch64/dist/byo-$version-macos-aarch64.zip" "$base/byo-$version-macos-aarch64.zip" \
+            --release "candidates/release-macos-x86_64/dist/byo-$version-macos-x86_64" "candidates/release-macos-x86_64/dist/byo-$version-macos-x86_64.zip" "$base/byo-$version-macos-x86_64.zip" \
+            --release "candidates/release-windows-x86_64/dist/byo-$version-windows-x86_64" "candidates/release-windows-x86_64/dist/byo-$version-windows-x86_64.zip" "$base/byo-$version-windows-x86_64.zip" \
+            --release "candidates/release-linux-x86_64/dist/byo-$version-linux-x86_64" "candidates/release-linux-x86_64/dist/byo-$version-linux-x86_64.tar.gz" "$base/byo-$version-linux-x86_64.tar.gz"
 
       - name: Publish immutable sequence, then pointer
         run: |
@@ -190,7 +190,7 @@ jobs:
         run: |
           version="${TAG#v}"
           home=$(mktemp -d)
-          bundle="candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64"
+          bundle="candidates/release-linux-x86_64/dist/byo-$version-linux-x86_64"
           BYO_HOME="$home" "$bundle/byo" install-runtime --bundle "$bundle"
           BYO_HOME="$home" "$home/bin/byo" update --channel "$CHANNEL" --dry-run \
             --metadata-url "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/channels/channels/$CHANNEL.json"

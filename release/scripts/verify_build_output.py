@@ -61,7 +61,9 @@ def validate_archive_paths(names: list[str], bundle_name: str) -> None:
             or any(part in {"", ".", ".."} for part in path.parts)
             or normalized in seen
         ):
-            raise RuntimeError(f"archive contains an unsafe or duplicate path: {name!r}")
+            raise RuntimeError(
+                f"archive contains an unsafe or duplicate path: {name!r}"
+            )
         seen.add(normalized)
 
 
@@ -106,10 +108,15 @@ def main() -> int:
     bundle = bundles[0]
     manifest_path = bundle / "release-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("platform") != platform or manifest.get("architecture") != architecture:
+    if (
+        manifest.get("platform") != platform
+        or manifest.get("architecture") != architecture
+    ):
         raise RuntimeError("release manifest target does not match the native job")
     if manifest.get("development_unsigned") is not True:
-        raise RuntimeError("unprotected build jobs may only produce development candidates")
+        raise RuntimeError(
+            "unprotected build jobs may only produce development candidates"
+        )
 
     lock = json.loads((ROOT / "release/source-lock.json").read_text(encoding="utf-8"))
     source = manifest.get("source", {})
@@ -118,17 +125,22 @@ def main() -> int:
         ("firmware_mcp", "firmware_mcp"),
     ):
         if source.get(manifest_key, {}).get("commit") != lock[lock_key]["commit"]:
-            raise RuntimeError(f"manifest {manifest_key} commit does not match source lock")
+            raise RuntimeError(
+                f"manifest {manifest_key} commit does not match source lock"
+            )
     installer_commit = source.get("installer", {}).get("commit", "")
     if len(installer_commit) != 40:
         raise RuntimeError("manifest does not contain the installer source commit")
     toolchain = manifest.get("toolchain", {})
-    if any(not isinstance(toolchain.get(key), str) or not toolchain[key] for key in (
-        "rustc",
-        "cargo",
-        "python",
-        "nuitka",
-    )):
+    if any(
+        not isinstance(toolchain.get(key), str) or not toolchain[key]
+        for key in (
+            "rustc",
+            "cargo",
+            "python",
+            "nuitka",
+        )
+    ):
         raise RuntimeError("manifest does not contain complete toolchain provenance")
 
     forbidden = [
@@ -148,10 +160,7 @@ def main() -> int:
         path
         for path in args.dist.iterdir()
         if path.is_file()
-        and (
-            path.name == f"{bundle.name}.zip"
-            or path.name == f"{bundle.name}.tar.gz"
-        )
+        and (path.name == f"{bundle.name}.zip" or path.name == f"{bundle.name}.tar.gz")
     )
     if len(archives) != 1:
         raise RuntimeError(f"expected one explicit release archive, found {archives}")
@@ -170,7 +179,9 @@ def main() -> int:
         if isinstance(item, dict)
     }
     if "nuitka-compilation-report.xml" not in symbol_paths:
-        raise RuntimeError("private symbol output is missing the Nuitka compilation report")
+        raise RuntimeError(
+            "private symbol output is missing the Nuitka compilation report"
+        )
     expected_symbol_suffix = {
         "macos": ".dSYM/",
         "windows": ".pdb",

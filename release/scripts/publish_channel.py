@@ -37,7 +37,9 @@ def request(
             content = response.read()
     except urllib.error.HTTPError as exc:
         diagnostic = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"GitHub channel API failed ({exc.code}): {diagnostic}") from exc
+        raise RuntimeError(
+            f"GitHub channel API failed ({exc.code}): {diagnostic}"
+        ) from exc
     return json.loads(content) if content else None
 
 
@@ -57,14 +59,18 @@ def main() -> int:
     parser.add_argument("--branch", default="channels")
     parser.add_argument("--history", type=Path, required=True)
     parser.add_argument("--pointer", type=Path, required=True)
-    parser.add_argument("--channel", choices=("canary", "beta", "stable"), required=True)
+    parser.add_argument(
+        "--channel", choices=("canary", "beta", "stable"), required=True
+    )
     args = parser.parse_args()
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         raise RuntimeError("GITHUB_TOKEN is required")
     document = json.loads(args.history.read_text(encoding="utf-8"))
     if document != json.loads(args.pointer.read_text(encoding="utf-8")):
-        raise RuntimeError("channel history and pointer are not byte-equivalent documents")
+        raise RuntimeError(
+            "channel history and pointer are not byte-equivalent documents"
+        )
     sequence = document.get("signed", {}).get("sequence")
     if not isinstance(sequence, int) or sequence < 1:
         raise RuntimeError("signed channel document has no valid sequence")
@@ -87,7 +93,9 @@ def main() -> int:
 
     pointer_sha: str | None = None
     try:
-        existing = request("GET", content_url(args.repository, pointer_path, args.branch), token)
+        existing = request(
+            "GET", content_url(args.repository, pointer_path, args.branch), token
+        )
         if isinstance(existing, dict) and isinstance(existing.get("sha"), str):
             pointer_sha = existing["sha"]
     except RuntimeError as exc:

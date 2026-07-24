@@ -86,10 +86,14 @@ def parse_manifest(bundle: Path, signing_key: Path, key_id: str) -> dict[str, ob
         or not isinstance(envelope.get("signature"), str)
         or len(envelope["signature"]) != 128
     ):
-        raise RuntimeError("release manifest signature envelope does not match the active key")
+        raise RuntimeError(
+            "release manifest signature envelope does not match the active key"
+        )
     expected = sign(canonical_json(payload), signing_key)
     if not hmac.compare_digest(envelope["signature"], expected):
-        raise RuntimeError("release manifest signature does not verify with the active signing key")
+        raise RuntimeError(
+            "release manifest signature does not verify with the active signing key"
+        )
     return payload
 
 
@@ -130,7 +134,9 @@ def validate_archive(bundle: Path, archive: Path) -> None:
                 entries += 1
                 validate_member_path(bundle, member.name, seen)
                 if not (member.isfile() or member.isdir()):
-                    raise RuntimeError("release archive contains a forbidden non-file entry")
+                    raise RuntimeError(
+                        "release archive contains a forbidden non-file entry"
+                    )
                 if member.size > MAX_EXTRACTED_FILE_BYTES:
                     raise RuntimeError("release archive contains an oversized file")
                 expanded += member.size
@@ -138,13 +144,23 @@ def validate_archive(bundle: Path, archive: Path) -> None:
                     raise RuntimeError("release archive exceeds extraction limits")
                 if member.name == f"{bundle.name}/release-manifest.json":
                     extracted = tar.extractfile(member)
-                    if extracted is None or extracted.read(4 * 1024 * 1024 + 1) != expected_manifest:
-                        raise RuntimeError("archive release manifest does not match the bundle")
+                    if (
+                        extracted is None
+                        or extracted.read(4 * 1024 * 1024 + 1) != expected_manifest
+                    ):
+                        raise RuntimeError(
+                            "archive release manifest does not match the bundle"
+                        )
                     seen_manifest = True
                 elif member.name == f"{bundle.name}/release-manifest.sig":
                     extracted = tar.extractfile(member)
-                    if extracted is None or extracted.read(64 * 1024 + 1) != expected_signature:
-                        raise RuntimeError("archive release signature does not match the bundle")
+                    if (
+                        extracted is None
+                        or extracted.read(64 * 1024 + 1) != expected_signature
+                    ):
+                        raise RuntimeError(
+                            "archive release signature does not match the bundle"
+                        )
                     seen_signature = True
     else:
         with zipfile.ZipFile(archive, mode="r") as zipped:
@@ -153,7 +169,9 @@ def validate_archive(bundle: Path, archive: Path) -> None:
                 validate_member_path(bundle, member.filename, seen)
                 unix_type = (member.external_attr >> 16) & 0o170000
                 if unix_type not in {0, 0o040000, 0o100000}:
-                    raise RuntimeError("release ZIP contains a forbidden non-file entry")
+                    raise RuntimeError(
+                        "release ZIP contains a forbidden non-file entry"
+                    )
                 if member.file_size > MAX_EXTRACTED_FILE_BYTES:
                     raise RuntimeError("release archive contains an oversized file")
                 expanded += member.file_size
@@ -161,11 +179,15 @@ def validate_archive(bundle: Path, archive: Path) -> None:
                     raise RuntimeError("release archive exceeds extraction limits")
                 if member.filename == f"{bundle.name}/release-manifest.json":
                     if zipped.read(member) != expected_manifest:
-                        raise RuntimeError("archive release manifest does not match the bundle")
+                        raise RuntimeError(
+                            "archive release manifest does not match the bundle"
+                        )
                     seen_manifest = True
                 elif member.filename == f"{bundle.name}/release-manifest.sig":
                     if zipped.read(member) != expected_signature:
-                        raise RuntimeError("archive release signature does not match the bundle")
+                        raise RuntimeError(
+                            "archive release signature does not match the bundle"
+                        )
                     seen_signature = True
     if entries == 0:
         raise RuntimeError("release archive is empty")
@@ -212,7 +234,9 @@ def parse_existing_channel(
         for item in existing["signatures"]
     )
     if not signature_matches:
-        raise RuntimeError("existing channel document does not verify with the active signing key")
+        raise RuntimeError(
+            "existing channel document does not verify with the active signing key"
+        )
 
     releases = [item for item in signed["releases"] if isinstance(item, dict)]
     if len(releases) != len(signed["releases"]):
@@ -257,16 +281,18 @@ def main() -> int:
 
     sequence = args.sequence if args.sequence is not None else previous_sequence + 1
     if sequence <= previous_sequence or sequence < 1:
-        raise RuntimeError("channel sequence must be positive and greater than the existing document")
-    generated_at = args.generated_at or datetime.now(UTC).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
-    )
+        raise RuntimeError(
+            "channel sequence must be positive and greater than the existing document"
+        )
+    generated_at = args.generated_at or datetime.now(UTC).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
     generated_time = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
     if generated_time.tzinfo is None:
         raise RuntimeError("channel generated-at timestamp must include a timezone")
-    expires_at = args.expires_at or (
-        generated_time + timedelta(days=7)
-    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    expires_at = args.expires_at or (generated_time + timedelta(days=7)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
     expires_time = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
     if expires_time.tzinfo is None or expires_time <= generated_time:
         raise RuntimeError("channel expires-at timestamp must be after generated-at")
@@ -289,7 +315,8 @@ def main() -> int:
     releases = [
         item
         for item in releases
-        if (item.get("version"), item.get("platform"), item.get("architecture")) != identity
+        if (item.get("version"), item.get("platform"), item.get("architecture"))
+        != identity
     ]
     releases.append(artifact)
     releases.sort(

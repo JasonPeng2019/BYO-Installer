@@ -29,7 +29,9 @@ def main() -> int:
         metavar=("BUNDLE", "ARCHIVE", "HTTPS_URL"),
         required=True,
     )
-    parser.add_argument("--channel", choices=("canary", "beta", "stable"), required=True)
+    parser.add_argument(
+        "--channel", choices=("canary", "beta", "stable"), required=True
+    )
     parser.add_argument("--signing-key", type=Path, required=True)
     parser.add_argument("--key-id", required=True)
     parser.add_argument("--history-output", type=Path, required=True)
@@ -55,7 +57,9 @@ def main() -> int:
         kind = archive_type(archive)
         expected_kind = "tar.gz" if manifest["platform"] == "linux" else "zip"
         if kind != expected_kind:
-            raise RuntimeError("release archive type does not match its signed platform")
+            raise RuntimeError(
+                "release archive type does not match its signed platform"
+            )
         identity = (
             str(manifest["version"]),
             str(manifest["platform"]),
@@ -83,9 +87,13 @@ def main() -> int:
         ("windows", "x86_64"),
         ("linux", "x86_64"),
     }
-    actual_targets = {(platform, architecture) for _, platform, architecture in identities}
+    actual_targets = {
+        (platform, architecture) for _, platform, architecture in identities
+    }
     if len(versions) != 1 or actual_targets != expected_targets:
-        raise RuntimeError("channel publication requires one version for all four V1 targets")
+        raise RuntimeError(
+            "channel publication requires one version for all four V1 targets"
+        )
 
     previous_releases: list[dict[str, object]] = []
     previous_sequence = 0
@@ -99,15 +107,15 @@ def main() -> int:
     sequence = args.sequence if args.sequence is not None else previous_sequence + 1
     if sequence <= previous_sequence or sequence < 1:
         raise RuntimeError("channel sequence must increase monotonically")
-    generated_at = args.generated_at or datetime.now(UTC).replace(microsecond=0).isoformat().replace(
-        "+00:00", "Z"
-    )
+    generated_at = args.generated_at or datetime.now(UTC).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
     generated = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
     if generated.tzinfo is None:
         raise RuntimeError("generated-at must include a timezone")
-    expires_at = args.expires_at or (
-        generated + timedelta(days=7)
-    ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    expires_at = args.expires_at or (generated + timedelta(days=7)).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
     expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
     if expires.tzinfo is None or expires <= generated:
         raise RuntimeError("expires-at must be after generated-at")
@@ -147,7 +155,9 @@ def main() -> int:
     encoded = json.dumps(document, indent=2, sort_keys=True) + "\n"
     expected_history_name = f"{sequence}.json"
     if args.history_output.name != expected_history_name:
-        raise RuntimeError(f"immutable history output must be named {expected_history_name}")
+        raise RuntimeError(
+            f"immutable history output must be named {expected_history_name}"
+        )
     for path in (args.history_output, args.pointer_output):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(encoded, encoding="utf-8")

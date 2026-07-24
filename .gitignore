@@ -6,6 +6,7 @@
 # Generated release output
 /release/build/
 /release/dist/
+/release/symbols/
 /launcher/target/
 
 # Legacy local source staging

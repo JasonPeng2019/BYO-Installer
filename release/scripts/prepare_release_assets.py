@@ -68,7 +68,9 @@ def main() -> int:
             bundle / "sbom.cdx.json",
         ]
         if any(not path.is_file() for path in required):
-            raise RuntimeError(f"signed target {target} is missing required publication assets")
+            raise RuntimeError(
+                f"signed target {target} is missing required publication assets"
+            )
         copies = {
             archive: archive.name,
             required[1]: required[1].name,
@@ -80,7 +82,9 @@ def main() -> int:
         notarization = bundle.parent / f"{bundle.name}.notarization.json"
         if identity[0] == "macos":
             if not notarization.is_file():
-                raise RuntimeError(f"macOS target {target} is missing its notarization log")
+                raise RuntimeError(
+                    f"macOS target {target} is missing its notarization log"
+                )
             copies[notarization] = f"notarization-{target}.json"
         for source, name in copies.items():
             shutil.copy2(source, args.output / name)
@@ -95,7 +99,9 @@ def main() -> int:
             }
         )
     if observed != set(TARGETS) or len(versions) != 1:
-        raise RuntimeError("publication requires one identical version across all four targets")
+        raise RuntimeError(
+            "publication requires one identical version across all four targets"
+        )
     if any(document != source_documents[0] for document in source_documents[1:]):
         raise RuntimeError("target manifests do not identify identical source commits")
     protocol_fields = (
@@ -115,7 +121,9 @@ def main() -> int:
         != tuple(manifests[0][field] for field in protocol_fields)
         for manifest in manifests[1:]
     ):
-        raise RuntimeError("target manifests do not expose one behavioral protocol contract")
+        raise RuntimeError(
+            "target manifests do not expose one behavioral protocol contract"
+        )
 
     index = {
         "schema": 1,

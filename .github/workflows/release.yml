@@ -69,12 +69,15 @@ jobs:
           - target: macos-aarch64
             runner: macos-15
             bundle: byo-${{ needs.authorize.outputs.version }}-macos-aarch64
+            archive: byo-${{ needs.authorize.outputs.version }}-macos-aarch64.zip
           - target: macos-x86_64
             runner: macos-15-intel
             bundle: byo-${{ needs.authorize.outputs.version }}-macos-x86_64
+            archive: byo-${{ needs.authorize.outputs.version }}-macos-x86_64.zip
           - target: linux-x86_64
             runner: byo-linux-x86_64-glibc-2.28
             bundle: byo-${{ needs.authorize.outputs.version }}-linux-x86_64
+            archive: byo-${{ needs.authorize.outputs.version }}-linux-x86_64.tar.gz
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     environment: release-production
@@ -183,12 +186,12 @@ jobs:
       - name: Attest archive provenance
         uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
         with:
-          subject-path: release/dist/${{ matrix.bundle }}.*
+          subject-path: release/dist/${{ matrix.archive }}
 
       - name: Attest SBOM
         uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
         with:
-          subject-path: release/dist/${{ matrix.bundle }}.*
+          subject-path: release/dist/${{ matrix.archive }}
           sbom-path: release/dist/${{ matrix.bundle }}/sbom.cdx.json
 
       - name: Upload signed candidate
@@ -313,12 +316,12 @@ jobs:
       - name: Attest archive provenance
         uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
         with:
-          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.*
+          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.zip
 
       - name: Attest SBOM
         uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
         with:
-          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.*
+          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.zip
           sbom-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64/sbom.cdx.json
 
       - name: Upload signed Windows candidate

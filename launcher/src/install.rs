@@ -242,7 +242,7 @@ fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
 pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf> {
     let _lock = InstallLock::acquire(paths)?;
     let candidate = if let Some(path) = requested {
-        path.canonicalize()?
+        path.to_path_buf()
     } else {
         let mut candidates = Vec::new();
         for entry in std::fs::read_dir(paths.versions())? {
@@ -256,6 +256,8 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
             .pop()
             .context("no verified BYO runtime is available for repair")?
     };
+    let candidate = candidate.canonicalize()?;
+    let data = paths.data.canonicalize()?;
     let versions = paths.versions().canonicalize()?;
     if !candidate.starts_with(&versions) {
         bail!("repair candidate must be an installed version directory");
@@ -265,10 +267,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     let current = CurrentRuntime {
         schema: 1,
         version: release.version.clone(),
-        relative_runtime: candidate
-            .strip_prefix(&paths.data)?
-            .to_string_lossy()
-            .to_string(),
+        relative_runtime: candidate.strip_prefix(&data)?.to_string_lossy().to_string(),
         manifest_sha256: sha256_file(&candidate.join("release-manifest.json"))?,
     };
     let launcher = std::fs::read(launcher_path(&candidate))?;

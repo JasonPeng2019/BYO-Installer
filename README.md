@@ -4,27 +4,22 @@ This workspace implements the Rust launcher, compiled Python MCP sidecar,
 deterministic `2nd-Proto` workflow pack, and thin platform installers described
 by `install_guide.md`.
 
-## Current verified development artifact
+## Current local development artifact
 
-The locally verified artifact is:
+The target-native local build is version `0.1.0` for macOS x86_64:
 
-- target: macOS x86_64, macOS 10.15 or newer as reported by Nuitka;
-- version: `0.1.0`;
 - bundle: `release/dist/byo-0.1.0-macos-x86_64/`;
-- archive: `release/dist/byo-0.1.0-macos-x86_64.tar.gz`;
-- archive SHA-256:
-  `1cc884ccca50bd83be92c96ffc8e9b502cf83bb4bdcb5b13d6c6f86b0c837dc7`;
-- manifest SHA-256:
-  `a46700034030903d11bd7652adb94d8a37f1d2e17a2bd0eb3b424b4703246b2c`;
-- workflow-pack SHA-256:
-  `94bd6509dbc7dbaa42673b45111999d488dbe5acb1bbfd4163a592f85ec31820`;
-- Agent Workspace source: clean `2nd-Proto` commit `63c8906`;
-- Firmware MCP source: clean `Proto-1-WIP` commit `79204cc`.
+- artifact: `release/dist/byo-0.1.0-macos-x86_64.zip`;
+- private symbols and the Nuitka report:
+  `release/symbols/byo-0.1.0-macos-x86_64/`;
+- pinned AgentWorkspace: `7ece704289bb6fcc2ba3c1983ead118bd7eac52d`;
+- pinned Firmware MCP: `2d42e02eb810a2a5cc0b4977107264dadaccaa31`.
 
-This is a development-unsigned bundle. It is suitable for local evaluation,
-not redistribution. The bundle contains no `.py`, test, specification, hook
-script, or Agent Workspace implementation source. It includes a deterministic
-CycloneDX 1.6 SBOM at `sbom.cdx.json`.
+This is development-unsigned and is for local evaluation, not redistribution.
+The fresh Nuitka 2.8.9 build links the sidecar natively, passes its compiled
+self-test, emits a CycloneDX 1.6 SBOM, and contains no Python/source or
+development files. Product policy supports macOS 12 and later even when a
+compiler reports that the binary itself has an older deployment floor.
 
 ## Install and use the current artifact
 
@@ -89,8 +84,9 @@ export BYO_HOME="$(mktemp -d /tmp/byo-home.XXXXXXXX)"
 
 Release assembly requires:
 
-- a clean `AgentWorkspace/` checkout on `2nd-Proto`;
-- the locked Firmware MCP virtual environment;
+- clean external checkouts at the exact commits in
+  `release/source-lock.json`;
+- the locked Firmware MCP environment including its `build` dependency group;
 - Rust/Cargo;
 - Nuitka and a target-native C toolchain.
 
@@ -112,8 +108,9 @@ The full build writes:
 - `release/build/workspace-classification.json`;
 - `release/build/workspace.pack`;
 - `release/build/nuitka-compilation-report.xml`;
-- the extracted bundle, deterministic archive, checksum, and SBOM under
-  `release/dist/`.
+- the extracted bundle, platform-explicit ZIP or tar.gz, checksum, and SBOM
+  under `release/dist/`;
+- dSYM/PDB/Linux debug files and the Nuitka report under `release/symbols/`.
 
 Run the installed hardware-free acceptance suite with:
 
@@ -149,9 +146,9 @@ python3 release/scripts/build_release.py \
   --codesign-identity "Developer ID Application: …"
 ```
 
-The production build fails closed if release keys or required macOS signing
-identity are absent. Windows production assembly intentionally requires a
-separate protected Authenticode job.
+The production build fails closed if release keys or required platform signing
+are absent. Windows uses a prepare/sign/finalize split so Authenticode is
+applied before the signed product manifest and deterministic ZIP are created.
 
 After uploading an immutable production archive, publish signed channel
 metadata with `release/scripts/sign_channel.py`. The launcher can then use:
@@ -187,24 +184,16 @@ valid Authenticode launcher.
 | 42 | uninstall refusal/failure |
 | 50 | uncategorized internal failure |
 
-## Remaining GA gates
+## Release operation and remaining external gates
 
-The implementation is not yet a universal signed release:
+The decisions are in `docs/decisions/`; protected workflows implement native
+builds, platform signing, clean machines, safe/destructive HIL, attestations,
+immutable publication, and canary → beta → stable channel promotion. The
+operator documents and final checklist are in `docs/release/`.
 
-- required target-native builds and clean-machine tests remain for Windows
-  x86_64, macOS Apple silicon, and Linux x86_64; Windows ARM64 and Linux ARM64
-  remain optional/recommended targets from the guide;
-- macOS signing/notarization, Windows Authenticode, Linux publication
-  signatures, protected provenance attestations, and immutable channel hosting
-  require release credentials and protected CI;
-- no recognized debug probe was attached to this host, so compiled
-  hardware-in-the-loop testing still requires an identified supported board,
-  probe, firmware fixture, and explicit approval for destructive recovery;
-- minimum supported OS/glibc versions, Intel macOS support duration, update
-  channels, and other decisions listed in section 30 of `install_guide.md`
-  still need product decisions;
-- this top-level installer workspace is not itself a Git repository, so a
-  production build cannot yet record launcher/compiler/release-tool commit
-  identities or produce trustworthy repository provenance.
-
-Do not publish this development bundle as GA until those gates are completed.
+The workflows are intentionally not self-certifying. GA remains blocked until
+the GitHub repository/rulesets/environments exist, Apple and Microsoft
+identities are enrolled, the named native/clean/HIL runners are provisioned,
+real fixture IDs and hashed firmware replace the HIL examples, all workflow
+runs pass on their actual target hosts, and an independent approver completes
+`docs/release/ga-checklist.md`.

@@ -104,7 +104,9 @@ def start_initialized_mcp(
         raise AcceptanceFailure(f"invalid MCP initialization response: {response!r}")
     server_info = response["result"].get("serverInfo", {})
     if server_info.get("version") != expected_version:
-        raise AcceptanceFailure(f"MCP server version was not bound to the release: {server_info!r}")
+        raise AcceptanceFailure(
+            f"MCP server version was not bound to the release: {server_info!r}"
+        )
     process.stdin.write(
         '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
     )
@@ -133,7 +135,9 @@ def main() -> int:
     parser.add_argument("--bundle", type=Path, required=True)
     args = parser.parse_args()
     bundle = args.bundle.resolve(strict=True)
-    manifest = json.loads((bundle / "release-manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (bundle / "release-manifest.json").read_text(encoding="utf-8")
+    )
     expected_version = manifest.get("version")
     if not isinstance(expected_version, str) or not expected_version:
         raise AcceptanceFailure("bundle manifest contains no release version")
@@ -162,7 +166,7 @@ def main() -> int:
         (project / ".codex").mkdir()
         (project / ".claude").mkdir()
         (project / ".codex" / "config.toml").write_text(
-            '[unrelated]\npreserved = true\n', encoding="utf-8"
+            "[unrelated]\npreserved = true\n", encoding="utf-8"
         )
         (project / ".claude" / "settings.json").write_text(
             '{"unrelated":{"preserved":true}}\n', encoding="utf-8"
@@ -180,7 +184,9 @@ def main() -> int:
         if os.name == "nt":
             powershell = shutil.which("pwsh") or shutil.which("powershell")
             if not powershell:
-                raise AcceptanceFailure("PowerShell is unavailable for Windows install testing")
+                raise AcceptanceFailure(
+                    "PowerShell is unavailable for Windows install testing"
+                )
             install_command = [
                 powershell,
                 "-NoProfile",
@@ -242,12 +248,16 @@ def main() -> int:
         if "preserved = true" not in (project / ".codex/config.toml").read_text(
             encoding="utf-8"
         ):
-            raise AcceptanceFailure("init did not preserve unrelated Codex configuration")
+            raise AcceptanceFailure(
+                "init did not preserve unrelated Codex configuration"
+            )
         if '"preserved":true' not in (project / ".claude/settings.json").read_text(
             encoding="utf-8"
         ):
             raise AcceptanceFailure("init changed unrelated Claude configuration")
-        if "Preserve this text." not in (project / "AGENTS.md").read_text(encoding="utf-8"):
+        if "Preserve this text." not in (project / "AGENTS.md").read_text(
+            encoding="utf-8"
+        ):
             raise AcceptanceFailure("init changed unrelated AGENTS.md content")
         forbidden = [
             path
@@ -255,7 +265,9 @@ def main() -> int:
             if path.is_file() and path.suffix in {".py", ".sh", ".ps1"}
         ]
         if forbidden:
-            raise AcceptanceFailure(f"project capsule leaked implementation source: {forbidden}")
+            raise AcceptanceFailure(
+                f"project capsule leaked implementation source: {forbidden}"
+            )
 
         invoke(
             [str(byo), "workflow", "guidance", "verify", "--project", str(project)],
@@ -348,8 +360,10 @@ def main() -> int:
             pack.write_bytes(original_pack)
         invoke([str(byo), "status"], env=env)
 
-        sidecar = runtime / "sidecar" / (
-            "byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar"
+        sidecar = (
+            runtime
+            / "sidecar"
+            / ("byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar")
         )
         sidecar_backup = root / sidecar.name
         shutil.copy2(sidecar, sidecar_backup)
@@ -402,7 +416,9 @@ def main() -> int:
         invoke([str(byo), "uninstall", "--project", str(project)], env=env)
         invoke([str(byo), "uninstall", "--global"], env=env)
         if byo.exists() or (home / "data/current.json").exists():
-            raise AcceptanceFailure("global uninstall left the active launcher or pointer")
+            raise AcceptanceFailure(
+                "global uninstall left the active launcher or pointer"
+            )
 
     print("BYO installed acceptance: PASS")
     return 0

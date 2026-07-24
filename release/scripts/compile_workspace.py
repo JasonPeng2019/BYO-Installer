@@ -73,7 +73,11 @@ def _load_policy(path: Path) -> list[tuple[str, str]]:
 
 
 def _classify(relative: str, rules: list[tuple[str, str]]) -> str:
-    matches = [release_class for pattern, release_class in rules if fnmatch.fnmatchcase(relative, pattern)]
+    matches = [
+        release_class
+        for pattern, release_class in rules
+        if fnmatch.fnmatchcase(relative, pattern)
+    ]
     if len(matches) != 1:
         qualifier = "unclassified" if not matches else "classified more than once"
         raise CompileError(f"{relative} is {qualifier}")
@@ -82,7 +86,10 @@ def _classify(relative: str, rules: list[tuple[str, str]]) -> str:
 
 def _scan_for_leaks(relative: str, payload: bytes) -> None:
     path = PurePosixPath(relative)
-    if any(part in FORBIDDEN_PARTS for part in path.parts) or path.name in FORBIDDEN_NAMES:
+    if (
+        any(part in FORBIDDEN_PARTS for part in path.parts)
+        or path.name in FORBIDDEN_NAMES
+    ):
         raise CompileError(f"forbidden generated or credential-like input: {relative}")
     if b"\x00" not in payload:
         lowered = payload.lower()
@@ -149,7 +156,9 @@ def _compile_runtime_references(relative: str, payload: bytes) -> bytes:
     return text.encode("utf-8")
 
 
-def _deep_merge(base: dict[str, object], overlay: dict[str, object]) -> dict[str, object]:
+def _deep_merge(
+    base: dict[str, object], overlay: dict[str, object]
+) -> dict[str, object]:
     result = dict(base)
     for key, value in overlay.items():
         if key == "extends":
@@ -165,7 +174,9 @@ def _deep_merge(base: dict[str, object], overlay: dict[str, object]) -> dict[str
 
 
 def _string_list(value: object, label: str) -> list[str]:
-    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
         raise CompileError(f"{label} must be an array of non-empty strings")
     return list(value)
 
@@ -220,7 +231,9 @@ def _compile_modes(source: Path) -> bytes:
 
     def resolve(name: str, lineage: tuple[str, ...] = ()) -> dict[str, object]:
         if name in lineage:
-            raise CompileError(f"cyclic mode inheritance: {' -> '.join((*lineage, name))}")
+            raise CompileError(
+                f"cyclic mode inheritance: {' -> '.join((*lineage, name))}"
+            )
         if name not in raw_modes:
             raise CompileError(f"mode {name!r} extends an unknown mode")
         current = raw_modes[name]
@@ -232,7 +245,9 @@ def _compile_modes(source: Path) -> bytes:
 
     def family(name: str, lineage: tuple[str, ...] = ()) -> str:
         if name in lineage:
-            raise CompileError(f"cyclic mode inheritance: {' -> '.join((*lineage, name))}")
+            raise CompileError(
+                f"cyclic mode inheritance: {' -> '.join((*lineage, name))}"
+            )
         parents = _string_list(
             raw_modes[name].get("extends", []),
             f"modes/{name}.toml extends",
@@ -264,7 +279,9 @@ def _compile_modes(source: Path) -> bytes:
             workflow = merged["workflow"]
             structure = merged["structure"]
         except KeyError as exc:
-            raise CompileError(f"mode {name!r} is missing inherited section {exc}") from exc
+            raise CompileError(
+                f"mode {name!r} is missing inherited section {exc}"
+            ) from exc
         if not all(
             isinstance(section, dict)
             for section in (skills, verify, codex, workflow, structure)
@@ -278,7 +295,9 @@ def _compile_modes(source: Path) -> bytes:
             raise CompileError(f"mode {name!r} contains duplicate skills")
         missing = sorted(set(skill_names) - set(available_skills))
         if missing:
-            raise CompileError(f"mode {name!r} references missing skills: {', '.join(missing)}")
+            raise CompileError(
+                f"mode {name!r} references missing skills: {', '.join(missing)}"
+            )
         instruction_ids = ["instructions/common.md", f"instructions/{family_name}.md"]
         for resource_id in instruction_ids:
             if not (source / resource_id).is_file():
@@ -377,7 +396,9 @@ def _compile_modes(source: Path) -> bytes:
     ).encode("utf-8")
 
 
-def compile_pack(source: Path, policy: Path, output: Path, report: Path, version: str) -> str:
+def compile_pack(
+    source: Path, policy: Path, output: Path, report: Path, version: str
+) -> str:
     source = source.resolve(strict=True)
     if not source.is_dir():
         raise CompileError("workspace source must be a directory")
@@ -404,7 +425,9 @@ def compile_pack(source: Path, policy: Path, output: Path, report: Path, version
         if release_class in PACKED_CLASSES and not (
             release_class == "compile" and relative.startswith("modes/")
         ):
-            records.append((relative, release_class, payload, zlib.compress(payload, 9), digest))
+            records.append(
+                (relative, release_class, payload, zlib.compress(payload, 9), digest)
+            )
 
     compiled_modes = _compile_modes(source)
     records.append(
@@ -445,7 +468,9 @@ def compile_pack(source: Path, policy: Path, output: Path, report: Path, version
     header_bytes = json.dumps(
         header, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
-    payload = MAGIC + struct.pack(">Q", len(header_bytes)) + header_bytes + b"".join(bodies)
+    payload = (
+        MAGIC + struct.pack(">Q", len(header_bytes)) + header_bytes + b"".join(bodies)
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(payload)
     report.parent.mkdir(parents=True, exist_ok=True)

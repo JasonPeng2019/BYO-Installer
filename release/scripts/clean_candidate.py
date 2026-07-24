@@ -116,13 +116,19 @@ def run_checked(argv: list[str]) -> str:
 def verify_platform(bundle: Path, archive: Path, public_key: Path | None) -> list[str]:
     evidence: list[str] = []
     if sys.platform == "darwin":
-        subprocess.run(["xattr", "-w", "com.apple.quarantine", "0081;BYO", str(bundle)], check=True)
-        evidence.append(run_checked(["codesign", "--verify", "--deep", "--strict", str(bundle)]))
+        subprocess.run(
+            ["xattr", "-w", "com.apple.quarantine", "0081;BYO", str(bundle)], check=True
+        )
+        evidence.append(
+            run_checked(["codesign", "--verify", "--deep", "--strict", str(bundle)])
+        )
         for executable in (
             bundle / "byo",
             bundle / "sidecar/byo-mcp-sidecar",
         ):
-            evidence.append(run_checked(["spctl", "--assess", "--type", "execute", str(executable)]))
+            evidence.append(
+                run_checked(["spctl", "--assess", "--type", "execute", str(executable)])
+            )
     elif os.name == "nt":
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if not powershell:
@@ -144,10 +150,14 @@ def verify_platform(bundle: Path, archive: Path, public_key: Path | None) -> lis
     else:
         libc = run_checked(["getconf", "GNU_LIBC_VERSION"]).strip()
         if libc != "glibc 2.28":
-            raise RuntimeError(f"clean Linux runner is not the declared baseline: {libc}")
+            raise RuntimeError(
+                f"clean Linux runner is not the declared baseline: {libc}"
+            )
         signature = archive.with_name(f"{archive.name}.sig")
         if public_key is None or not signature.is_file():
-            raise RuntimeError("Linux clean test requires the detached signature and public key")
+            raise RuntimeError(
+                "Linux clean test requires the detached signature and public key"
+            )
         evidence.append(
             run_checked(
                 [
@@ -194,17 +204,26 @@ def main() -> int:
         archives = [
             path
             for path in args.candidate.rglob("byo-*")
-            if path.is_file() and (path.suffix == ".zip" or path.name.endswith(".tar.gz"))
+            if path.is_file()
+            and (path.suffix == ".zip" or path.name.endswith(".tar.gz"))
         ]
         if len(archives) != 1:
-            raise RuntimeError(f"expected exactly one signed candidate archive, found {archives}")
+            raise RuntimeError(
+                f"expected exactly one signed candidate archive, found {archives}"
+            )
         archive = archives[0]
-        checksum_files = list(args.candidate.rglob(f"{archive.name.removesuffix('.zip').removesuffix('.tar.gz')}.sha256"))
+        checksum_files = list(
+            args.candidate.rglob(
+                f"{archive.name.removesuffix('.zip').removesuffix('.tar.gz')}.sha256"
+            )
+        )
         if len(checksum_files) != 1:
             raise RuntimeError("candidate checksum receipt is missing or ambiguous")
         expected = checksum_files[0].read_text(encoding="utf-8").split()[0]
         if sha256(archive) != expected:
-            raise RuntimeError("exact candidate SHA-256 does not match its build receipt")
+            raise RuntimeError(
+                "exact candidate SHA-256 does not match its build receipt"
+            )
         with tempfile.TemporaryDirectory(prefix="byo-exact-candidate-") as raw:
             bundle = extract_exact(archive, Path(raw))
             evidence = verify_platform(bundle, archive, args.public_key)

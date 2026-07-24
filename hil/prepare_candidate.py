@@ -28,8 +28,14 @@ def main() -> int:
     if len(archives) != 1:
         raise RuntimeError(f"expected one exact HIL archive, found {archives}")
     archive = archives[0]
-    checksums = list(args.candidate.rglob(f"{archive.name.split('.zip')[0].split('.tar.gz')[0]}.sha256"))
-    if len(checksums) != 1 or checksums[0].read_text(encoding="utf-8").split()[0] != sha256(archive):
+    checksums = list(
+        args.candidate.rglob(
+            f"{archive.name.split('.zip')[0].split('.tar.gz')[0]}.sha256"
+        )
+    )
+    if len(checksums) != 1 or checksums[0].read_text(encoding="utf-8").split()[
+        0
+    ] != sha256(archive):
         raise RuntimeError("HIL candidate does not match its build checksum")
 
     args.home.mkdir(parents=True, exist_ok=False)

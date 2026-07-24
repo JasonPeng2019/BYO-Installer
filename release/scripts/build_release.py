@@ -25,7 +25,9 @@ from urllib.parse import quote
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def run(argv: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None) -> None:
+def run(
+    argv: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None
+) -> None:
     print("+", " ".join(argv), flush=True)
     subprocess.run(argv, cwd=cwd, env=env, check=True)
 
@@ -78,7 +80,9 @@ def signing_configuration(args: argparse.Namespace) -> tuple[Path, str, str]:
         or not isinstance(keyring.get(key_id), str)
         or len(keyring[key_id]) != 64
     ):
-        raise RuntimeError("the active release key ID is absent from BYO_RELEASE_PUBLIC_KEYS")
+        raise RuntimeError(
+            "the active release key ID is absent from BYO_RELEASE_PUBLIC_KEYS"
+        )
     return key, key_id, encoded_keys
 
 
@@ -109,7 +113,9 @@ def sign_ed25519(payload: bytes, key: Path) -> str:
     return completed.stdout.hex()
 
 
-def write_manifest_signature(bundle: Path, manifest: object, key: Path, key_id: str) -> None:
+def write_manifest_signature(
+    bundle: Path, manifest: object, key: Path, key_id: str
+) -> None:
     envelope = {
         "schema": 1,
         "algorithm": "Ed25519",
@@ -151,7 +157,9 @@ def sign_macos_files(bundle: Path, identity: str) -> None:
         )
         run(["codesign", "--verify", "--strict", "--verbose=2", str(candidate)])
     if not candidates:
-        raise RuntimeError("macOS production bundle did not contain any signable Mach-O files")
+        raise RuntimeError(
+            "macOS production bundle did not contain any signable Mach-O files"
+        )
 
 
 def deterministic_tar_gz(bundle: Path, output: Path, epoch: int) -> None:
@@ -159,8 +167,12 @@ def deterministic_tar_gz(bundle: Path, output: Path, epoch: int) -> None:
     if temporary.exists():
         temporary.unlink()
     with temporary.open("wb") as raw:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=epoch) as compressed:
-            with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=raw, mtime=epoch
+        ) as compressed:
+            with tarfile.open(
+                fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT
+            ) as archive:
                 entries = [bundle, *sorted(bundle.rglob("*"))]
                 for path in entries:
                     relative = Path(bundle.name) / path.relative_to(bundle)
@@ -200,7 +212,11 @@ def deterministic_zip(bundle: Path, output: Path, epoch: int) -> None:
         for path in entries:
             relative = (Path(bundle.name) / path.relative_to(bundle)).as_posix()
             is_directory = path.is_dir()
-            name = f"{relative}/" if is_directory and not relative.endswith("/") else relative
+            name = (
+                f"{relative}/"
+                if is_directory and not relative.endswith("/")
+                else relative
+            )
             mode = (
                 0o040755
                 if is_directory
@@ -222,7 +238,9 @@ def deterministic_zip(bundle: Path, output: Path, epoch: int) -> None:
 
 
 def platform_name() -> str:
-    return {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}[platform.system()]
+    return {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}[
+        platform.system()
+    ]
 
 
 def archive_type() -> tuple[str, str]:
@@ -231,9 +249,12 @@ def archive_type() -> tuple[str, str]:
 
 def architecture() -> str:
     machine = platform.machine().lower()
-    return {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(
-        machine, machine
-    )
+    return {
+        "amd64": "x86_64",
+        "x86_64": "x86_64",
+        "arm64": "aarch64",
+        "aarch64": "aarch64",
+    }.get(machine, machine)
 
 
 def purl(kind: str, name: str, version: str) -> str:
@@ -257,7 +278,9 @@ def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
         name = raw.attrib.get("name", "")
         dependency_version = raw.attrib.get("version", "")
         if not name or not dependency_version:
-            raise RuntimeError("Nuitka report contains incomplete Python distribution metadata")
+            raise RuntimeError(
+                "Nuitka report contains incomplete Python distribution metadata"
+            )
         reference = purl("pypi", name, dependency_version)
         add(
             {
@@ -309,7 +332,9 @@ def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
     )
 
     native_suffixes = {".dylib", ".dll", ".pyd", ".so"}
-    for path in sorted(candidate for candidate in bundle.rglob("*") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in bundle.rglob("*") if candidate.is_file()
+    ):
         if path.suffix.lower() not in native_suffixes:
             continue
         relative = path.relative_to(bundle).as_posix()
@@ -400,11 +425,15 @@ def validate_external_checkout(
         )
     actual_branch = command_output(["git", "branch", "--show-current"], cwd=source)
     if actual_branch not in {"", branch}:
-        raise RuntimeError(f"{label} must be detached at the lock or on {branch}, got {actual_branch}")
+        raise RuntimeError(
+            f"{label} must be detached at the lock or on {branch}, got {actual_branch}"
+        )
     remote = command_output(["git", "remote", "get-url", "origin"], cwd=source)
     normalized_remote = remote.removesuffix(".git").removesuffix("/")
     if not normalized_remote.endswith(f"github.com/{repository}"):
-        raise RuntimeError(f"{label} origin does not match locked repository {repository}")
+        raise RuntimeError(
+            f"{label} origin does not match locked repository {repository}"
+        )
     return {"repository": repository, "commit": commit}
 
 
@@ -412,12 +441,16 @@ def installer_source(production: bool) -> dict[str, str]:
     try:
         commit = command_output(["git", "rev-parse", "HEAD"])
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError("the top-level installer workspace must be a Git repository") from exc
+        raise RuntimeError(
+            "the top-level installer workspace must be a Git repository"
+        ) from exc
     if production and command_output(["git", "status", "--porcelain"]):
         raise RuntimeError("production builds require a clean installer worktree")
     workflow_commit = os.environ.get("GITHUB_SHA")
     if workflow_commit and workflow_commit != commit:
-        raise RuntimeError(f"GITHUB_SHA {workflow_commit} does not match installer HEAD {commit}")
+        raise RuntimeError(
+            f"GITHUB_SHA {workflow_commit} does not match installer HEAD {commit}"
+        )
     return {
         "repository": "JasonPeng2019/BYO-Installer",
         "commit": commit,
@@ -445,9 +478,13 @@ def toolchain_provenance(python: Path, nuitka_report: Path) -> dict[str, str]:
     report = ET.parse(nuitka_report).getroot()
     nuitka_version = report.attrib.get("nuitka_version")
     python_node = report.find("./python")
-    python_version = python_node.attrib.get("python_version") if python_node is not None else None
+    python_version = (
+        python_node.attrib.get("python_version") if python_node is not None else None
+    )
     if not nuitka_version or not python_version:
-        raise RuntimeError("Nuitka report does not identify the Python and Nuitka toolchains")
+        raise RuntimeError(
+            "Nuitka report does not identify the Python and Nuitka toolchains"
+        )
     executable_version = command_output(
         [str(python), "-c", "import platform; print(platform.python_version())"]
     )
@@ -468,9 +505,7 @@ def export_clean_workspace(destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
-    raw_files = subprocess.check_output(
-        ["git", "-C", str(source), "ls-files", "-z"]
-    )
+    raw_files = subprocess.check_output(["git", "-C", str(source), "ls-files", "-z"])
     for raw in raw_files.split(b"\0"):
         if not raw:
             continue
@@ -501,7 +536,9 @@ def normalize_macos_libusb_install_name(python: Path) -> None:
         text=True,
     ).strip()
     dylib = Path(site_packages) / "libusb-1.0.dylib"
-    identity = subprocess.check_output(["otool", "-D", str(dylib)], text=True).splitlines()[-1]
+    identity = subprocess.check_output(
+        ["otool", "-D", str(dylib)], text=True
+    ).splitlines()[-1]
     if identity.strip().startswith("/usr/local/"):
         run(["install_name_tool", "-id", "@rpath/libusb-1.0.dylib", str(dylib)])
 
@@ -519,8 +556,10 @@ def collect_private_symbols(
         shutil.rmtree(symbol_root)
     symbol_root.mkdir(parents=True)
     shutil.copy2(nuitka_report, symbol_root / nuitka_report.name)
-    sidecar = bundle / "sidecar" / (
-        "byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar"
+    sidecar = (
+        bundle
+        / "sidecar"
+        / ("byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar")
     )
 
     collected: list[Path] = [symbol_root / nuitka_report.name]
@@ -563,7 +602,9 @@ def collect_private_symbols(
             collected.append(destination)
 
     inventory = []
-    for path in sorted(candidate for candidate in symbol_root.rglob("*") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in symbol_root.rglob("*") if candidate.is_file()
+    ):
         inventory.append(
             {
                 "path": path.relative_to(symbol_root).as_posix(),
@@ -631,11 +672,17 @@ def main() -> int:
     if (args.prepare_platform_signing or args.platform_signing_complete) and (
         not args.production or platform.system() != "Windows"
     ):
-        raise RuntimeError("platform-signing stages are valid only for Windows production builds")
+        raise RuntimeError(
+            "platform-signing stages are valid only for Windows production builds"
+        )
     if args.prepare_platform_signing and args.platform_signing_complete:
-        raise RuntimeError("prepare and finalize platform-signing stages are mutually exclusive")
+        raise RuntimeError(
+            "prepare and finalize platform-signing stages are mutually exclusive"
+        )
     if args.reuse_launcher and not args.platform_signing_complete:
-        raise RuntimeError("--reuse-launcher is restricted to signed Windows finalization")
+        raise RuntimeError(
+            "--reuse-launcher is restricted to signed Windows finalization"
+        )
     sources = source_provenance(args.production)
     signing: tuple[Path, str, str] | None = (
         signing_configuration(args) if args.production else None
@@ -670,7 +717,9 @@ def main() -> int:
             assert signing is not None
             cargo_environment["BYO_RELEASE_PUBLIC_KEYS"] = signing[2]
         run(cargo, cwd=ROOT / "launcher", env=cargo_environment)
-    launcher = ROOT / "launcher/target/release" / ("byo.exe" if os.name == "nt" else "byo")
+    launcher = (
+        ROOT / "launcher/target/release" / ("byo.exe" if os.name == "nt" else "byo")
+    )
     if not launcher.is_file():
         raise RuntimeError("native Rust launcher output is missing")
 
@@ -701,12 +750,16 @@ def main() -> int:
             env={
                 **os.environ,
                 "PYTHONPATH": str(mcp / "src"),
-                "NUITKA_CACHE_DIR": str(Path(tempfile.gettempdir()) / "byo-nuitka-cache"),
+                "NUITKA_CACHE_DIR": str(
+                    Path(tempfile.gettempdir()) / "byo-nuitka-cache"
+                ),
             },
         )
     dist_candidates = sorted(nuitka_output.glob("*.dist"))
     if len(dist_candidates) != 1:
-        raise RuntimeError(f"expected one Nuitka standalone directory, got {dist_candidates}")
+        raise RuntimeError(
+            f"expected one Nuitka standalone directory, got {dist_candidates}"
+        )
 
     bundle = args.output / f"byo-{args.version}-{platform_name()}-{architecture()}"
     if bundle.exists():
@@ -723,7 +776,9 @@ def main() -> int:
     shutil.copy2(pack, bundle / "workflow/workspace.pack")
 
     if not nuitka_report.is_file():
-        raise RuntimeError("Nuitka compilation report is missing; run a fresh sidecar build")
+        raise RuntimeError(
+            "Nuitka compilation report is missing; run a fresh sidecar build"
+        )
     symbol_root = collect_private_symbols(
         bundle,
         launcher,
@@ -735,7 +790,9 @@ def main() -> int:
     if args.production:
         if platform.system() == "Darwin":
             if not args.codesign_identity:
-                raise RuntimeError("macOS production builds require --codesign-identity")
+                raise RuntimeError(
+                    "macOS production builds require --codesign-identity"
+                )
             sign_macos_files(bundle, args.codesign_identity)
         elif platform.system() == "Windows":
             if args.prepare_platform_signing:
@@ -748,7 +805,9 @@ def main() -> int:
                 )
             powershell = shutil.which("pwsh") or shutil.which("powershell")
             if not powershell:
-                raise RuntimeError("PowerShell is required to verify Authenticode signatures")
+                raise RuntimeError(
+                    "PowerShell is required to verify Authenticode signatures"
+                )
             run(
                 [
                     powershell,
@@ -765,7 +824,9 @@ def main() -> int:
     toolchains = toolchain_provenance(args.python, nuitka_report)
 
     files = []
-    for path in sorted(candidate for candidate in bundle.rglob("*") if candidate.is_file()):
+    for path in sorted(
+        candidate for candidate in bundle.rglob("*") if candidate.is_file()
+    ):
         relative = path.relative_to(bundle).as_posix()
         executable = relative in {
             "byo",
@@ -818,8 +879,10 @@ def main() -> int:
         assert signing is not None
         write_manifest_signature(bundle, manifest, signing[0], signing[1])
 
-    sidecar = bundle / "sidecar" / (
-        "byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar"
+    sidecar = (
+        bundle
+        / "sidecar"
+        / ("byo-mcp-sidecar.exe" if os.name == "nt" else "byo-mcp-sidecar")
     )
     run(
         [
