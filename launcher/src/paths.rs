@@ -48,13 +48,13 @@ impl ProductPaths {
             let config = env_path("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
             let state = env_path("XDG_STATE_HOME").unwrap_or_else(|| home.join(".local/state"));
             let cache = env_path("XDG_CACHE_HOME").unwrap_or_else(|| home.join(".cache"));
-            return Ok(Self {
+            Ok(Self {
                 data: data.join("byo"),
                 config: config.join("byo"),
                 state: state.join("byo"),
                 cache: cache.join("byo"),
                 bin: home.join(".local/bin"),
-            });
+            })
         }
         #[cfg(target_os = "windows")]
         {
@@ -64,13 +64,13 @@ impl ProductPaths {
             let roaming = env::var_os("APPDATA")
                 .map(PathBuf::from)
                 .context("APPDATA is required")?;
-            return Ok(Self {
+            Ok(Self {
                 data: local.join("BYO"),
                 config: roaming.join("BYO"),
                 state: local.join("BYO/state"),
                 cache: local.join("BYO/cache"),
                 bin: local.join("BYO/bin"),
-            });
+            })
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {

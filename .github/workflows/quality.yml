@@ -60,6 +60,7 @@ jobs:
           repository: JasonPeng2019/CodexClaudeWorkflow
           ref: ${{ steps.source.outputs.commit }}
           path: AgentWorkspace
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Install Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6

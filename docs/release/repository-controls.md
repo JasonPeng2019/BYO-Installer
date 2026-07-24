@@ -22,6 +22,8 @@ production tag:
 - create repository variable `IMMUTABLE_RELEASES_ENABLED=true` only after an
   administrator has verified that control;
 - set `BYO_RELEASE_PUBLIC_KEY_PEM` as a public repository/environment variable;
+- set `BYO_SOURCE_READ_TOKEN` as a repository secret containing a fine-grained,
+  read-only token for `JasonPeng2019/CodexClaudeWorkflow`;
 - restrict Actions to selected actions and require full-length SHA pins.
 
 The `channels` orphan branch must initially contain an empty `channels/`
