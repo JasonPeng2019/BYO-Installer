@@ -1,0 +1,196 @@
+name: Immutable publication and channel promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing protected v* tag
+        required: true
+        type: string
+      channel:
+        description: Promotion channel
+        required: true
+        type: choice
+        options: [canary, beta, stable]
+      release_run_id:
+        description: Successful protected release workflow run ID
+        required: true
+        type: string
+      clean_run_id:
+        description: Successful exact-artifact clean-machine workflow run ID
+        required: true
+        type: string
+      safe_hil_run_id:
+        description: Successful safe HIL workflow run ID
+        required: true
+        type: string
+      destructive_hil_run_id:
+        description: Successful approved destructive HIL workflow run ID
+        required: true
+        type: string
+      promotion_evidence:
+        description: Required canary/beta evidence URL when promoting beyond canary
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: byo-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: release-production
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+      CHANNEL: ${{ inputs.channel }}
+    steps:
+      - name: Check out exact protected tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Enforce publication controls
+        shell: bash
+        env:
+          PROMOTION_EVIDENCE: ${{ inputs.promotion_evidence }}
+          IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
+        run: |
+          case "$TAG" in v*) ;; *) echo "Only protected v* tags may publish." >&2; exit 1 ;; esac
+          test "$IMMUTABLE_RELEASES_ENABLED" = true
+          if test "$CHANNEL" != canary; then test -n "$PROMOTION_EVIDENCE"; fi
+          test "$(git describe --tags --exact-match)" = "$TAG"
+          test -z "$(git status --porcelain)"
+
+      - name: Download four exact signed candidates
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          pattern: release-*
+          path: candidates
+          merge-multiple: false
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download clean-machine evidence
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          pattern: clean-evidence-*
+          path: evidence/clean
+          run-id: ${{ inputs.clean_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download safe HIL evidence
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          pattern: hil-safe-*
+          path: evidence/hil-safe
+          run-id: ${{ inputs.safe_hil_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download destructive HIL evidence
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: hil-destructive-linux-x86_64
+          path: evidence/hil-destructive
+          run-id: ${{ inputs.destructive_hil_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Require complete gate evidence
+        shell: bash
+        run: |
+          test "$(find evidence/clean -type f -name '*.json' | wc -l)" -ge 4
+          test "$(find evidence/hil-safe -type f -name '*-safe.json' | wc -l)" -ge 3
+          test "$(find evidence/hil-destructive -type f -name 'destructive.json' | wc -l)" -eq 1
+
+      - name: Assemble public asset set
+        run: |
+          python3 release/scripts/prepare_release_assets.py \
+            --candidates candidates --output publication \
+            --release-run-id "${{ inputs.release_run_id }}" \
+            --clean-run-id "${{ inputs.clean_run_id }}" \
+            --safe-hil-run-id "${{ inputs.safe_hil_run_id }}" \
+            --destructive-hil-run-id "${{ inputs.destructive_hil_run_id }}"
+
+      - name: Create draft and attach every asset
+        shell: bash
+        run: |
+          gh release create "$TAG" --verify-tag --draft --latest=false \
+            --title "BYO ${TAG#v}" \
+            --notes "See release-index.json for source, target, and gate evidence."
+          gh release upload "$TAG" publication/*
+
+      - name: Verify draft assets byte-for-byte
+        shell: bash
+        run: |
+          download=$(mktemp -d)
+          gh release download "$TAG" --dir "$download"
+          for asset in publication/*; do
+            downloaded="$download/$(basename "$asset")"
+            test -f "$downloaded"
+            test "$(sha256sum "$asset" | cut -d' ' -f1)" = "$(sha256sum "$downloaded" | cut -d' ' -f1)"
+          done
+
+      - name: Publish once and make release immutable
+        run: gh release edit "$TAG" --draft=false --latest=false
+
+      - name: Mount protected channel signing key
+        shell: bash
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.BYO_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          umask 077
+          printf '%s' "$RELEASE_KEY_PEM" > "$RUNNER_TEMP/byo-release-key.pem"
+
+      - name: Fetch and verify current channel before replacement
+        id: existing
+        shell: bash
+        run: |
+          url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/channels/channels/$CHANNEL.json"
+          if curl --fail --silent --show-error "$url" --output existing-channel.json; then
+            echo "argument=--existing existing-channel.json" >> "$GITHUB_OUTPUT"
+          else
+            echo "argument=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Sign one atomic four-target channel sequence
+        shell: bash
+        env:
+          KEY_ID: ${{ secrets.BYO_RELEASE_KEY_ID }}
+        run: |
+          version="${TAG#v}"
+          previous=0
+          if test -f existing-channel.json; then previous=$(python3 -c 'import json; print(json.load(open("existing-channel.json"))["signed"]["sequence"])'); fi
+          sequence=$((previous + 1))
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          python3 release/scripts/sign_channel_set.py \
+            --channel "$CHANNEL" --signing-key "$RUNNER_TEMP/byo-release-key.pem" --key-id "$KEY_ID" \
+            ${{ steps.existing.outputs.argument }} \
+            --history-output "channel/$CHANNEL/$sequence.json" \
+            --pointer-output "channel/$CHANNEL.json" \
+            --release "candidates/release-macos-aarch64/release/dist/byo-$version-macos-aarch64" "candidates/release-macos-aarch64/release/dist/byo-$version-macos-aarch64.zip" "$base/byo-$version-macos-aarch64.zip" \
+            --release "candidates/release-macos-x86_64/release/dist/byo-$version-macos-x86_64" "candidates/release-macos-x86_64/release/dist/byo-$version-macos-x86_64.zip" "$base/byo-$version-macos-x86_64.zip" \
+            --release "candidates/release-windows-x86_64/release/dist/byo-$version-windows-x86_64" "candidates/release-windows-x86_64/release/dist/byo-$version-windows-x86_64.zip" "$base/byo-$version-windows-x86_64.zip" \
+            --release "candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64" "candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64.tar.gz" "$base/byo-$version-linux-x86_64.tar.gz"
+
+      - name: Publish immutable sequence, then pointer
+        run: |
+          python3 release/scripts/publish_channel.py \
+            --repository "$GITHUB_REPOSITORY" --branch channels --channel "$CHANNEL" \
+            --history channel/"$CHANNEL"/*.json --pointer channel/"$CHANNEL".json
+
+      - name: External signed update smoke test
+        shell: bash
+        run: |
+          version="${TAG#v}"
+          home=$(mktemp -d)
+          bundle="candidates/release-linux-x86_64/release/dist/byo-$version-linux-x86_64"
+          BYO_HOME="$home" "$bundle/byo" install-runtime --bundle "$bundle"
+          BYO_HOME="$home" "$home/bin/byo" update --channel "$CHANNEL" --dry-run \
+            --metadata-url "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/channels/channels/$CHANNEL.json"

@@ -1,0 +1,45 @@
+# External pinned source checkouts
+/AgentWorkspace/
+/Firmware MCP New/
+/AgentWorkspace.incorrect-backup/
+
+# Generated release output
+/release/build/
+/release/dist/
+/launcher/target/
+
+# Legacy local source staging
+/workspace-source/
+
+# Python and tool state
+**/.venv/
+**/__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+*.cer
+*.crt
+credentials.*
+secrets.*
+
+# Signing and publication scratch state
+/release/private/
+/release/staging/
+/channels/current/

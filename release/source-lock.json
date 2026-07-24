@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "agent_workspace": {
+    "repository": "JasonPeng2019/CodexClaudeWorkflow",
+    "branch": "InstallerV1",
+    "commit": "7ece704289bb6fcc2ba3c1983ead118bd7eac52d"
+  },
+  "firmware_mcp": {
+    "repository": "JasonPeng2019/BYO-Firmware-MCP",
+    "branch": "InstallerV1",
+    "commit": "2d42e02eb810a2a5cc0b4977107264dadaccaa31"
+  }
+}

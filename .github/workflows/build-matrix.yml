@@ -1,0 +1,112 @@
+name: Native build matrix
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - InstallerV1
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: macos-15
+            archive: zip
+            bundle: byo-0.1.0-macos-aarch64
+          - target: macos-x86_64
+            runner: macos-15-intel
+            archive: zip
+            bundle: byo-0.1.0-macos-x86_64
+          - target: windows-x86_64
+            runner: windows-2025
+            archive: zip
+            bundle: byo-0.1.0-windows-x86_64
+          - target: linux-x86_64-glibc-2.28
+            runner: byo-linux-x86_64-glibc-2.28
+            archive: tar.gz
+            bundle: byo-0.1.0-linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      SOURCE_DATE_EPOCH: "0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked external commits
+        id: source
+        shell: bash
+        run: |
+          echo "agent=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+          echo "firmware=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.agent }}
+          path: AgentWorkspace
+
+      - name: Check out locked Firmware MCP
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.firmware }}
+          path: Firmware MCP New
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install pinned build dependencies
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          uv sync --project "Firmware MCP New" --locked --all-groups
+
+      - name: Enforce Linux glibc baseline builder
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+
+      - name: Build native launcher, sidecar, SBOM, and archive
+        shell: bash
+        run: python release/scripts/build_release.py --version 0.1.0
+
+      - name: Check target and archive contract
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          EXPECTED_ARCHIVE: ${{ matrix.archive }}
+        run: python release/scripts/verify_build_output.py --dist release/dist --expected-target "$EXPECTED_TARGET" --archive-type "$EXPECTED_ARCHIVE"
+
+      - name: Run installed hardware-free E2E
+        shell: bash
+        run: python release/scripts/test_installed_e2e.py --bundle "release/dist/${{ matrix.bundle }}"
+
+      - name: Upload target artifact and private symbols
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: byo-${{ matrix.target }}
+          path: |
+            release/dist/
+            release/symbols/
+          if-no-files-found: error
+          retention-days: 14

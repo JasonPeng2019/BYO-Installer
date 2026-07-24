@@ -1,0 +1,8 @@
+# Replace the owner below with a release-security team when one exists.
+* @JasonPeng2019
+
+/launcher/ @JasonPeng2019
+/release/scripts/ @JasonPeng2019
+/schemas/ @JasonPeng2019
+/.github/workflows/ @JasonPeng2019
+/docs/decisions/ @JasonPeng2019

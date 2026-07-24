@@ -1,0 +1,77 @@
+name: Exact-artifact clean-machine tests
+
+on:
+  workflow_run:
+    workflows: ["Protected release candidate"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Protected release workflow run ID
+        required: true
+        type: string
+
+permissions:
+  contents: none
+  actions: read
+
+jobs:
+  clean:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: byo-clean-macos-12-aarch64
+          - target: macos-x86_64
+            runner: byo-clean-macos-12-x86_64
+          - target: windows-x86_64
+            runner: byo-clean-windows-10-22h2-x86_64
+          - target: linux-x86_64
+            runner: byo-clean-linux-x86_64-glibc-2.28
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RELEASE_RUN_ID: ${{ inputs.run_id || github.event.workflow_run.id }}
+    steps:
+      - name: Download exact signed candidate
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: release-${{ matrix.target }}
+          path: candidate
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download clean-test kit
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: clean-test-kit
+          path: test-kit
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Write public Linux release key
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PUBLIC_KEY_PEM: ${{ vars.BYO_RELEASE_PUBLIC_KEY_PEM }}
+        run: |
+          umask 077
+          printf '%s' "$PUBLIC_KEY_PEM" > "$RUNNER_TEMP/byo-release-public.pem"
+
+      - name: Execute exact signed candidate contract
+        shell: bash
+        run: |
+          args=(--candidate candidate --junit "evidence/${{ matrix.target }}.xml" --receipt "evidence/${{ matrix.target }}.json")
+          if test "$RUNNER_OS" = Linux; then args+=(--public-key "$RUNNER_TEMP/byo-release-public.pem"); fi
+          python "test-kit/release/scripts/clean_candidate.py" "${args[@]}"
+
+      - name: Upload clean-machine evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: clean-evidence-${{ matrix.target }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90

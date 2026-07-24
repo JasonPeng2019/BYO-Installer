@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "fixture_id": "replace-nrf52840-primary",
+  "role": "primary",
+  "board_model": "Nordic nRF52840 DK",
+  "board_id": "REPLACE_WITH_REVIEWED_BOARD_ID",
+  "probe_family": "jlink",
+  "probe_uid": "REPLACE_WITH_EXACT_PROBE_UID",
+  "firmware": {
+    "path": "REPLACE_WITH_COMMITTED_FIXTURE_ELF",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "memory_map": {
+    "path": "REPLACE_WITH_COMMITTED_MEMORY_MAP",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "expected_uart_substring": "BYO-HIL-READY",
+  "safe_calls": [
+    {
+      "name": "connect",
+      "arguments": {"board_id": "REPLACE_WITH_REVIEWED_BOARD_ID"},
+      "expect": "success"
+    }
+  ],
+  "destructive_authorized": false,
+  "destructive_operations": [],
+  "destructive_calls": []
+}

@@ -1,0 +1,40 @@
+name: Signed channel expiry monitor
+
+on:
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  expiry:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check signed channel expiry horizons
+        shell: bash
+        run: |
+          failed=0
+          for channel in canary beta stable; do
+            url="https://raw.githubusercontent.com/$GITHUB_REPOSITORY/channels/channels/$channel.json"
+            if ! curl --fail --silent --show-error "$url" --output "$channel.json"; then
+              echo "::error::$channel channel pointer is unavailable"
+              failed=1
+              continue
+            fi
+            days=$(CHANNEL="$channel" python3 -c '
+          import datetime, json, os
+          document = json.load(open(os.environ["CHANNEL"] + ".json"))
+          expires = datetime.datetime.fromisoformat(document["signed"]["expires_at"].replace("Z","+00:00"))
+          remaining = expires - datetime.datetime.now(datetime.timezone.utc)
+          print(int(remaining.total_seconds() // 86400))
+          ')
+            if test "$days" -le 3; then
+              echo "::error::$channel channel expires in $days day(s)"
+              failed=1
+            elif test "$days" -le 7; then
+              echo "::warning::$channel channel expires in $days day(s)"
+            fi
+          done
+          exit "$failed"

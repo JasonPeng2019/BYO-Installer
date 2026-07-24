@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BYO signed channel metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "signed", "signatures"],
+  "properties": {
+    "schema": {"const": 1},
+    "signed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "product",
+        "channel",
+        "sequence",
+        "generated_at",
+        "expires_at",
+        "releases"
+      ],
+      "properties": {
+        "schema": {"const": 1},
+        "product": {"const": "byo"},
+        "channel": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "releases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "version",
+              "platform",
+              "architecture",
+              "url",
+              "archive_type",
+              "archive_sha256",
+              "archive_size",
+              "manifest_sha256"
+            ],
+            "properties": {
+              "version": {"type": "string", "minLength": 1},
+              "platform": {"enum": ["macos", "linux", "windows"]},
+              "architecture": {"enum": ["x86_64", "aarch64"]},
+              "url": {"type": "string", "pattern": "^https://"},
+              "archive_type": {"enum": ["tar.gz", "zip"]},
+              "archive_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "archive_size": {"type": "integer", "minimum": 1},
+              "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }
+          }
+        }
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["algorithm", "key_id", "signature"],
+        "properties": {
+          "algorithm": {"const": "Ed25519"},
+          "key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+      }
+    }
+  }
+}

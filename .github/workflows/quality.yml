@@ -1,0 +1,119 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - InstallerV1
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+
+      - name: Rust formatting
+        run: cargo fmt --manifest-path launcher/Cargo.toml --check
+
+      - name: Rust lint
+        run: cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test --manifest-path launcher/Cargo.toml --locked
+
+      - name: Validate release Python
+        run: python3 -m compileall -q release/scripts
+
+      - name: Validate shell bootstrap
+        run: sh -n install.sh
+
+  agent-workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked AgentWorkspace commit
+        id: source
+        shell: bash
+        run: |
+          echo "commit=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.commit }}
+          path: AgentWorkspace
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Run AgentWorkspace contract
+        working-directory: AgentWorkspace
+        run: |
+          uv sync --locked --dev
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run basedpyright
+          uv run pytest
+          uv run python scripts/render_all_modes.py --check
+
+  firmware-mcp:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked Firmware MCP commit
+        id: source
+        shell: bash
+        run: |
+          echo "commit=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked Firmware MCP
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.commit }}
+          path: Firmware MCP New
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Run Firmware MCP contract
+        working-directory: Firmware MCP New
+        run: |
+          uv sync --locked --all-groups
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run pyright
+          uv run python -m unittest discover -s tests

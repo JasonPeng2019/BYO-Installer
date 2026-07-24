@@ -1,0 +1,83 @@
+schema = 1
+
+# Runtime workflow data. These records are compressed and integrity-bound in
+# workspace.pack; they are never projected verbatim into customer projects.
+[[rule]]
+pattern = "modes/*.toml"
+class = "compile"
+
+[[rule]]
+pattern = "skills-src/**"
+class = "embed"
+
+[[rule]]
+pattern = "instructions/**"
+class = "embed"
+
+[[rule]]
+pattern = "agents/**"
+class = "embed"
+
+# Initial user-owned artifacts. BYO creates these only when absent.
+[[rule]]
+pattern = "templates/*.template.md"
+class = "user-template"
+
+# The source Python/shell runtime is retained for private parity tests. Its
+# customer-facing mode, projection, hook, doctor, workflow-resource, update,
+# and uninstall responsibilities are implemented by the Rust launcher.
+[[rule]]
+pattern = "internal/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "bin/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "hooks/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "tests/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "specs/**"
+class = "developer-only"
+
+[[rule]]
+pattern = ".github/**"
+class = "developer-only"
+
+[[rule]]
+pattern = ".vscode/**"
+class = "developer-only"
+
+[[rule]]
+pattern = ".codex/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "INSTALL.md"
+class = "developer-only"
+
+[[rule]]
+pattern = "README.md"
+class = "developer-only"
+
+[[rule]]
+pattern = "pyproject.toml"
+class = "developer-only"
+
+[[rule]]
+pattern = "pyrightconfig.json"
+class = "developer-only"
+
+[[rule]]
+pattern = "uv.lock"
+class = "developer-only"
+
+[[rule]]
+pattern = ".gitignore"
+class = "developer-only"

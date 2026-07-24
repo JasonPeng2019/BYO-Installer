@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BYO release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "product",
+    "version",
+    "channel",
+    "platform",
+    "architecture",
+    "launcher_protocol",
+    "sidecar_protocol",
+    "worker_protocol",
+    "workflow_protocol",
+    "capsule_schema",
+    "project_state_schema",
+    "development_unsigned",
+    "source",
+    "toolchain",
+    "files"
+  ],
+  "properties": {
+    "schema": {"const": 1},
+    "product": {"const": "byo"},
+    "version": {"type": "string"},
+    "channel": {"type": "string"},
+    "platform": {"type": "string"},
+    "architecture": {"type": "string"},
+    "launcher_protocol": {"const": 1},
+    "sidecar_protocol": {"const": 1},
+    "worker_protocol": {"const": 1},
+    "workflow_protocol": {"const": 1},
+    "capsule_schema": {"const": 1},
+    "project_state_schema": {"const": 1},
+    "development_unsigned": {"type": "boolean"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installer", "agent_workspace", "firmware_mcp"],
+      "properties": {
+        "installer": {"$ref": "#/$defs/sourceRevision"},
+        "agent_workspace": {"$ref": "#/$defs/sourceRevision"},
+        "firmware_mcp": {"$ref": "#/$defs/sourceRevision"}
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rustc", "cargo", "python", "nuitka"],
+      "properties": {
+        "rustc": {"type": "string", "minLength": 1},
+        "cargo": {"type": "string", "minLength": 1},
+        "python": {"type": "string", "minLength": 1},
+        "nuitka": {"type": "string", "minLength": 1}
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size", "kind", "executable"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"pattern": "^[0-9a-f]{64}$"},
+          "size": {"type": "integer", "minimum": 0},
+          "kind": {"type": "string"},
+          "executable": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sourceRevision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    }
+  }
+}

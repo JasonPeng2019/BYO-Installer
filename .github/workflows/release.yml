@@ -1,0 +1,332 @@
+name: Protected release candidate
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing protected v* tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Validate protected release identity
+        id: identity
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          case "$REQUESTED_TAG" in v*) ;; *) echo "Release tag must begin with v." >&2; exit 1 ;; esac
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("launcher/Cargo.toml","rb"))["package"]["version"])')
+          test "$REQUESTED_TAG" = "v$version"
+          if test "$GITHUB_EVENT_NAME" = push; then test "$(git rev-parse HEAD)" = "$GITHUB_SHA"; fi
+          test "$(git rev-list -n 1 "$REQUESTED_TAG")" = "$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          echo "tag=$REQUESTED_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Upload immutable clean-test kit
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: clean-test-kit
+          path: |
+            install.sh
+            install.ps1
+            release/scripts/clean_candidate.py
+            release/scripts/test_installed_e2e.py
+            release/scripts/verify_authenticode.ps1
+            hil/
+          if-no-files-found: error
+          retention-days: 7
+
+  build:
+    needs: authorize
+    name: Sign ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: macos-15
+            bundle: byo-${{ needs.authorize.outputs.version }}-macos-aarch64
+          - target: macos-x86_64
+            runner: macos-15-intel
+            bundle: byo-${{ needs.authorize.outputs.version }}-macos-x86_64
+          - target: linux-x86_64
+            runner: byo-linux-x86_64-glibc-2.28
+            bundle: byo-${{ needs.authorize.outputs.version }}-linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    environment: release-production
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      BYO_RELEASE_PUBLIC_KEYS: ${{ secrets.BYO_RELEASE_PUBLIC_KEYS }}
+      BYO_RELEASE_KEY_ID: ${{ secrets.BYO_RELEASE_KEY_ID }}
+      SOURCE_DATE_EPOCH: "0"
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked inputs
+        id: source
+        shell: bash
+        run: |
+          echo "agent=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+          echo "firmware=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.agent }}
+          path: AgentWorkspace
+
+      - name: Check out locked Firmware MCP
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.firmware }}
+          path: Firmware MCP New
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install pinned build dependencies
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          uv sync --project "Firmware MCP New" --locked --all-groups
+          if test "$RUNNER_OS" = Linux; then test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"; fi
+
+      - name: Mount protected product signing key
+        shell: bash
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.BYO_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          umask 077
+          printf '%s' "$RELEASE_KEY_PEM" > "$RUNNER_TEMP/byo-release-key.pem"
+          echo "BYO_RELEASE_SIGNING_KEY=$RUNNER_TEMP/byo-release-key.pem" >> "$GITHUB_ENV"
+
+      - name: Import macOS Developer ID
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/byo-signing.keychain-db"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/byo-signing.keychain-db"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/byo-signing.keychain-db"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$RUNNER_TEMP/byo-signing.keychain-db" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/byo-signing.keychain-db"
+          security list-keychains -d user -s "$RUNNER_TEMP/byo-signing.keychain-db"
+
+      - name: Build and sign native candidate
+        shell: bash
+        env:
+          VERSION: ${{ needs.authorize.outputs.version }}
+          CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
+        run: |
+          args=(--production --channel canary --version "$VERSION")
+          if test "$RUNNER_OS" = macOS; then args+=(--codesign-identity "$CODESIGN_IDENTITY"); fi
+          python3 release/scripts/build_release.py "${args[@]}"
+
+      - name: Notarize exact macOS ZIP
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          API_KEY_P8: ${{ secrets.APPLE_NOTARY_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          umask 077
+          printf '%s' "$API_KEY_P8" > "$RUNNER_TEMP/AuthKey.p8"
+          release/scripts/notarize_macos.sh \
+            "release/dist/${{ matrix.bundle }}.zip" \
+            "release/dist/${{ matrix.bundle }}" \
+            "$RUNNER_TEMP/AuthKey.p8" "$API_KEY_ID" "$API_ISSUER_ID" \
+            "release/dist/${{ matrix.bundle }}.notarization.json"
+
+      - name: Attest archive provenance
+        uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
+        with:
+          subject-path: release/dist/${{ matrix.bundle }}.*
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
+        with:
+          subject-path: release/dist/${{ matrix.bundle }}.*
+          sbom-path: release/dist/${{ matrix.bundle }}/sbom.cdx.json
+
+      - name: Upload signed candidate
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            release/dist/
+            release/symbols/
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    needs: authorize
+    runs-on: windows-2025
+    timeout-minutes: 150
+    environment: release-production
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      BYO_RELEASE_PUBLIC_KEYS: ${{ secrets.BYO_RELEASE_PUBLIC_KEYS }}
+      BYO_RELEASE_KEY_ID: ${{ secrets.BYO_RELEASE_KEY_ID }}
+      SOURCE_DATE_EPOCH: "0"
+    steps:
+      - name: Check out protected source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked inputs
+        id: source
+        shell: bash
+        run: |
+          echo "agent=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+          echo "firmware=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.agent }}
+          path: AgentWorkspace
+
+      - name: Check out locked Firmware MCP
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.firmware }}
+          path: Firmware MCP New
+
+      - name: Install Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install pinned build dependencies
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          uv sync --project "Firmware MCP New" --locked --all-groups
+
+      - name: Mount protected product signing key
+        shell: pwsh
+        env:
+          RELEASE_KEY_PEM: ${{ secrets.BYO_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          Set-Content -LiteralPath "$env:RUNNER_TEMP\byo-release-key.pem" -Value $env:RELEASE_KEY_PEM -NoNewline
+          "BYO_RELEASE_SIGNING_KEY=$env:RUNNER_TEMP\byo-release-key.pem" >> $env:GITHUB_ENV
+
+      - name: Prepare unsigned PE bundle
+        shell: bash
+        env:
+          VERSION: ${{ needs.authorize.outputs.version }}
+        run: python release/scripts/build_release.py --production --prepare-platform-signing --channel canary --version "$VERSION"
+
+      - name: Authenticate to Azure with GitHub OIDC
+        uses: azure/login@93381592711f247e165c389ebb30b596c84cdc48 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign PE files through Microsoft Artifact Signing
+        uses: azure/artifact-signing-action@208f8af4bf26cf2af8597424e3cb5582801523ba # v2.0.0
+        with:
+          endpoint: ${{ secrets.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ secrets.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.ARTIFACT_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\release\dist\byo-${{ needs.authorize.outputs.version }}-windows-x86_64
+          files-folder-filter: exe,dll,pyd
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-azure-cli-credential: false
+          cache-dependencies: false
+
+      - name: Preserve signed files as finalization inputs
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.authorize.outputs.version }}
+        run: |
+          $bundle = "release\dist\byo-$env:VERSION-windows-x86_64"
+          Copy-Item "$bundle\byo.exe" "launcher\target\release\byo.exe" -Force
+          $dist = Get-ChildItem "release\build\nuitka" -Directory -Filter "*.dist" | Select-Object -Single
+          Remove-Item "$($dist.FullName)\*" -Recurse -Force
+          Copy-Item "$bundle\sidecar\*" $dist.FullName -Recurse -Force
+
+      - name: Finalize signed Windows candidate
+        shell: bash
+        env:
+          VERSION: ${{ needs.authorize.outputs.version }}
+        run: python release/scripts/build_release.py --production --platform-signing-complete --reuse-launcher --reuse-sidecar --channel canary --version "$VERSION"
+
+      - name: Attest archive provenance
+        uses: actions/attest-build-provenance@43d14c97e8ad2b7d54e224b1c579d425c998bb86 # v3
+        with:
+          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.*
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@51e74653167d63c8494cddf56ffa617ecb8a0ff1 # v3
+        with:
+          subject-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64.*
+          sbom-path: release/dist/byo-${{ needs.authorize.outputs.version }}-windows-x86_64/sbom.cdx.json
+
+      - name: Upload signed Windows candidate
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: release-windows-x86_64
+          path: |
+            release/dist/
+            release/symbols/
+          if-no-files-found: error
+          retention-days: 7

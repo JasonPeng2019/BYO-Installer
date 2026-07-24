@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://byo.dev/schemas/hil-fixture-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "fixture_id",
+    "role",
+    "board_model",
+    "board_id",
+    "probe_family",
+    "probe_uid",
+    "firmware",
+    "memory_map",
+    "expected_uart_substring",
+    "safe_calls",
+    "destructive_authorized",
+    "destructive_operations",
+    "destructive_calls"
+  ],
+  "properties": {
+    "schema": {"const": 1},
+    "fixture_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{2,63}$"},
+    "role": {"enum": ["primary", "sacrificial"]},
+    "board_model": {"type": "string", "minLength": 1},
+    "board_id": {"type": "string", "minLength": 1},
+    "probe_family": {"enum": ["jlink", "stlink", "cmsis_dap"]},
+    "probe_uid": {"type": "string", "minLength": 4},
+    "firmware": {"$ref": "#/$defs/artifact"},
+    "memory_map": {"$ref": "#/$defs/artifact"},
+    "expected_uart_substring": {"type": "string", "minLength": 1},
+    "safe_calls": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/call"}
+    },
+    "destructive_authorized": {"type": "boolean"},
+    "destructive_operations": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "backend_mass_erase_recovery",
+          "debug_unlock",
+          "reset",
+          "reflash_fixture"
+        ]
+      }
+    },
+    "destructive_calls": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/call"}
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "arguments", "expect"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "arguments": {"type": "object"},
+        "expect": {"enum": ["success", "refusal"]}
+      }
+    }
+  }
+}

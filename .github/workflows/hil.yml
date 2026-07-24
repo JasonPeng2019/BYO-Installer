@@ -1,0 +1,163 @@
+name: Compiled signed HIL
+
+on:
+  workflow_run:
+    workflows: ["Protected release candidate"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Protected release workflow run ID
+        required: true
+        type: string
+      mode:
+        description: HIL mode
+        required: true
+        default: safe
+        type: choice
+        options: [safe, destructive]
+
+permissions:
+  contents: none
+  actions: read
+
+jobs:
+  safe:
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && inputs.mode == 'safe')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: byo-hil-macos-aarch64
+          - target: windows-x86_64
+            runner: byo-hil-windows-x86_64
+          - target: linux-x86_64
+            runner: byo-hil-linux-x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    concurrency:
+      group: byo-hil-primary-nrf52840
+      cancel-in-progress: false
+    env:
+      RELEASE_RUN_ID: ${{ inputs.release_run_id || github.event.workflow_run.id }}
+      BYO_HIL_PROJECT: ${{ vars.BYO_HIL_PRIMARY_PROJECT }}
+    steps:
+      - name: Download exact signed candidate
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: release-${{ matrix.target }}
+          path: candidate
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download HIL test kit
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: clean-test-kit
+          path: test-kit
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Install exact signed HIL candidate
+        shell: bash
+        run: |
+          PYTHONPATH="test-kit/release/scripts" python "test-kit/hil/prepare_candidate.py" \
+            --candidate candidate --home "$RUNNER_TEMP/byo-hil-home" \
+            --receipt "evidence/${{ matrix.target }}-install.json"
+
+      - name: Reset fixture power before test
+        shell: bash
+        run: byo-hil-power reset primary
+
+      - name: Run safe compiled HIL contract
+        shell: bash
+        run: |
+          launcher=$(python -c 'import json; print(json.load(open("evidence/${{ matrix.target }}-install.json"))["launcher"])')
+          launcher_sha=$(python -c 'import json; print(json.load(open("evidence/${{ matrix.target }}-install.json"))["launcher_sha256"])')
+          BYO_HOME="$RUNNER_TEMP/byo-hil-home" python "test-kit/hil/run_hil.py" safe \
+            --byo "$launcher" --artifact-sha256 "$launcher_sha" \
+            --project "$BYO_HIL_PROJECT" \
+            --fixture "test-kit/hil/fixtures/nrf52840-dk.json" \
+            --receipt "evidence/${{ matrix.target }}-safe.json"
+
+      - name: Reset fixture power after test
+        if: always()
+        shell: bash
+        run: byo-hil-power reset primary
+
+      - name: Upload HIL evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: hil-safe-${{ matrix.target }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 90
+
+  destructive:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'destructive'
+    runs-on: byo-hil-linux-x86_64
+    timeout-minutes: 45
+    environment: hil-destructive
+    concurrency:
+      group: byo-hil-sacrificial-stm32
+      cancel-in-progress: false
+    env:
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      BYO_HIL_PROJECT: ${{ vars.BYO_HIL_SACRIFICIAL_PROJECT }}
+      BYO_HIL_ALLOW_DESTRUCTIVE: "1"
+    steps:
+      - name: Download exact signed candidate
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: release-linux-x86_64
+          path: candidate
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Download HIL test kit
+        uses: actions/download-artifact@37930b1c488e7750794a53078a7b2e7a6b13b33d # v7
+        with:
+          name: clean-test-kit
+          path: test-kit
+          run-id: ${{ env.RELEASE_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Install exact signed HIL candidate
+        shell: bash
+        run: |
+          PYTHONPATH="test-kit/release/scripts" python "test-kit/hil/prepare_candidate.py" \
+            --candidate candidate --home "$RUNNER_TEMP/byo-hil-home" \
+            --receipt "evidence/destructive-install.json"
+
+      - name: Reset sacrificial fixture power
+        shell: bash
+        run: byo-hil-power reset sacrificial
+
+      - name: Run manually approved destructive contract
+        shell: bash
+        run: |
+          launcher=$(python -c 'import json; print(json.load(open("evidence/destructive-install.json"))["launcher"])')
+          launcher_sha=$(python -c 'import json; print(json.load(open("evidence/destructive-install.json"))["launcher_sha256"])')
+          BYO_HOME="$RUNNER_TEMP/byo-hil-home" python "test-kit/hil/run_hil.py" destructive \
+            --byo "$launcher" --artifact-sha256 "$launcher_sha" \
+            --project "$BYO_HIL_PROJECT" \
+            --fixture "test-kit/hil/fixtures/stm32-nucleo-sacrificial.json" \
+            --receipt "evidence/destructive.json"
+
+      - name: Recover fixture power and state
+        if: always()
+        shell: bash
+        run: byo-hil-power reset sacrificial
+
+      - name: Upload destructive HIL evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a4efb70202ab212f8811444a25d9818ce9 # v6
+        with:
+          name: hil-destructive-linux-x86_64
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 365
