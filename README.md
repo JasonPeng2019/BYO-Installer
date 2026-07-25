@@ -5,21 +5,23 @@ Python, Rust, `uv`, or a source checkout to use it.
 
 ## Install in three steps
 
-1. From `release/dist/`, download the file that matches your computer:
+1. From your BYO download link, download the archive and installer that match
+   your computer:
 
-| Computer | Download |
-|---|---|
-| Mac with Apple silicon | `byo-0.1.0-macos-aarch64.zip` |
-| 64-bit Windows | `byo-0.1.0-windows-x86_64.zip` |
-| 64-bit Linux | `byo-0.1.0-linux-x86_64.tar.gz` |
+| Computer | Archive | Installer |
+|---|---|---|
+| Mac with Apple silicon | `byo-0.1.0-macos-aarch64.zip` | `install.sh` |
+| 64-bit Windows | `byo-0.1.0-windows-x86_64.zip` | `install.ps1` |
+| 64-bit Linux | `byo-0.1.0-linux-x86_64.tar.gz` | `install.sh` |
 
 2. Extract the downloaded file.
 3. Install the extracted folder:
 
 | Computer | Command |
 |---|---|
-| macOS or Linux | `./install.sh --bundle "/path/to/extracted/byo-folder"` |
-| Windows PowerShell | `.\install.ps1 -Bundle "C:\path\to\extracted\byo-folder"` |
+| Mac with Apple silicon | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.0-macos-aarch64"` |
+| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.0-windows-x86_64"` |
+| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"` |
 
 Then open your firmware project and run:
 
@@ -45,21 +47,23 @@ access and does not edit your shell profile automatically.
 
 ## Detailed installation
 
-The current files are development builds in `release/dist/`. Public signed
-release downloads have not been published yet.
+The examples below assume that you saved the archive and installer script in
+your Downloads folder. Public signed release downloads have not been published
+yet.
 
 ### macOS with Apple silicon
 
 Requirements: macOS 12 or newer and a Mac with an Apple chip.
 
-Run these commands from the installer workspace:
+Example:
 
 ```sh
-byo_install_dir="$(mktemp -d /tmp/byo-macos-install.XXXXXXXX)"
+cd "$HOME/Downloads"
+byo_install_dir="$(mktemp -d)"
 ditto -x -k \
-  release/dist/byo-0.1.0-macos-aarch64.zip \
+  byo-0.1.0-macos-aarch64.zip \
   "$byo_install_dir"
-./install.sh \
+sh ./install.sh \
   --bundle "$byo_install_dir/byo-0.1.0-macos-aarch64"
 ```
 
@@ -70,12 +74,13 @@ be `arm64`.
 
 Requirements: Windows 10 22H2 or Windows 11 on an x64-based computer.
 
-Run these commands in PowerShell from the installer workspace:
+Example:
 
 ```powershell
+Set-Location "$HOME\Downloads"
 $Destination = Join-Path $env:TEMP ("byo-windows-install-" + [guid]::NewGuid())
 Expand-Archive `
-  -LiteralPath ".\release\dist\byo-0.1.0-windows-x86_64.zip" `
+  -LiteralPath ".\byo-0.1.0-windows-x86_64.zip" `
   -DestinationPath $Destination `
   -Force
 .\install.ps1 `
@@ -86,14 +91,15 @@ Expand-Archive `
 
 Requirements: a 64-bit x86 Linux distribution with glibc 2.28 or newer.
 
-Run these commands from the installer workspace:
+Example:
 
 ```sh
-byo_install_dir="$(mktemp -d /tmp/byo-linux-install.XXXXXXXX)"
+cd "$HOME/Downloads"
+byo_install_dir="$(mktemp -d)"
 tar -xzf \
-  release/dist/byo-0.1.0-linux-x86_64.tar.gz \
+  byo-0.1.0-linux-x86_64.tar.gz \
   -C "$byo_install_dir"
-./install.sh \
+sh ./install.sh \
   --bundle "$byo_install_dir/byo-0.1.0-linux-x86_64"
 ```
 
@@ -115,7 +121,7 @@ export PATH="$HOME/.local/bin:$PATH"
 Initialize a project:
 
 ```sh
-cd /absolute/path/to/firmware-project
+cd "$HOME/Projects/example-firmware"
 byo init
 byo doctor --project "$PWD"
 byo status --project "$PWD"
@@ -160,21 +166,21 @@ The current archive checksums are:
 macOS:
 
 ```sh
-shasum -a 256 release/dist/byo-0.1.0-macos-aarch64.zip
+shasum -a 256 "$HOME/Downloads/byo-0.1.0-macos-aarch64.zip"
 ```
 
 Windows PowerShell:
 
 ```powershell
 Get-FileHash `
-  .\release\dist\byo-0.1.0-windows-x86_64.zip `
+  "$HOME\Downloads\byo-0.1.0-windows-x86_64.zip" `
   -Algorithm SHA256
 ```
 
 Linux:
 
 ```sh
-sha256sum release/dist/byo-0.1.0-linux-x86_64.tar.gz
+sha256sum "$HOME/Downloads/byo-0.1.0-linux-x86_64.tar.gz"
 ```
 
 Do not install an archive if its calculated checksum differs from the value in
@@ -190,8 +196,8 @@ revisions:
 - Firmware MCP: `c1a3ed9491113a841c62730b71ce59372b580e34`.
 
 Each target includes an extracted bundle, archive, checksum receipt, and
-CycloneDX SBOM under `release/dist/`. Nuitka reports and native private symbols
-are under `release/symbols/`.
+CycloneDX SBOM. Nuitka reports and native symbols are retained as private build
+artifacts.
 
 The macOS and Windows artifacts passed their installed hardware-free suites on
 native GitHub-hosted runners. Linux was built and tested in the pinned glibc
@@ -217,17 +223,21 @@ publication.
 On macOS or Linux, set an isolated product home before installing:
 
 ```sh
-export BYO_HOME="$(mktemp -d /tmp/byo-home.XXXXXXXX)"
-./install.sh --bundle "/path/to/extracted/byo-folder"
+export BYO_HOME="$(mktemp -d)"
+sh "$HOME/Downloads/install.sh" \
+  --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"
 "$BYO_HOME/bin/byo" paths
 ```
 
 ## Build from source
 
+The following commands use `$HOME/Projects/example-byo-installer` as an example
+checkout location.
+
 Release assembly requires:
 
 - clean external checkouts at the exact commits in
-  `release/source-lock.json`;
+  the repository's `source-lock.json`;
 - the locked Firmware MCP environment, including its `build` dependency group;
 - Rust and Cargo;
 - Nuitka; and
@@ -236,29 +246,32 @@ Release assembly requires:
 Build the native launcher and sidecar:
 
 ```sh
-python3 release/scripts/build_release.py
+cd "$HOME/Projects/example-byo-installer"
+python3 ./release/scripts/build_release.py
 ```
 
 Only after a successful full build, launcher- or workflow-only changes may
 reuse the compiled sidecar:
 
 ```sh
-python3 release/scripts/build_release.py --reuse-sidecar
+cd "$HOME/Projects/example-byo-installer"
+python3 ./release/scripts/build_release.py --reuse-sidecar
 ```
 
-The build writes:
+The build reports the exact output locations. It produces:
 
-- `release/build/workspace-classification.json`;
-- `release/build/workspace.pack`;
-- `release/build/nuitka-compilation-report.xml`;
-- the bundle, archive, checksum, and SBOM under `release/dist/`; and
-- dSYM, PDB, or Linux debug files under `release/symbols/`.
+- `workspace-classification.json`;
+- `workspace.pack`;
+- `nuitka-compilation-report.xml`;
+- the bundle, archive, checksum, and SBOM; and
+- dSYM, PDB, or Linux debug files.
 
 Run the installed hardware-free acceptance suite with:
 
 ```sh
-python3 release/scripts/test_installed_e2e.py \
-  --bundle "/path/to/extracted/byo-folder"
+cd "$HOME/Projects/example-byo-installer"
+python3 ./release/scripts/test_installed_e2e.py \
+  --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"
 ```
 
 ## Updates and production signatures
@@ -277,10 +290,11 @@ Build a production artifact only inside a protected signing environment:
 
 ```sh
 export BYO_RELEASE_PUBLIC_KEYS='{"release-key-id":"<32-byte-public-key-hex>"}'
-python3 release/scripts/build_release.py \
+cd "$HOME/Projects/example-byo-installer"
+python3 ./release/scripts/build_release.py \
   --production \
   --channel stable \
-  --signing-key /protected/path/release-private-key.pem \
+  --signing-key "$HOME/example-keys/release-private-key.pem" \
   --key-id release-key-id \
   --codesign-identity "Developer ID Application: …"
 ```
@@ -291,7 +305,8 @@ Authenticode is applied before the product manifest and deterministic ZIP are
 finalized.
 
 After uploading an immutable production archive, publish signed channel
-metadata with `release/scripts/sign_channel.py`. The launcher can then use:
+metadata with the repository's `sign_channel.py` tool. The launcher can then
+use:
 
 ```sh
 byo update \
@@ -328,8 +343,8 @@ signatures.
 
 ## Release operations and remaining external gates
 
-Product decisions are under `docs/decisions/`. Operator instructions and the
-final release checklist are under `docs/release/`.
+The repository contains the product decision records, operator instructions,
+and final release checklist.
 
 The workflows are intentionally not self-certifying. General availability
 remains blocked until:
@@ -339,4 +354,4 @@ remains blocked until:
 - native, clean-machine, and HIL runners are provisioned;
 - real fixture identifiers and hashed firmware replace the HIL examples;
 - all workflows pass on their actual target hosts; and
-- an independent approver completes `docs/release/ga-checklist.md`.
+- an independent approver completes the GA checklist.
