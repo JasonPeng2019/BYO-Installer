@@ -737,6 +737,7 @@ def main() -> int:
                 "-m",
                 "nuitka",
                 "--mode=standalone",
+                "--assume-yes-for-downloads",
                 "--disable-cache=ccache",
                 f"--report={nuitka_report}",
                 "--report-diffable",
