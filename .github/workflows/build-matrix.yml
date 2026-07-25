@@ -29,10 +29,6 @@ jobs:
             runner: windows-2025
             archive: zip
             bundle: byo-0.1.1-windows-x86_64
-          - target: linux-x86_64-glibc-2.28
-            runner: byo-linux-x86_64-glibc-2.28
-            archive: tar.gz
-            bundle: byo-0.1.1-linux-x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
@@ -106,6 +102,92 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-${{ matrix.target }}
+          path: |
+            release/dist/
+            release/symbols/
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-x86_64:
+    name: linux-x86_64-glibc-2.28
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8
+    env:
+      SOURCE_DATE_EPOCH: "0"
+      CARGO_HOME: /tmp/byo-cargo
+      RUSTUP_HOME: /tmp/byo-rustup
+      UV_CACHE_DIR: /tmp/byo-uv-cache
+      BYO_BUILD_PYTHON: /opt/python/cp312-cp312/bin/python
+
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read locked external commits
+        id: source
+        shell: bash
+        run: |
+          echo "agent=$("$BYO_BUILD_PYTHON" -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+          echo "firmware=$("$BYO_BUILD_PYTHON" -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.agent }}
+          path: AgentWorkspace
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+
+      - name: Check out locked Firmware MCP
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.firmware }}
+          path: Firmware MCP New
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+
+      - name: Install pinned Linux build toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+          curl --fail --location --silent --show-error \
+            --output /tmp/rustup-init \
+            https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init
+          echo "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10  /tmp/rustup-init" \
+            | sha256sum --check -
+          chmod 0755 /tmp/rustup-init
+          /tmp/rustup-init --yes --profile minimal --default-toolchain 1.97.1
+          "$BYO_BUILD_PYTHON" -m pip install --disable-pip-version-check uv==0.11.20
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          uv sync --project "Firmware MCP New" --locked --all-groups
+
+      - name: Build native launcher, sidecar, SBOM, and archive
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          "$BYO_BUILD_PYTHON" release/scripts/build_release.py --version 0.1.1
+
+      - name: Check target and archive contract
+        shell: bash
+        run: |
+          "$BYO_BUILD_PYTHON" release/scripts/verify_build_output.py \
+            --dist release/dist \
+            --expected-target linux-x86_64-glibc-2.28 \
+            --archive-type tar.gz
+
+      - name: Run installed hardware-free E2E
+        shell: bash
+        run: |
+          "$BYO_BUILD_PYTHON" release/scripts/test_installed_e2e.py \
+            --bundle release/dist/byo-0.1.1-linux-x86_64
+
+      - name: Upload target artifact and private symbols
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: byo-linux-x86_64-glibc-2.28
           path: |
             release/dist/
             release/symbols/
