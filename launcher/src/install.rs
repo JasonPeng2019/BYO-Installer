@@ -265,6 +265,67 @@ fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn remove_public_launcher(path: &Path) -> Result<()> {
+    std::fs::remove_file(path)
+        .with_context(|| format!("failed to remove public launcher {}", path.display()))
+}
+
+#[cfg(windows)]
+fn remove_public_launcher(path: &Path) -> Result<()> {
+    use std::mem::size_of;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfoEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_FLAG_DELETE,
+        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
+        FILE_DISPOSITION_INFO_EX, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let file = OpenOptions::new()
+        .access_mode(DELETE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .open(path)
+        .with_context(|| {
+            format!(
+                "failed to open public launcher {} for deletion",
+                path.display()
+            )
+        })?;
+    let disposition = FILE_DISPOSITION_INFO_EX {
+        Flags: FILE_DISPOSITION_FLAG_DELETE
+            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
+            | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
+    };
+    // SAFETY: `file` owns a valid Windows file handle, and `disposition` remains
+    // alive and correctly sized for the duration of this synchronous call.
+    let result = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileDispositionInfoEx,
+            std::ptr::from_ref(&disposition).cast(),
+            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error()).with_context(|| {
+            format!(
+                "failed to mark public launcher {} for POSIX deletion",
+                path.display()
+            )
+        });
+    }
+    drop(file);
+    if path.exists() {
+        bail!(
+            "public launcher remained visible after deletion: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf> {
     let _lock = InstallLock::acquire(paths)?;
     let candidate = if let Some(path) = requested {
@@ -374,7 +435,7 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
         }
     }
     if paths.public_launcher().is_file() {
-        std::fs::remove_file(paths.public_launcher())?;
+        remove_public_launcher(&paths.public_launcher())?;
         removed.push(paths.public_launcher());
     }
     if paths.current().is_file() {
@@ -396,6 +457,9 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
 mod tests {
     use super::{portable_relative_path, write_if_changed};
 
+    #[cfg(windows)]
+    use super::remove_public_launcher;
+
     #[test]
     fn current_runtime_paths_use_portable_separators() {
         let path = std::path::Path::new("versions").join("0.1.0");
@@ -413,6 +477,21 @@ mod tests {
         std::fs::write(&launcher, b"same").unwrap();
         assert!(!write_if_changed(&launcher, b"same").unwrap());
         assert_eq!(std::fs::read(&launcher).unwrap(), b"same");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_public_launcher_delete_removes_the_visible_path() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-uninstall-test-{:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let launcher = root.join("byo.exe");
+        std::fs::write(&launcher, b"placeholder").unwrap();
+        remove_public_launcher(&launcher).unwrap();
+        assert!(!launcher.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

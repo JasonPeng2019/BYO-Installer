@@ -136,6 +136,7 @@ dependencies = [
  "toml_edit",
  "ureq",
  "walkdir",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
