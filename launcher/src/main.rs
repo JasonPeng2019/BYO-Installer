@@ -21,6 +21,26 @@ use error::{categorize, ExitCategory};
 use paths::ProductPaths;
 use serde::Serialize;
 
+const SIDECAR_ENVIRONMENT: &[&str] = &[
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+];
+
 #[derive(Serialize)]
 struct Check {
     id: String,
@@ -120,6 +140,16 @@ fn print_doctor(checks: &[Check], json: bool) -> Result<()> {
     Ok(())
 }
 
+fn apply_sidecar_environment(command: &mut ProcessCommand) {
+    command.env_clear();
+    for name in SIDECAR_ENVIRONMENT {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    command.env("BYO_SIDECAR_COMPILED", "1");
+}
+
 fn serve_mcp(argument: &ProjectArg, paths: &ProductPaths) -> Result<i32> {
     let project = categorize(
         project::canonical_project(argument.project.as_deref(), paths),
@@ -146,26 +176,8 @@ fn serve_mcp(argument: &ProjectArg, paths: &ProductPaths) -> Result<i32> {
         .arg(runtime.release.workflow_protocol.to_string())
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env_clear();
-    for name in [
-        "HOME",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "LANG",
-        "LC_ALL",
-        "PATH",
-        "SystemRoot",
-        "WINDIR",
-        "COMSPEC",
-        "PATHEXT",
-    ] {
-        if let Some(value) = env::var_os(name) {
-            command.env(name, value);
-        }
-    }
-    command.env("BYO_SIDECAR_COMPILED", "1");
+        .stderr(Stdio::inherit());
+    apply_sidecar_environment(&mut command);
     let status = command
         .status()
         .with_context(|| format!("failed to launch private sidecar {}", sidecar.display()))
@@ -214,25 +226,7 @@ fn run_helper(command: InternalCommand, paths: &ProductPaths) -> Result<i32> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
-    helper.env_clear();
-    for name in [
-        "HOME",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-        "LANG",
-        "LC_ALL",
-        "PATH",
-        "SystemRoot",
-        "WINDIR",
-        "COMSPEC",
-        "PATHEXT",
-    ] {
-        if let Some(value) = env::var_os(name) {
-            helper.env(name, value);
-        }
-    }
-    helper.env("BYO_SIDECAR_COMPILED", "1");
+    apply_sidecar_environment(&mut helper);
     let status = helper.status().map_err(|error| {
         error::fail(
             ExitCategory::SidecarLaunch,
@@ -540,6 +534,25 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("BYO error: {error:#}");
             ExitCode::from(error::exit_code(&error).unwrap_or(ExitCategory::Internal as u8))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SIDECAR_ENVIRONMENT;
+
+    #[test]
+    fn sidecar_environment_preserves_windows_profile_resolution() {
+        for required in [
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+        ] {
+            assert!(SIDECAR_ENVIRONMENT.contains(&required));
         }
     }
 }

@@ -87,30 +87,45 @@ def start_initialized_mcp(
     )
     assert process.stdin is not None
     assert process.stdout is not None
-    request = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "byo-acceptance", "version": "1"},
-        },
-    }
-    process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
-    process.stdin.flush()
-    response = json.loads(read_line(process.stdout))
-    if response.get("id") != 1 or not isinstance(response.get("result"), dict):
-        raise AcceptanceFailure(f"invalid MCP initialization response: {response!r}")
-    server_info = response["result"].get("serverInfo", {})
-    if server_info.get("version") != expected_version:
-        raise AcceptanceFailure(
-            f"MCP server version was not bound to the release: {server_info!r}"
+    try:
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "byo-acceptance", "version": "1"},
+            },
+        }
+        process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
+        process.stdin.flush()
+        response = json.loads(read_line(process.stdout))
+        if response.get("id") != 1 or not isinstance(response.get("result"), dict):
+            raise AcceptanceFailure(
+                f"invalid MCP initialization response: {response!r}"
+            )
+        server_info = response["result"].get("serverInfo", {})
+        if server_info.get("version") != expected_version:
+            raise AcceptanceFailure(
+                f"MCP server version was not bound to the release: {server_info!r}"
+            )
+        process.stdin.write(
+            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
         )
-    process.stdin.write(
-        '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
-    )
-    process.stdin.flush()
+        process.stdin.flush()
+    except Exception as exc:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        diagnostics = process.stderr.read() if process.stderr is not None else ""
+        raise AcceptanceFailure(
+            f"MCP initialization failed: {exc}\nstderr:\n{diagnostics}"
+        ) from exc
     return process
 
 
