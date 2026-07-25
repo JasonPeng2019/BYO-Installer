@@ -536,9 +536,16 @@ def main() -> int:
         custom_paths = json.loads(
             invoke([str(custom_byo), "paths"], env=custom_env).stdout
         )
-        if Path(custom_paths["data"]) != custom_root / "data":
+        actual_custom_data = Path(custom_paths["data"])
+        expected_custom_data = custom_root / "data"
+        try:
+            custom_data_matches = actual_custom_data.samefile(expected_custom_data)
+        except OSError:
+            custom_data_matches = False
+        if not custom_data_matches:
             raise AcceptanceFailure(
-                "custom installation was not rediscovered without BYO_HOME"
+                "custom installation was not rediscovered without BYO_HOME: "
+                f"expected {expected_custom_data}, got {actual_custom_data}"
             )
         invoke([str(custom_byo), "doctor", "--global"], env=custom_env)
         invoke(
