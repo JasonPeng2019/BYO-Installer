@@ -63,6 +63,14 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_if_changed(path: &Path, payload: &[u8]) -> Result<bool> {
+    if std::fs::read(path).ok().as_deref() == Some(payload) {
+        return Ok(false);
+    }
+    crate::manifest::atomic_write(path, payload)?;
+    Ok(true)
+}
+
 fn set_runtime_permissions(runtime: &Path, manifest: &ReleaseManifest) -> Result<()> {
     #[cfg(unix)]
     {
@@ -197,7 +205,7 @@ pub(crate) fn install_bundle_locked(
     let previous_current = std::fs::read(paths.current()).ok();
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
     let switch = (|| -> Result<()> {
-        crate::manifest::atomic_write(&paths.public_launcher(), &bytes)?;
+        write_if_changed(&paths.public_launcher(), &bytes)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -232,7 +240,7 @@ pub(crate) fn install_bundle_locked(
 
 fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
     if let Some(payload) = payload {
-        crate::manifest::atomic_write(path, payload)?;
+        write_if_changed(path, payload)?;
     } else if path.is_file() {
         std::fs::remove_file(path)?;
     }
@@ -274,7 +282,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     let previous_current = std::fs::read(paths.current()).ok();
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
     let switch = (|| -> Result<()> {
-        crate::manifest::atomic_write(&paths.public_launcher(), &launcher)?;
+        write_if_changed(&paths.public_launcher(), &launcher)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -364,4 +372,21 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
         }
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_if_changed;
+
+    #[test]
+    fn unchanged_launcher_is_not_replaced() {
+        let root =
+            std::env::temp_dir().join(format!("byo-launcher-test-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let launcher = root.join("byo.exe");
+        std::fs::write(&launcher, b"same").unwrap();
+        assert!(!write_if_changed(&launcher, b"same").unwrap());
+        assert_eq!(std::fs::read(&launcher).unwrap(), b"same");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
