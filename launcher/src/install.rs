@@ -71,6 +71,24 @@ fn write_if_changed(path: &Path, payload: &[u8]) -> Result<bool> {
     Ok(true)
 }
 
+fn portable_relative_path(path: &Path) -> Result<String> {
+    let mut components = Vec::new();
+    for component in path.components() {
+        let std::path::Component::Normal(component) = component else {
+            bail!("runtime path contains a non-relative component");
+        };
+        components.push(
+            component
+                .to_str()
+                .context("runtime path is not valid UTF-8")?,
+        );
+    }
+    if components.is_empty() {
+        bail!("runtime path is empty");
+    }
+    Ok(components.join("/"))
+}
+
 fn set_runtime_permissions(runtime: &Path, manifest: &ReleaseManifest) -> Result<()> {
     #[cfg(unix)]
     {
@@ -275,7 +293,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     let current = CurrentRuntime {
         schema: 1,
         version: release.version.clone(),
-        relative_runtime: candidate.strip_prefix(&data)?.to_string_lossy().to_string(),
+        relative_runtime: portable_relative_path(candidate.strip_prefix(&data)?)?,
         manifest_sha256: sha256_file(&candidate.join("release-manifest.json"))?,
     };
     let launcher = std::fs::read(launcher_path(&candidate))?;
@@ -376,7 +394,15 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
 
 #[cfg(test)]
 mod tests {
-    use super::write_if_changed;
+    use super::{portable_relative_path, write_if_changed};
+
+    #[test]
+    fn current_runtime_paths_use_portable_separators() {
+        let path = std::path::Path::new("versions").join("0.1.0");
+        assert_eq!(portable_relative_path(&path).unwrap(), "versions/0.1.0");
+        assert!(portable_relative_path(std::path::Path::new("")).is_err());
+        assert!(portable_relative_path(std::path::Path::new("../0.1.0")).is_err());
+    }
 
     #[test]
     fn unchanged_launcher_is_not_replaced() {
