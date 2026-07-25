@@ -15,9 +15,11 @@ use std::process::{Command as ProcessCommand, ExitCode, Stdio};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cli::{
-    Cli, Command, InternalCommand, McpCommand, ProjectArg, WorkflowCommand, WorkspaceCommand,
+    AgentLaunchArgs, Cli, Command, InternalCommand, McpCommand, ProjectArg, WorkflowCommand,
+    WorkspaceCommand,
 };
 use error::{categorize, ExitCategory};
+use pack::CompiledMode;
 use paths::ProductPaths;
 use serde::Serialize;
 
@@ -71,6 +73,7 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     if manifest::sha256_file(&launcher)? != declared.sha256 {
         bail!("public BYO launcher does not match the active runtime");
     }
+    paths.verify_install_locator()?;
     let leases = lease::inspect(paths, true)?;
     let live_lease_count = leases.iter().filter(|status| status.live).count();
     let stale_lease_count = leases.len() - live_lease_count;
@@ -120,6 +123,141 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
             }),
         },
     ])
+}
+
+#[derive(Clone, Copy)]
+enum AgentClient {
+    Codex,
+    Claude,
+}
+
+impl AgentClient {
+    fn program(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+        }
+    }
+}
+
+fn has_option(arguments: &[String], long: &str, short: Option<&str>) -> bool {
+    arguments.iter().any(|argument| {
+        argument == long
+            || argument.starts_with(&format!("{long}="))
+            || short.is_some_and(|short| argument == short)
+    })
+}
+
+fn client_arguments(
+    client: AgentClient,
+    project: &std::path::Path,
+    mode: &CompiledMode,
+    arguments: &[String],
+) -> Vec<String> {
+    let mut rendered = Vec::new();
+    match client {
+        AgentClient::Codex => {
+            if !has_option(arguments, "--sandbox", Some("-s")) {
+                rendered.extend([
+                    "--sandbox".to_string(),
+                    mode.codex
+                        .sandbox_mode
+                        .clone()
+                        .unwrap_or_else(|| "workspace-write".to_string()),
+                ]);
+            }
+            if !has_option(arguments, "--cd", Some("-C")) {
+                rendered.extend(["--cd".to_string(), project.display().to_string()]);
+            }
+            if !has_option(arguments, "--ask-for-approval", Some("-a"))
+                && !arguments
+                    .iter()
+                    .any(|argument| argument == "--dangerously-bypass-approvals-and-sandbox")
+            {
+                rendered.extend([
+                    "--ask-for-approval".to_string(),
+                    mode.codex.approval_policy.clone(),
+                ]);
+            }
+            match mode.codex.web_search.as_str() {
+                "live" if !arguments.iter().any(|argument| argument == "--search") => {
+                    rendered.push("--search".to_string());
+                }
+                "cached" | "off" => {
+                    let value = if mode.codex.web_search == "cached" {
+                        "\"cached\""
+                    } else {
+                        "false"
+                    };
+                    rendered.extend(["--config".to_string(), format!("web_search={value}")]);
+                }
+                _ => {}
+            }
+        }
+        AgentClient::Claude => {
+            if mode.full_access
+                && !has_option(arguments, "--permission-mode", None)
+                && !arguments
+                    .iter()
+                    .any(|argument| argument == "--dangerously-skip-permissions")
+            {
+                rendered.extend([
+                    "--permission-mode".to_string(),
+                    "bypassPermissions".to_string(),
+                ]);
+            }
+        }
+    }
+    rendered.extend_from_slice(arguments);
+    rendered
+}
+
+fn launch_agent(
+    client: AgentClient,
+    arguments: &AgentLaunchArgs,
+    paths: &ProductPaths,
+) -> Result<i32> {
+    let selected_project = categorize(
+        project::canonical_project(arguments.project.as_deref(), paths),
+        ExitCategory::ProjectRoot,
+    )?;
+    categorize(
+        project::init_project(
+            &selected_project,
+            &arguments.mode,
+            false,
+            arguments.allow_full_access,
+            paths,
+        ),
+        ExitCategory::CapsuleConflict,
+    )?;
+    let runtime = project::active_runtime(paths)?;
+    let mode = runtime.pack.mode(&arguments.mode)?;
+    let rendered_arguments =
+        client_arguments(client, &selected_project, &mode, &arguments.arguments);
+    let mut command = ProcessCommand::new(client.program());
+    command
+        .args(rendered_arguments)
+        .current_dir(&selected_project)
+        .env("AGENT_WORKSPACE_MODE", &mode.name)
+        .env("AGENT_WORKSPACE_AGENT", client.program())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    let status = command.status().map_err(|error| {
+        error::fail(
+            ExitCategory::ClientLaunch,
+            format!(
+                "failed to launch {} from {}: {error}",
+                client.program(),
+                selected_project.display()
+            ),
+        )
+    })?;
+    Ok(status
+        .code()
+        .unwrap_or(ExitCategory::ClientLaunch as i32)
+        .clamp(0, 255))
 }
 
 fn print_doctor(checks: &[Check], json: bool) -> Result<()> {
@@ -242,10 +380,43 @@ fn run_helper(command: InternalCommand, paths: &ProductPaths) -> Result<i32> {
 
 fn run() -> Result<i32> {
     let cli = Cli::parse();
-    let paths = categorize(ProductPaths::resolve(), ExitCategory::RuntimeMissing)?;
+    let paths = categorize(
+        match &cli.command {
+            Command::InstallRuntime(arguments) => arguments
+                .install_dir
+                .as_deref()
+                .map(ProductPaths::from_install_dir)
+                .transpose()?
+                .map_or_else(ProductPaths::resolve, Ok),
+            _ => ProductPaths::resolve(),
+        },
+        ExitCategory::RuntimeMissing,
+    )?;
     match cli.command {
         Command::Paths => {
             println!("{}", serde_json::to_string_pretty(&paths)?);
+        }
+        Command::Modes => {
+            let runtime = project::active_runtime(&paths)?;
+            let modes: Vec<_> = runtime
+                .pack
+                .workflow_catalog()?
+                .modes
+                .into_iter()
+                .map(|mode| {
+                    serde_json::json!({
+                        "name": mode.name,
+                        "family": mode.family,
+                        "full_access": mode.full_access,
+                        "codex": true,
+                        "claude": true
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "modes": modes }))?
+            );
         }
         Command::Status(argument) => {
             let (_, runtime) =
@@ -285,7 +456,13 @@ fn run() -> Result<i32> {
                 ExitCategory::ProjectRoot,
             )?;
             let preview = categorize(
-                project::init_project(&project, &arguments.mode, arguments.dry_run, false, &paths),
+                project::init_project(
+                    &project,
+                    &arguments.mode,
+                    arguments.dry_run,
+                    arguments.allow_full_access,
+                    &paths,
+                ),
                 ExitCategory::CapsuleConflict,
             )?;
             println!("{}", serde_json::to_string_pretty(&preview)?);
@@ -335,6 +512,8 @@ fn run() -> Result<i32> {
                 project.display()
             );
         }
+        Command::Codex(arguments) => return launch_agent(AgentClient::Codex, &arguments, &paths),
+        Command::Claude(arguments) => return launch_agent(AgentClient::Claude, &arguments, &paths),
         Command::Mcp(arguments) => match arguments.command {
             McpCommand::Serve(project) => return serve_mcp(&project, &paths),
         },
@@ -540,7 +719,12 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::SIDECAR_ENVIRONMENT;
+    use std::path::Path;
+
+    use super::{client_arguments, AgentClient, SIDECAR_ENVIRONMENT};
+    use crate::pack::{
+        CompiledCodex, CompiledMode, CompiledStructure, CompiledVerify, CompiledWorkflow,
+    };
 
     #[test]
     fn sidecar_environment_preserves_windows_profile_resolution() {
@@ -554,5 +738,95 @@ mod tests {
         ] {
             assert!(SIDECAR_ENVIRONMENT.contains(&required));
         }
+    }
+
+    fn mode(name: &str, full_access: bool) -> CompiledMode {
+        CompiledMode {
+            name: name.to_string(),
+            family: name.trim_end_matches("-full").to_string(),
+            extends: Vec::new(),
+            full_access,
+            skills: Vec::new(),
+            instruction_resources: Vec::new(),
+            verify: CompiledVerify {
+                backend: "software".to_string(),
+                required_tools: Vec::new(),
+            },
+            codex: CompiledCodex {
+                permission_profile: "workspace-access".to_string(),
+                sandbox_mode: full_access.then(|| "danger-full-access".to_string()),
+                approval_policy: if full_access { "never" } else { "on-request" }.to_string(),
+                web_search: if name.starts_with("research") {
+                    "live"
+                } else {
+                    "cached"
+                }
+                .to_string(),
+            },
+            workflow: CompiledWorkflow {
+                one_way_doors: Vec::new(),
+                adversarial_triggers: Vec::new(),
+            },
+            structure: CompiledStructure {
+                version: 1,
+                default_visibility: "shared".to_string(),
+                required_dirs: Vec::new(),
+                required_files: Vec::new(),
+                forbidden_paths: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn codex_launch_uses_project_and_selected_sandbox_without_overriding_user_flags() {
+        let project = Path::new("/tmp/project with spaces");
+        assert_eq!(
+            client_arguments(AgentClient::Codex, project, &mode("research", false), &[]),
+            [
+                "--sandbox",
+                "workspace-write",
+                "--cd",
+                "/tmp/project with spaces",
+                "--ask-for-approval",
+                "on-request",
+                "--search"
+            ]
+        );
+        assert_eq!(
+            client_arguments(
+                AgentClient::Codex,
+                project,
+                &mode("research-full", true),
+                &["--sandbox=read-only".to_string()]
+            ),
+            [
+                "--cd",
+                "/tmp/project with spaces",
+                "--ask-for-approval",
+                "never",
+                "--search",
+                "--sandbox=read-only"
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_full_launch_uses_bypass_only_for_an_explicit_full_mode() {
+        assert_eq!(
+            client_arguments(
+                AgentClient::Claude,
+                Path::new("/tmp/project"),
+                &mode("research-full", true),
+                &[]
+            ),
+            ["--permission-mode", "bypassPermissions"]
+        );
+        assert!(client_arguments(
+            AgentClient::Claude,
+            Path::new("/tmp/project"),
+            &mode("research", false),
+            &[]
+        )
+        .is_empty());
     }
 }

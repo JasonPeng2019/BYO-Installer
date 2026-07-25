@@ -2,7 +2,8 @@ param(
     [string]$Bundle,
     [string]$Version,
     [string]$BaseUrl,
-    [string]$Sha256
+    [string]$Sha256,
+    [string]$InstallDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -160,7 +161,14 @@ try {
             }
         }
     }
-    & $launcher install-runtime --bundle $Bundle
+    $installArguments = @("install-runtime", "--bundle", $Bundle)
+    if ($InstallDir) {
+        $installArguments += @(
+            "--install-dir",
+            [System.IO.Path]::GetFullPath($InstallDir)
+        )
+    }
+    & $launcher @installArguments
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

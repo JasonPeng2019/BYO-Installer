@@ -16,6 +16,7 @@ pub enum ExitCategory {
     Installer = 24,
     SidecarLaunch = 30,
     Doctor = 31,
+    ClientLaunch = 32,
     Update = 40,
     UpdateRolledBack = 41,
     Uninstall = 42,

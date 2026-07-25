@@ -186,8 +186,16 @@ def main() -> int:
         (project / ".claude" / "settings.json").write_text(
             '{"unrelated":{"preserved":true}}\n', encoding="utf-8"
         )
+        (project / ".mcp.json").write_text(
+            '{"mcpServers":{"customer":{"command":"customer-server"}}}\n',
+            encoding="utf-8",
+        )
         (project / "AGENTS.md").write_text(
             "# Customer instructions\n\nPreserve this text.\n", encoding="utf-8"
+        )
+        (project / "CLAUDE.md").write_text(
+            "# Customer Claude instructions\n\nPreserve this Claude text.\n",
+            encoding="utf-8",
         )
         env = {
             **os.environ,
@@ -266,14 +274,29 @@ def main() -> int:
             raise AcceptanceFailure(
                 "init did not preserve unrelated Codex configuration"
             )
-        if '"preserved":true' not in (project / ".claude/settings.json").read_text(
-            encoding="utf-8"
-        ):
+        claude_settings = json.loads(
+            (project / ".claude/settings.json").read_text(encoding="utf-8")
+        )
+        if claude_settings.get("unrelated", {}).get("preserved") is not True:
             raise AcceptanceFailure("init changed unrelated Claude configuration")
+        if not claude_settings.get("hooks"):
+            raise AcceptanceFailure("init did not configure Claude hooks")
+        claude_mcp = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
+        if (
+            claude_mcp.get("mcpServers", {}).get("customer", {}).get("command")
+            != "customer-server"
+        ):
+            raise AcceptanceFailure("init changed an unrelated Claude MCP server")
+        if claude_mcp.get("mcpServers", {}).get("byo", {}).get("command") != "byo":
+            raise AcceptanceFailure("init did not configure the Claude BYO MCP server")
         if "Preserve this text." not in (project / "AGENTS.md").read_text(
             encoding="utf-8"
         ):
             raise AcceptanceFailure("init changed unrelated AGENTS.md content")
+        if "Preserve this Claude text." not in (project / "CLAUDE.md").read_text(
+            encoding="utf-8"
+        ):
+            raise AcceptanceFailure("init changed unrelated CLAUDE.md content")
         forbidden = [
             path
             for path in project.rglob("*")
@@ -335,6 +358,22 @@ def main() -> int:
             [str(byo), "mode", "firmware", "--project", str(project)],
             env=env,
         )
+        invoke([str(byo), "mode", "research", "--project", str(project)], env=env)
+        invoke(
+            [
+                str(byo),
+                "mode",
+                "research-full",
+                "--allow-full-access",
+                "--project",
+                str(project),
+            ],
+            env=env,
+        )
+        invoke(
+            [str(byo), "mode", "firmware", "--project", str(project)],
+            env=env,
+        )
 
         managed_skill = project / ".codex/skills/byo-firmware/SKILL.md"
         original_skill = managed_skill.read_bytes()
@@ -345,6 +384,16 @@ def main() -> int:
             expected=31,
         )
         managed_skill.write_bytes(original_skill)
+        invoke([str(byo), "doctor", "--project", str(project)], env=env)
+        claude_skill = project / ".claude/skills/byo-firmware/SKILL.md"
+        original_claude_skill = claude_skill.read_bytes()
+        claude_skill.write_bytes(original_claude_skill + b"\nmodified\n")
+        invoke(
+            [str(byo), "doctor", "--project", str(project)],
+            env=env,
+            expected=31,
+        )
+        claude_skill.write_bytes(original_claude_skill)
         invoke([str(byo), "doctor", "--project", str(project)], env=env)
 
         mcp = start_initialized_mcp(byo, project, env, expected_version)
@@ -425,6 +474,24 @@ def main() -> int:
         )
         if not firm_marker.is_file():
             raise AcceptanceFailure("ordinary project uninstall removed .firm state")
+        uninstalled_mcp = json.loads(
+            (project / ".mcp.json").read_text(encoding="utf-8")
+        )
+        if "byo" in uninstalled_mcp.get("mcpServers", {}):
+            raise AcceptanceFailure("project uninstall left the Claude BYO MCP server")
+        if (
+            uninstalled_mcp.get("mcpServers", {}).get("customer", {}).get("command")
+            != "customer-server"
+        ):
+            raise AcceptanceFailure(
+                "project uninstall removed an unrelated Claude MCP server"
+            )
+        if "Preserve this Claude text." not in (project / "CLAUDE.md").read_text(
+            encoding="utf-8"
+        ):
+            raise AcceptanceFailure(
+                "project uninstall removed unrelated CLAUDE.md content"
+            )
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
         if not firm_marker.is_file():
             raise AcceptanceFailure("reinstall over preserved state removed .firm data")
@@ -434,6 +501,52 @@ def main() -> int:
             raise AcceptanceFailure(
                 "global uninstall left the active launcher or pointer"
             )
+
+        custom_root = root / "custom product location"
+        custom_env = {
+            key: value for key, value in os.environ.items() if key != "BYO_HOME"
+        }
+        custom_env["PATH"] = os.pathsep.join(
+            (str(custom_root / "bin"), custom_env.get("PATH", ""))
+        )
+        if os.name == "nt":
+            custom_install_command = [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ROOT / "install.ps1"),
+                "-Bundle",
+                str(bundle),
+                "-InstallDir",
+                str(custom_root),
+            ]
+        else:
+            custom_install_command = [
+                str(ROOT / "install.sh"),
+                "--bundle",
+                str(bundle),
+                "--install-dir",
+                str(custom_root),
+            ]
+        invoke(custom_install_command, env=custom_env, cwd=ROOT)
+        custom_byo = custom_root / "bin" / ("byo.exe" if os.name == "nt" else "byo")
+        custom_paths = json.loads(
+            invoke([str(custom_byo), "paths"], env=custom_env).stdout
+        )
+        if Path(custom_paths["data"]) != custom_root / "data":
+            raise AcceptanceFailure(
+                "custom installation was not rediscovered without BYO_HOME"
+            )
+        invoke([str(custom_byo), "doctor", "--global"], env=custom_env)
+        invoke(
+            [str(custom_byo), "uninstall", "--global"],
+            env=custom_env,
+        )
+        if custom_byo.exists() or (custom_root / "bin/.byo-install.json").exists():
+            raise AcceptanceFailure("custom installation locator was not removed")
 
     print("BYO installed acceptance: PASS")
     return 0

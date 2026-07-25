@@ -10,24 +10,29 @@ Python, Rust, `uv`, or a source checkout to use it.
 
 | Computer | Archive | Installer |
 |---|---|---|
-| Mac with Apple silicon | `byo-0.1.0-macos-aarch64.zip` | `install.sh` |
-| 64-bit Windows | `byo-0.1.0-windows-x86_64.zip` | `install.ps1` |
-| 64-bit Linux | `byo-0.1.0-linux-x86_64.tar.gz` | `install.sh` |
+| Mac with Apple silicon | `byo-0.1.1-macos-aarch64.zip` | `install.sh` |
+| Mac with an Intel processor | `byo-0.1.1-macos-x86_64.zip` | `install.sh` |
+| 64-bit Windows | `byo-0.1.1-windows-x86_64.zip` | `install.ps1` |
+| 64-bit Linux | `byo-0.1.1-linux-x86_64.tar.gz` | `install.sh` |
 
 2. Extract the downloaded file.
 3. Install the extracted folder:
 
 | Computer | Command |
 |---|---|
-| Mac with Apple silicon | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.0-macos-aarch64"` |
-| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.0-windows-x86_64"` |
-| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"` |
+| Mac with Apple silicon | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-aarch64"` |
+| Mac with an Intel processor | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-x86_64"` |
+| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.1-windows-x86_64"` |
+| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64"` |
 
 Then open your firmware project and run:
 
 ```sh
 byo init
 byo doctor
+byo codex firmware
+# or:
+byo claude firmware
 ```
 
 That is all you need for a normal installation. Platform-specific instructions,
@@ -45,6 +50,11 @@ BYO includes:
 The installer places BYO in your user account. It does not require administrator
 access and does not edit your shell profile automatically.
 
+To choose where BYO and the compiled MCP server are installed, add
+`--install-dir "/absolute/example/path"` on macOS or Linux, or
+`-InstallDir "C:\example\BYO"` on Windows. The selected directory contains the
+complete private runtime and its `bin` directory.
+
 ## Detailed installation
 
 The examples below assume that you saved the archive and installer script in
@@ -61,14 +71,34 @@ Example:
 cd "$HOME/Downloads"
 byo_install_dir="$(mktemp -d)"
 ditto -x -k \
-  byo-0.1.0-macos-aarch64.zip \
+  byo-0.1.1-macos-aarch64.zip \
   "$byo_install_dir"
 sh ./install.sh \
-  --bundle "$byo_install_dir/byo-0.1.0-macos-aarch64"
+  --bundle "$byo_install_dir/byo-0.1.1-macos-aarch64" \
+  --install-dir "$HOME/Applications/BYO"
 ```
 
 To confirm that your Mac uses Apple silicon, run `uname -m`. The result should
 be `arm64`.
+
+### macOS with an Intel processor
+
+Requirements: macOS 12 or newer and an Intel-based Mac.
+
+Example:
+
+```sh
+cd "$HOME/Downloads"
+byo_install_dir="$(mktemp -d)"
+ditto -x -k \
+  byo-0.1.1-macos-x86_64.zip \
+  "$byo_install_dir"
+sh ./install.sh \
+  --bundle "$byo_install_dir/byo-0.1.1-macos-x86_64" \
+  --install-dir "$HOME/Applications/BYO"
+```
+
+Run `uname -m` to confirm that the architecture is `x86_64`.
 
 ### Windows x86_64
 
@@ -80,11 +110,12 @@ Example:
 Set-Location "$HOME\Downloads"
 $Destination = Join-Path $env:TEMP ("byo-windows-install-" + [guid]::NewGuid())
 Expand-Archive `
-  -LiteralPath ".\byo-0.1.0-windows-x86_64.zip" `
+  -LiteralPath ".\byo-0.1.1-windows-x86_64.zip" `
   -DestinationPath $Destination `
   -Force
 .\install.ps1 `
-  -Bundle (Join-Path $Destination "byo-0.1.0-windows-x86_64")
+  -Bundle (Join-Path $Destination "byo-0.1.1-windows-x86_64") `
+  -InstallDir (Join-Path $HOME "Applications\BYO")
 ```
 
 ### Linux x86_64
@@ -97,10 +128,11 @@ Example:
 cd "$HOME/Downloads"
 byo_install_dir="$(mktemp -d)"
 tar -xzf \
-  byo-0.1.0-linux-x86_64.tar.gz \
+  byo-0.1.1-linux-x86_64.tar.gz \
   -C "$byo_install_dir"
 sh ./install.sh \
-  --bundle "$byo_install_dir/byo-0.1.0-linux-x86_64"
+  --bundle "$byo_install_dir/byo-0.1.1-linux-x86_64" \
+  --install-dir "$HOME/Applications/BYO"
 ```
 
 Run `uname -m` to confirm that the architecture is `x86_64`. Run
@@ -128,19 +160,50 @@ byo status --project "$PWD"
 ```
 
 `byo init` creates only the minimal project capsule and managed client
-projections. Client configuration starts the MCP server through
-`byo mcp serve`; it never points directly at Python or the private sidecar.
+projections for both Codex and Claude. It preserves unrelated `AGENTS.md`,
+`CLAUDE.md`, `.codex`, `.claude`, and `.mcp.json` content. Client
+configuration starts the MCP server through `byo mcp serve`; it never points
+directly at Python or the private sidecar.
 
-The default mode is `firmware`. Full access requires an explicit command:
+List every installed mode:
+
+```sh
+byo modes
+```
+
+Launch either client in any mode:
+
+```sh
+byo codex firmware
+byo claude software
+byo codex research
+byo claude research
+```
+
+Arguments after `--` are passed to the selected client:
+
+```sh
+byo codex research -- --model example-model
+byo claude research -- --resume
+```
+
+The default initialization mode is `firmware`. Every `-full` mode requires
+explicit authorization:
 
 ```sh
 byo mode firmware-full --allow-full-access --project "$PWD"
+byo codex research-full --allow-full-access
+byo claude research-full --allow-full-access
 ```
+
+For Claude, a full-mode launch selects `bypassPermissions`; use full modes only
+inside an appropriately isolated or trusted environment.
 
 ## Common commands
 
 ```sh
 byo paths
+byo modes
 byo doctor --global --json
 byo workspace update --project "$PWD"
 byo repair
@@ -155,54 +218,37 @@ projects or live MCP leases remain.
 
 ## Verify the downloads
 
-The current archive checksums are:
-
-| Target | SHA-256 |
-|---|---|
-| macOS Apple silicon | `000f567b0e464f160e7cae2f0d214c80cf29f148dbd6c0f7137331766c539b8b` |
-| Windows x86_64 | `37d03be0a571017edcc76d3f6044fc050d0feea4ff17703ba6ea4c7caf65d334` |
-| Linux x86_64 | `1e54437880956ab8405cb240d6cd205f538a8dc8002a62ce6a0d41261c49888c` |
-
-macOS:
+Download the `.sha256` receipt beside the archive and compare its recorded hash
+with a locally calculated SHA-256. For example:
 
 ```sh
-shasum -a 256 "$HOME/Downloads/byo-0.1.0-macos-aarch64.zip"
+# macOS
+shasum -a 256 "$HOME/Downloads/byo-0.1.1-macos-aarch64.zip"
+
+# Linux
+sha256sum "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz"
 ```
 
-Windows PowerShell:
-
 ```powershell
+# Windows PowerShell
 Get-FileHash `
-  "$HOME\Downloads\byo-0.1.0-windows-x86_64.zip" `
+  "$HOME\Downloads\byo-0.1.1-windows-x86_64.zip" `
   -Algorithm SHA256
 ```
 
-Linux:
-
-```sh
-sha256sum "$HOME/Downloads/byo-0.1.0-linux-x86_64.tar.gz"
-```
-
-Do not install an archive if its calculated checksum differs from the value in
-the table.
+Do not install an archive if its calculated checksum differs from its receipt.
 
 ## Current development artifacts
 
-All three current artifacts are version `0.1.0` and use the same source
-revisions:
+Version `0.1.1` is built natively for macOS Apple silicon, macOS Intel, Windows
+x86_64, and Linux x86_64. Every matrix job uses the same source revisions pinned
+in `release/source-lock.json`.
 
-- Installer: `11175acaa87c0c80db6a661442edd2e23b178fd0`;
-- AgentWorkspace: `82ff1ca9f74b93a85d09b0a072b4286f827d2309`; and
-- Firmware MCP: `c1a3ed9491113a841c62730b71ce59372b580e34`.
-
-Each target includes an extracted bundle, archive, checksum receipt, and
-CycloneDX SBOM. Nuitka reports and native symbols are retained as private build
-artifacts.
-
-The macOS and Windows artifacts passed their installed hardware-free suites on
-native GitHub-hosted runners. Linux was built and tested in the pinned glibc
-2.28 environment; its maximum referenced glibc symbol version is
-`GLIBC_2.28`.
+Each target includes an extracted bundle, archive, checksum receipt, CycloneDX
+SBOM, and source provenance. Nuitka reports and native symbols are retained as
+private build artifacts. Each native job verifies the archive contract and runs
+the installed hardware-free acceptance suite. The Linux job enforces the
+declared glibc 2.28 build baseline.
 
 These artifacts are development-unsigned. They are suitable for local
 evaluation, but they are not production releases:
@@ -214,10 +260,6 @@ evaluation, but they are not production releases:
 Gatekeeper or SmartScreen may therefore display a warning. Do not redistribute
 these files as production releases.
 
-The V1 decision record also advertises macOS Intel support. An aligned Intel
-artifact must complete the same signing and clean-machine gates before V1
-publication.
-
 ## Test without changing normal user paths
 
 On macOS or Linux, set an isolated product home before installing:
@@ -225,7 +267,7 @@ On macOS or Linux, set an isolated product home before installing:
 ```sh
 export BYO_HOME="$(mktemp -d)"
 sh "$HOME/Downloads/install.sh" \
-  --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"
+  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64"
 "$BYO_HOME/bin/byo" paths
 ```
 
@@ -271,7 +313,7 @@ Run the installed hardware-free acceptance suite with:
 ```sh
 cd "$HOME/Projects/example-byo-installer"
 python3 ./release/scripts/test_installed_e2e.py \
-  --bundle "$HOME/Downloads/byo-0.1.0-linux-x86_64"
+  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64"
 ```
 
 ## Updates and production signatures
@@ -336,6 +378,7 @@ signatures.
 | 24 | Installation transaction failure |
 | 30 | Sidecar launch or nonzero sidecar exit |
 | 31 | Doctor failure |
+| 32 | Codex or Claude launch failure |
 | 40 | Update unavailable or download failure |
 | 41 | Update failed and rollback was attempted |
 | 42 | Uninstall refusal or failure |

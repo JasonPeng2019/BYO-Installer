@@ -16,10 +16,13 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Paths,
+    Modes,
     Status(ProjectArg),
     Init(InitArgs),
     Doctor(DoctorArgs),
     Mode(ModeArgs),
+    Codex(AgentLaunchArgs),
+    Claude(AgentLaunchArgs),
     Mcp(McpArgs),
     Hook(HookArgs),
     Workflow(WorkflowArgs),
@@ -50,6 +53,8 @@ pub struct InitArgs {
     pub dry_run: bool,
     #[arg(long)]
     pub yes: bool,
+    #[arg(long)]
+    pub allow_full_access: bool,
 }
 
 #[derive(Debug, Args)]
@@ -69,6 +74,17 @@ pub struct ModeArgs {
     pub project: Option<PathBuf>,
     #[arg(long)]
     pub allow_full_access: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct AgentLaunchArgs {
+    pub mode: String,
+    #[arg(long)]
+    pub project: Option<PathBuf>,
+    #[arg(long)]
+    pub allow_full_access: bool,
+    #[arg(last = true, allow_hyphen_values = true)]
+    pub arguments: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -183,6 +199,8 @@ pub struct UninstallArgs {
 pub struct InstallRuntimeArgs {
     #[arg(long)]
     pub bundle: PathBuf,
+    #[arg(long)]
+    pub install_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

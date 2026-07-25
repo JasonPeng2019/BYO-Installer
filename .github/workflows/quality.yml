@@ -80,7 +80,7 @@ jobs:
           uv run ruff format --check .
           uv run basedpyright
           uv run pytest
-          uv run python scripts/render_all_modes.py --check
+          uv run python bin/render-all-modes --check-idempotent
 
   firmware-mcp:
     strategy:

@@ -621,7 +621,7 @@ def collect_private_symbols(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default="0.1.1")
     parser.add_argument("--channel", default="development")
     parser.add_argument("--output", type=Path, default=ROOT / "release" / "dist")
     parser.add_argument(

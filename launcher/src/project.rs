@@ -47,6 +47,12 @@ pub struct ProjectionManifest {
     pub agents_block_sha256: String,
     pub codex_server_sha256: String,
     pub codex_hooks_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_block_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_server_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_hooks_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -162,7 +168,7 @@ fn read_projection(project: &Path) -> Result<Option<ProjectionManifest>> {
     }
     let manifest: ProjectionManifest =
         serde_json::from_slice(&std::fs::read(path)?).context("projection manifest is invalid")?;
-    if manifest.schema != 1 {
+    if !matches!(manifest.schema, 1 | 2) {
         bail!("projection manifest schema is unsupported");
     }
     Ok(Some(manifest))
@@ -205,7 +211,7 @@ fn replace_managed_block(original: &str, block: &str) -> Result<String> {
                 &original[after..]
             ))
         }
-        _ => bail!("AGENTS.md contains malformed or duplicate BYO managed markers"),
+        _ => bail!("instruction file contains malformed or duplicate BYO managed markers"),
     }
 }
 
@@ -225,8 +231,24 @@ fn remove_managed_block(original: &str) -> Result<String> {
             }
             Ok(result)
         }
-        _ => bail!("AGENTS.md contains malformed or duplicate BYO managed markers"),
+        _ => bail!("instruction file contains malformed or duplicate BYO managed markers"),
     }
+}
+
+fn verify_managed_block(original: &str, label: &str, expected_sha256: &str) -> Result<()> {
+    let begin = original
+        .find(BEGIN_MARKER)
+        .with_context(|| format!("{label} BYO block is missing"))?;
+    let end = original
+        .find(END_MARKER)
+        .with_context(|| format!("{label} BYO block is malformed"))?
+        + END_MARKER.len();
+    if original[begin..end].matches(BEGIN_MARKER).count() != 1
+        || sha256_bytes(&original.as_bytes()[begin..end]) != expected_sha256
+    {
+        bail!("{label} BYO managed block was modified");
+    }
+    Ok(())
 }
 
 fn render_codex_config(original: &str, project: &Path) -> Result<(String, String)> {
@@ -291,7 +313,75 @@ fn remove_codex_config(original: &str) -> Result<String> {
     Ok(document.to_string())
 }
 
-fn byo_codex_hooks() -> serde_json::Value {
+fn render_claude_mcp(original: &str, project: &Path) -> Result<(String, String)> {
+    let mut document: serde_json::Value = if original.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(original).context(".mcp.json is invalid JSON")?
+    };
+    let root = document
+        .as_object_mut()
+        .context(".mcp.json must contain a JSON object")?;
+    let servers = root
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .context(".mcp.json mcpServers must be an object")?;
+    if let Some(existing) = servers.get("byo") {
+        let command = existing
+            .as_object()
+            .and_then(|server| server.get("command"))
+            .and_then(serde_json::Value::as_str);
+        if command != Some("byo") {
+            return Err(crate::error::fail(
+                ExitCategory::ClientConflict,
+                "existing mcpServers.byo is not owned by BYO",
+            ));
+        }
+    }
+    let server = serde_json::json!({
+        "type": "stdio",
+        "command": "byo",
+        "args": [
+            "mcp",
+            "serve",
+            "--project",
+            project
+                .to_str()
+                .context("project path is not valid Unicode for client configuration")?
+        ]
+    });
+    let server_hash = sha256_bytes(serde_json::to_string(&server)?.as_bytes());
+    servers.insert("byo".to_string(), server);
+    let mut output = serde_json::to_string_pretty(&document)?;
+    output.push('\n');
+    Ok((output, server_hash))
+}
+
+fn remove_claude_mcp(original: &str) -> Result<String> {
+    if original.trim().is_empty() {
+        return Ok(String::new());
+    }
+    let mut document: serde_json::Value =
+        serde_json::from_str(original).context(".mcp.json is invalid JSON")?;
+    if let Some(servers) = document
+        .get_mut("mcpServers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        servers.remove("byo");
+        if servers.is_empty() {
+            document
+                .as_object_mut()
+                .context(".mcp.json must contain a JSON object")?
+                .remove("mcpServers");
+        }
+    }
+    let mut output = serde_json::to_string_pretty(&document)?;
+    output.push('\n');
+    Ok(output)
+}
+
+fn byo_hooks() -> serde_json::Value {
     serde_json::json!({
         "SessionStart": [{
             "matcher": "startup|resume|clear|compact",
@@ -365,22 +455,22 @@ fn remove_byo_hook_entries(document: &mut serde_json::Value) {
     });
 }
 
-fn render_codex_hooks(original: &str) -> Result<(String, String)> {
+fn render_hook_configuration(original: &str, label: &str) -> Result<(String, String)> {
     let mut document = if original.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str(original).context(".codex/hooks.json is invalid JSON")?
+        serde_json::from_str(original).with_context(|| format!("{label} is invalid JSON"))?
     };
     remove_byo_hook_entries(&mut document);
     let root = document
         .as_object_mut()
-        .context(".codex/hooks.json must contain a JSON object")?;
+        .with_context(|| format!("{label} must contain a JSON object"))?;
     let hooks = root
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .context(".codex/hooks.json hooks must be an object")?;
-    let expected = byo_codex_hooks();
+        .with_context(|| format!("{label} hooks must be an object"))?;
+    let expected = byo_hooks();
     for (event, entries) in expected
         .as_object()
         .context("internal BYO hook payload is invalid")?
@@ -407,12 +497,12 @@ fn render_codex_hooks(original: &str) -> Result<(String, String)> {
     ))
 }
 
-fn verify_codex_hooks(document: &serde_json::Value) -> Result<String> {
+fn verify_byo_hooks(document: &serde_json::Value, label: &str) -> Result<String> {
     let events = document
         .get("hooks")
         .and_then(serde_json::Value::as_object)
-        .context(".codex/hooks.json hooks object is missing")?;
-    let expected = byo_codex_hooks();
+        .with_context(|| format!("{label} hooks object is missing"))?;
+    let expected = byo_hooks();
     for (event, expected_entries) in expected
         .as_object()
         .context("internal BYO hook payload is invalid")?
@@ -426,19 +516,19 @@ fn verify_codex_hooks(document: &serde_json::Value) -> Result<String> {
             .context("internal BYO hook event is invalid")?
         {
             if !actual.contains(entry) {
-                bail!(".codex/hooks.json BYO {event} hook was modified");
+                bail!("{label} BYO {event} hook was modified");
             }
         }
     }
     Ok(sha256_bytes(serde_json::to_string(&expected)?.as_bytes()))
 }
 
-fn remove_codex_hooks(original: &str) -> Result<String> {
+fn remove_hook_configuration(original: &str, label: &str) -> Result<String> {
     if original.trim().is_empty() {
         return Ok(String::new());
     }
     let mut document: serde_json::Value =
-        serde_json::from_str(original).context(".codex/hooks.json is invalid JSON")?;
+        serde_json::from_str(original).with_context(|| format!("{label} is invalid JSON"))?;
     remove_byo_hook_entries(&mut document);
     let mut output = serde_json::to_string_pretty(&document)?;
     output.push('\n');
@@ -540,10 +630,9 @@ pub fn init_project(
         mode: mode.to_string(),
         mcp_runtime: runtime.release.version.clone(),
         managed_files: if legacy_workspace {
-            "3 vendor files, 3 managed integrations; archive and migrate legacy workspace"
-                .to_string()
+            "Codex and Claude projections; archive and migrate legacy workspace".to_string()
         } else {
-            "3 vendor files, 3 managed integrations".to_string()
+            "Codex and Claude workspace projections".to_string()
         },
         user_files: "preserved".to_string(),
         firm: "preserved".to_string(),
@@ -590,21 +679,36 @@ Available specialist identifiers: {}.\n",
     let old_agents = std::fs::read_to_string(&agents_path).unwrap_or_default();
     let block = managed_block(&bootstrap);
     let new_agents = replace_managed_block(&old_agents, &block)?;
+    let claude_path = project.join("CLAUDE.md");
+    let old_claude = std::fs::read_to_string(&claude_path).unwrap_or_default();
+    let new_claude = replace_managed_block(&old_claude, &block)?;
     let codex_path = project.join(".codex/config.toml");
     let old_codex = std::fs::read_to_string(&codex_path).unwrap_or_default();
     let (new_codex, codex_hash) = render_codex_config(&old_codex, project)?;
     let codex_hooks_path = project.join(".codex/hooks.json");
     let old_codex_hooks = std::fs::read_to_string(&codex_hooks_path).unwrap_or_default();
-    let (new_codex_hooks, codex_hooks_hash) = render_codex_hooks(&old_codex_hooks)?;
+    let (new_codex_hooks, codex_hooks_hash) =
+        render_hook_configuration(&old_codex_hooks, ".codex/hooks.json")?;
+    let claude_mcp_path = project.join(".mcp.json");
+    let old_claude_mcp = std::fs::read_to_string(&claude_mcp_path).unwrap_or_default();
+    let (new_claude_mcp, claude_server_hash) = render_claude_mcp(&old_claude_mcp, project)?;
+    let claude_settings_path = project.join(".claude/settings.json");
+    let old_claude_settings = std::fs::read_to_string(&claude_settings_path).unwrap_or_default();
+    let (new_claude_settings, claude_hooks_hash) =
+        render_hook_configuration(&old_claude_settings, ".claude/settings.json")?;
 
     let targets = [
         ".agent-workspace/manifest.json",
         ".generated/byo/active-mode.json",
         ".generated/byo/projection-manifest.json",
         ".codex/skills/byo-firmware/SKILL.md",
+        ".claude/skills/byo-firmware/SKILL.md",
         ".codex/config.toml",
         ".codex/hooks.json",
+        ".claude/settings.json",
+        ".mcp.json",
         "AGENTS.md",
+        "CLAUDE.md",
     ];
     let backup = project.join(format!(
         ".agent-backups/{}-{:016x}",
@@ -626,6 +730,7 @@ Available specialist identifiers: {}.\n",
             ".agent-workspace",
             ".generated/byo",
             ".codex/skills/byo-firmware",
+            ".claude/skills/byo-firmware",
         ] {
             std::fs::create_dir_all(project.join(directory))?;
         }
@@ -650,12 +755,19 @@ Available specialist identifiers: {}.\n",
         }
         atomic_text(&project.join(".codex/skills/byo-firmware/SKILL.md"), &skill)?;
         atomic_text(
+            &project.join(".claude/skills/byo-firmware/SKILL.md"),
+            &skill,
+        )?;
+        atomic_text(
             &project.join(".generated/byo/active-mode.json"),
             &active_mode,
         )?;
         atomic_text(&agents_path, &new_agents)?;
+        atomic_text(&claude_path, &new_claude)?;
         atomic_text(&codex_path, &new_codex)?;
         atomic_text(&codex_hooks_path, &new_codex_hooks)?;
+        atomic_text(&claude_mcp_path, &new_claude_mcp)?;
+        atomic_text(&claude_settings_path, &new_claude_settings)?;
 
         let managed_files = vec![
             ManagedFile {
@@ -666,14 +778,21 @@ Available specialist identifiers: {}.\n",
                 path: ".generated/byo/active-mode.json".to_string(),
                 sha256: sha256_bytes(active_mode.as_bytes()),
             },
+            ManagedFile {
+                path: ".claude/skills/byo-firmware/SKILL.md".to_string(),
+                sha256: sha256_bytes(skill.as_bytes()),
+            },
         ];
         let inventory_bytes = serde_json::to_vec(&managed_files)?;
         let projection = ProjectionManifest {
-            schema: 1,
+            schema: 2,
             managed_files,
             agents_block_sha256: sha256_bytes(block.as_bytes()),
             codex_server_sha256: codex_hash,
             codex_hooks_sha256: codex_hooks_hash,
+            claude_block_sha256: Some(sha256_bytes(block.as_bytes())),
+            claude_server_sha256: Some(claude_server_hash),
+            claude_hooks_sha256: Some(claude_hooks_hash),
         };
         write_json(
             &project.join(".generated/byo/projection-manifest.json"),
@@ -754,18 +873,11 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
     validate_owned_files(project, &projection)?;
     let agents = std::fs::read_to_string(project.join("AGENTS.md"))
         .context("AGENTS.md managed projection is missing")?;
-    let begin = agents
-        .find(BEGIN_MARKER)
-        .context("AGENTS.md BYO block is missing")?;
-    let end = agents
-        .find(END_MARKER)
-        .context("AGENTS.md BYO block is malformed")?
-        + END_MARKER.len();
-    if agents[begin..end].matches(BEGIN_MARKER).count() != 1
-        || sha256_bytes(&agents.as_bytes()[begin..end]) != projection.agents_block_sha256
-    {
-        bail!("AGENTS.md BYO managed block was modified");
-    }
+    verify_managed_block(
+        &agents,
+        "AGENTS.md",
+        projection.agents_block_sha256.as_str(),
+    )?;
     let codex = std::fs::read_to_string(project.join(".codex/config.toml"))
         .context("Codex MCP configuration is missing")?;
     let document = codex
@@ -782,8 +894,50 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
             .context("Codex hook configuration is missing")?,
     )
     .context("Codex hook configuration is invalid")?;
-    if verify_codex_hooks(&hooks)? != projection.codex_hooks_sha256 {
+    if verify_byo_hooks(&hooks, ".codex/hooks.json")? != projection.codex_hooks_sha256 {
         bail!("Codex BYO hook configuration was modified");
+    }
+    if projection.schema >= 2 {
+        let claude_block_hash = projection
+            .claude_block_sha256
+            .as_deref()
+            .context("Claude instruction projection hash is missing")?;
+        let claude = std::fs::read_to_string(project.join("CLAUDE.md"))
+            .context("CLAUDE.md managed projection is missing")?;
+        verify_managed_block(&claude, "CLAUDE.md", claude_block_hash)?;
+
+        let mcp: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(project.join(".mcp.json"))
+                .context("Claude MCP configuration is missing")?,
+        )
+        .context("Claude MCP configuration is invalid")?;
+        let server = mcp
+            .get("mcpServers")
+            .and_then(|servers| servers.get("byo"))
+            .context("Claude BYO MCP server is missing")?;
+        if server.get("command").and_then(serde_json::Value::as_str) != Some("byo")
+            || sha256_bytes(serde_json::to_string(server)?.as_bytes())
+                != projection
+                    .claude_server_sha256
+                    .as_deref()
+                    .context("Claude MCP projection hash is missing")?
+        {
+            bail!("Claude BYO MCP configuration was modified");
+        }
+
+        let settings: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(project.join(".claude/settings.json"))
+                .context("Claude settings are missing")?,
+        )
+        .context("Claude settings are invalid")?;
+        if verify_byo_hooks(&settings, ".claude/settings.json")?
+            != projection
+                .claude_hooks_sha256
+                .as_deref()
+                .context("Claude hook projection hash is missing")?
+        {
+            bail!("Claude BYO hook configuration was modified");
+        }
     }
     let firm = project.join(".firm");
     if firm.exists() {
@@ -824,6 +978,11 @@ pub fn uninstall_project(project: &Path, paths: &ProductPaths) -> Result<Vec<Str
         let original = std::fs::read_to_string(&agents_path)?;
         atomic_text(&agents_path, &remove_managed_block(&original)?)?;
     }
+    let claude_path = project.join("CLAUDE.md");
+    if projection.claude_block_sha256.is_some() && claude_path.exists() {
+        let original = std::fs::read_to_string(&claude_path)?;
+        atomic_text(&claude_path, &remove_managed_block(&original)?)?;
+    }
     let codex_path = project.join(".codex/config.toml");
     if codex_path.exists() {
         let original = std::fs::read_to_string(&codex_path)?;
@@ -832,7 +991,23 @@ pub fn uninstall_project(project: &Path, paths: &ProductPaths) -> Result<Vec<Str
     let hooks_path = project.join(".codex/hooks.json");
     if hooks_path.exists() {
         let original = std::fs::read_to_string(&hooks_path)?;
-        atomic_text(&hooks_path, &remove_codex_hooks(&original)?)?;
+        atomic_text(
+            &hooks_path,
+            &remove_hook_configuration(&original, ".codex/hooks.json")?,
+        )?;
+    }
+    let claude_mcp_path = project.join(".mcp.json");
+    if projection.claude_server_sha256.is_some() && claude_mcp_path.exists() {
+        let original = std::fs::read_to_string(&claude_mcp_path)?;
+        atomic_text(&claude_mcp_path, &remove_claude_mcp(&original)?)?;
+    }
+    let claude_settings_path = project.join(".claude/settings.json");
+    if projection.claude_hooks_sha256.is_some() && claude_settings_path.exists() {
+        let original = std::fs::read_to_string(&claude_settings_path)?;
+        atomic_text(
+            &claude_settings_path,
+            &remove_hook_configuration(&original, ".claude/settings.json")?,
+        )?;
     }
     for relative in [
         ".generated/byo/projection-manifest.json",
@@ -866,7 +1041,10 @@ pub fn uninstall_project(project: &Path, paths: &ProductPaths) -> Result<Vec<Str
 mod tests {
     use std::path::Path;
 
-    use super::render_codex_config;
+    use super::{
+        remove_claude_mcp, remove_hook_configuration, render_claude_mcp, render_codex_config,
+        render_hook_configuration,
+    };
 
     #[test]
     fn codex_config_creates_missing_tables() {
@@ -896,5 +1074,69 @@ mod tests {
         )
         .expect_err("foreign server should be refused");
         assert!(error.to_string().contains("not owned"));
+    }
+
+    #[test]
+    fn claude_mcp_preserves_unrelated_servers_and_can_be_removed_cleanly() {
+        let original = r#"{"mcpServers":{"customer":{"command":"customer-server"}}}"#;
+        let (rendered, _) =
+            render_claude_mcp(original, Path::new("/tmp/example")).expect("MCP should render");
+        let document: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(
+            document["mcpServers"]["customer"]["command"],
+            "customer-server"
+        );
+        assert_eq!(document["mcpServers"]["byo"]["type"], "stdio");
+        assert_eq!(document["mcpServers"]["byo"]["command"], "byo");
+        assert_eq!(document["mcpServers"]["byo"]["args"][3], "/tmp/example");
+
+        let removed: serde_json::Value =
+            serde_json::from_str(&remove_claude_mcp(&rendered).unwrap()).unwrap();
+        assert!(removed["mcpServers"].get("byo").is_none());
+        assert_eq!(
+            removed["mcpServers"]["customer"]["command"],
+            "customer-server"
+        );
+    }
+
+    #[test]
+    fn claude_mcp_refuses_a_foreign_byo_server() {
+        let error = render_claude_mcp(
+            r#"{"mcpServers":{"byo":{"command":"foreign"}}}"#,
+            Path::new("/tmp/example"),
+        )
+        .expect_err("foreign server should be refused");
+        assert!(error.to_string().contains("not owned"));
+    }
+
+    #[test]
+    fn claude_hooks_preserve_customer_settings_and_uninstall_only_byo_entries() {
+        let original = r#"{
+            "unrelated": {"preserved": true},
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Write",
+                    "hooks": [{"type": "command", "command": "customer-hook"}]
+                }]
+            }
+        }"#;
+        let (rendered, _) = render_hook_configuration(original, ".claude/settings.json").unwrap();
+        let document: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+        assert_eq!(document["unrelated"]["preserved"], true);
+        assert!(document["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["matcher"] == "Write"));
+
+        let removed = remove_hook_configuration(&rendered, ".claude/settings.json").unwrap();
+        let document: serde_json::Value = serde_json::from_str(&removed).unwrap();
+        assert_eq!(document["unrelated"]["preserved"], true);
+        assert!(document["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["matcher"] == "Write"));
+        assert!(!removed.contains("\"command\": \"byo hook "));
     }
 }

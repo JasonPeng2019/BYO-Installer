@@ -222,6 +222,7 @@ pub(crate) fn install_bundle_locked(
     let bytes = std::fs::read(&launcher)?;
     let previous_current = std::fs::read(paths.current()).ok();
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
+    let previous_locator = std::fs::read(paths.install_locator()).ok();
     let switch = (|| -> Result<()> {
         write_if_changed(&paths.public_launcher(), &bytes)?;
         #[cfg(unix)]
@@ -232,6 +233,7 @@ pub(crate) fn install_bundle_locked(
                 std::fs::Permissions::from_mode(0o700),
             )?;
         }
+        paths.write_install_locator()?;
         write_json(&paths.current(), &current)?;
         let activated = verify_runtime(&final_runtime)?;
         sidecar_self_test(&final_runtime)?;
@@ -251,6 +253,7 @@ pub(crate) fn install_bundle_locked(
     if let Err(error) = switch {
         restore_optional_file(&paths.current(), previous_current.as_deref())?;
         restore_optional_file(&paths.public_launcher(), previous_launcher.as_deref())?;
+        restore_optional_file(&paths.install_locator(), previous_locator.as_deref())?;
         return Err(error);
     }
     Ok(source_manifest)
@@ -391,6 +394,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     let launcher = std::fs::read(launcher_path(&candidate))?;
     let previous_current = std::fs::read(paths.current()).ok();
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
+    let previous_locator = std::fs::read(paths.install_locator()).ok();
     let switch = (|| -> Result<()> {
         write_if_changed(&paths.public_launcher(), &launcher)?;
         #[cfg(unix)]
@@ -401,6 +405,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
                 std::fs::Permissions::from_mode(0o700),
             )?;
         }
+        paths.write_install_locator()?;
         write_json(&paths.current(), &current)?;
         verify_runtime(&candidate)?;
         sidecar_self_test(&candidate)?;
@@ -420,6 +425,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     if let Err(error) = switch {
         restore_optional_file(&paths.current(), previous_current.as_deref())?;
         restore_optional_file(&paths.public_launcher(), previous_launcher.as_deref())?;
+        restore_optional_file(&paths.install_locator(), previous_locator.as_deref())?;
         return Err(error);
     }
     Ok(candidate)
@@ -468,6 +474,10 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
     if paths.public_launcher().is_file() {
         remove_public_launcher(&paths.public_launcher())?;
         removed.push(paths.public_launcher());
+    }
+    if paths.install_locator().is_file() {
+        std::fs::remove_file(paths.install_locator())?;
+        removed.push(paths.install_locator());
     }
     if paths.current().is_file() {
         std::fs::remove_file(paths.current())?;

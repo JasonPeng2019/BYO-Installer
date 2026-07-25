@@ -3,8 +3,8 @@ set -eu
 
 usage() {
   echo "usage:" >&2
-  echo "  ./install.sh --bundle <extracted-byo-bundle>" >&2
-  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>]" >&2
+  echo "  ./install.sh --bundle <extracted-byo-bundle> [--install-dir <absolute-path>]" >&2
+  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--install-dir <absolute-path>]" >&2
   exit 2
 }
 
@@ -13,6 +13,7 @@ version=
 base_url=
 expected_sha=
 public_key=
+install_dir=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle) [ "$#" -ge 2 ] || usage; bundle=$2; shift 2 ;;
@@ -20,6 +21,7 @@ while [ "$#" -gt 0 ]; do
     --base-url) [ "$#" -ge 2 ] || usage; base_url=$2; shift 2 ;;
     --sha256) [ "$#" -ge 2 ] || usage; expected_sha=$2; shift 2 ;;
     --public-key) [ "$#" -ge 2 ] || usage; public_key=$2; shift 2 ;;
+    --install-dir) [ "$#" -ge 2 ] || usage; install_dir=$2; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -38,6 +40,7 @@ case "$machine" in
 esac
 
 temporary=
+# shellcheck disable=SC2329 # Invoked indirectly by the trap below.
 cleanup() {
   if [ -n "$temporary" ] && [ -d "$temporary" ]; then
     rm -rf -- "$temporary"
@@ -142,12 +145,23 @@ fi
 launcher="$bundle/byo"
 [ -f "$launcher" ] || { echo "Bundle launcher is missing: $launcher" >&2; exit 2; }
 
+if [ -n "$install_dir" ]; then
+  case "$install_dir" in
+    /*) ;;
+    *) install_dir="$(pwd)/$install_dir" ;;
+  esac
+fi
+
 if [ -n "$temporary" ] && [ "$product_platform" = "macos" ]; then
   codesign --verify --deep --strict --verbose=2 "$bundle"
   spctl --assess --type execute --verbose=2 "$launcher"
 fi
 
-"$launcher" install-runtime --bundle "$bundle"
+if [ -n "$install_dir" ]; then
+  "$launcher" install-runtime --bundle "$bundle" --install-dir "$install_dir"
+else
+  "$launcher" install-runtime --bundle "$bundle"
+fi
 status=$?
 if [ "$status" -eq 0 ]; then
   echo "BYO installed. If 'byo' is not found in a new shell, add the bin path reported by 'byo paths' to PATH."

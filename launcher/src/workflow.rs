@@ -439,7 +439,7 @@ fn forbidden_structure_path(path: &Path, patterns: &[String]) -> bool {
 fn tool_verify(project: &Path, paths: &ProductPaths, arguments: &[String]) -> Result<i32> {
     let positional = positional_arguments(arguments, &["--backend"], &[])?;
     if positional.len() > 1 {
-        bail!("usage: byo workflow tool verify [path] [--backend <software|firmware>]");
+        bail!("usage: byo workflow tool verify [path] [--backend <software|firmware|research>]");
     }
     let target = existing_project_path(
         project,
@@ -489,7 +489,9 @@ fn tool_verify(project: &Path, paths: &ProductPaths, arguments: &[String]) -> Re
             override_path.to_string_lossy().as_ref(),
             &[target.display().to_string()],
         )?;
-    } else if mode.verify.backend == "software" && project.join("pyproject.toml").is_file() {
+    } else if matches!(mode.verify.backend.as_str(), "software" | "research")
+        && project.join("pyproject.toml").is_file()
+    {
         let target_argument = target.display().to_string();
         for (program, arguments) in [
             ("ruff", vec!["check".to_string(), target_argument.clone()]),
