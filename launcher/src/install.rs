@@ -276,12 +276,14 @@ fn remove_public_launcher(path: &Path) -> Result<()> {
     use std::mem::size_of;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfoEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_FLAG_DELETE,
         FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
         FILE_DISPOSITION_INFO_EX, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
     let file = OpenOptions::new()
         .access_mode(DELETE)
@@ -309,12 +311,41 @@ fn remove_public_launcher(path: &Path) -> Result<()> {
         )
     };
     if result == 0 {
-        return Err(std::io::Error::last_os_error()).with_context(|| {
+        let disposition_error = std::io::Error::last_os_error();
+        drop(file);
+        let parent = path
+            .parent()
+            .context("public launcher has no parent directory")?;
+        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
+        let command_shell =
+            std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
+        Command::new(command_shell)
+            .args([
+                "/D",
+                "/Q",
+                "/C",
+                r#"for /L %I in (1,1,30) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#,
+            ])
+            .env("BYO_UNINSTALL_TARGET", &tombstone)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .context("failed to start the Windows launcher cleanup helper")?;
+        std::fs::rename(path, &tombstone).with_context(|| {
             format!(
-                "failed to mark public launcher {} for POSIX deletion",
+                "failed to mark public launcher {} for POSIX deletion ({disposition_error}) and failed to rename it for deferred deletion",
                 path.display()
             )
-        });
+        })?;
+        if path.exists() {
+            bail!(
+                "public launcher remained visible after deferred deletion: {}",
+                path.display()
+            );
+        }
+        return Ok(());
     }
     drop(file);
     if path.exists() {
