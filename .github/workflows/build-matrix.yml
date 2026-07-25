@@ -153,6 +153,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/AgentWorkspace"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/Firmware MCP New"
           curl --fail --location --silent --show-error \
             --output /tmp/rustup-init \
             https://static.rust-lang.org/rustup/archive/1.29.0/x86_64-unknown-linux-gnu/rustup-init
