@@ -159,7 +159,7 @@ jobs:
           echo "4acc9acc76d5079515b46346a485974457b5a79893cfb01112423c89aeb5aa10  /tmp/rustup-init" \
             | sha256sum --check -
           chmod 0755 /tmp/rustup-init
-          /tmp/rustup-init --yes --profile minimal --default-toolchain 1.97.1
+          /tmp/rustup-init -y --profile minimal --default-toolchain 1.97.1
           "$BYO_BUILD_PYTHON" -m pip install --disable-pip-version-check uv==0.11.20
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           uv sync --project "Firmware MCP New" --locked --all-groups
