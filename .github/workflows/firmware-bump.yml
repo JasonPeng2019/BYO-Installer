@@ -1,0 +1,112 @@
+name: Firmware pin bump
+
+# Cross-repo edge (PLAN.md 5d): BYO-Firmware-MCP fires a `firmware-release`
+# repository_dispatch at this repo when it tags a release. Rather than build the
+# installer directly from the payload, this opens a pull request that bumps the
+# `firmware_mcp` pin in release/source-lock.json — so the existing quality.yml
+# and build-matrix.yml (which already run on pull_request) validate the bump
+# before a human merges it. `workflow_dispatch` lets a maintainer trigger the
+# same bump by hand.
+#
+# Tokens (see .github/workflows/README-triggers.md):
+#   secrets.BYO_CI_PAT — optional PAT with contents+pull-requests write. Required
+#     for the opened PR to trigger downstream pull_request CI; falls back to the
+#     ephemeral GITHUB_TOKEN, whose PRs do NOT start further workflows.
+
+on:
+  repository_dispatch:
+    types: [firmware-release]
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: BYO-Firmware-MCP commit SHA (40 lowercase hex) to pin
+        required: true
+        type: string
+      branch:
+        description: Branch the commit is on
+        required: false
+        default: InstallerV1
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: firmware-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out installer
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          token: ${{ secrets.BYO_CI_PAT || github.token }}
+
+      - name: Resolve requested firmware commit
+        id: request
+        env:
+          DISPATCH_COMMIT: ${{ github.event.client_payload.commit }}
+          DISPATCH_BRANCH: ${{ github.event.client_payload.branch }}
+          INPUT_COMMIT: ${{ inputs.commit }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+        run: |
+          commit="${DISPATCH_COMMIT:-$INPUT_COMMIT}"
+          branch="${DISPATCH_BRANCH:-${INPUT_BRANCH:-InstallerV1}}"
+          if ! printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::firmware commit must be a 40-character lowercase hex SHA (got '${commit}')"
+            exit 1
+          fi
+          {
+            echo "commit=${commit}"
+            echo "branch=${branch}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update source-lock firmware pin
+        id: bump
+        env:
+          COMMIT: ${{ steps.request.outputs.commit }}
+          BRANCH: ${{ steps.request.outputs.branch }}
+        run: |
+          before="$(jq -r '.firmware_mcp.commit' release/source-lock.json)"
+          tmp="$(mktemp)"
+          jq --arg c "$COMMIT" --arg b "$BRANCH" \
+            '.firmware_mcp.commit = $c | .firmware_mcp.branch = $b' \
+            release/source-lock.json > "$tmp"
+          mv "$tmp" release/source-lock.json
+          if [ "$before" = "$COMMIT" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "before=${before}" >> "$GITHUB_OUTPUT"
+
+      - name: Open bump pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.BYO_CI_PAT || github.token }}
+          COMMIT: ${{ steps.request.outputs.commit }}
+          BRANCH: ${{ steps.request.outputs.branch }}
+          BEFORE: ${{ steps.bump.outputs.before }}
+        run: |
+          short="${COMMIT:0:12}"
+          work="bot/firmware-pin-${short}"
+          git config user.name "byo-release-bot"
+          git config user.email "byo-release-bot@users.noreply.github.com"
+          git checkout -b "$work"
+          git add release/source-lock.json
+          git commit -m "Bump BYO-Firmware-MCP pin to ${short}"
+          git push --force-with-lease origin "$work"
+          gh pr create \
+            --base InstallerV1 \
+            --head "$work" \
+            --title "Bump BYO-Firmware-MCP pin to ${short}" \
+            --body "Automated firmware pin bump from \`${BEFORE}\` to \`${COMMIT}\` (branch \`${BRANCH}\`). The existing quality and build-matrix workflows validate this PR; merge to cut the next installer build." \
+            || gh pr edit "$work" --body "Automated firmware pin bump to \`${COMMIT}\` (branch \`${BRANCH}\`)."
+
+      - name: Report no-op
+        if: steps.bump.outputs.changed != 'true'
+        run: echo "source-lock already pins ${{ steps.request.outputs.commit }}; nothing to bump."

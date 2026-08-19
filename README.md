@@ -344,11 +344,27 @@ byo repair
 byo rollback
 ```
 
-`byo workspace update` refreshes the current project's managed Codex and Claude
-projections from the installed workflow pack. `byo update` is different: it
-downloads and activates a cryptographically signed product runtime from a
-configured release channel. The current development artifacts do not yet have
-a public update channel.
+There are two different update verbs, and they act on different things:
+
+- **`byo update` — update the product runtime.** This upgrades the global `byo`
+  install shared by every project. It downloads and activates a
+  cryptographically signed runtime from a configured release channel using an
+  atomic version switch: the new version installs into its own directory,
+  health checks run, and only then does the active pointer flip — so an
+  interrupted or failed update always leaves the previous version runnable. Add
+  `--dry-run` to resolve the target without installing, or `--clean` to also
+  clear BYO's download cache and install staging after a successful switch.
+  `--clean` never removes prior versions (kept for `byo rollback`) and never
+  touches any project's `.firm`, `PLAN.md`, or `HANDOFF.md` — it is *not* a
+  reinstall. The current development artifacts do not yet have a public update
+  channel.
+- **`byo workspace update` — update one project's workspace.** This refreshes a
+  single project's managed Codex and Claude projections from the workflow pack
+  in the runtime you *already* have installed. It only rewrites files under that
+  project's `.agent-workspace/`; it does not fetch or change the global runtime.
+
+Rule of thumb: `byo update` means "get a newer BYO"; `byo workspace update`
+means "re-apply this project's workspace from the BYO I already have".
 
 `byo repair` verifies the active runtime, reconstructs its public launcher if
 needed, and reruns health checks. `byo rollback` activates the previous

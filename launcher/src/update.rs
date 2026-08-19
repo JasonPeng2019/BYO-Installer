@@ -112,6 +112,11 @@ pub struct UpdateOutcome {
     pub architecture: String,
     pub url: String,
     pub dry_run: bool,
+    /// Whether `--clean` was requested.
+    pub clean: bool,
+    /// BYO-owned scratch directories actually removed by `--clean`, as strings
+    /// for the JSON receipt. Empty on a dry run or when nothing needed clearing.
+    pub cleaned: Vec<String>,
 }
 
 fn read_metadata(arguments: &UpdateArgs) -> Result<Vec<u8>> {
@@ -552,6 +557,24 @@ fn remove_abandoned_extractions(downloads: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Remove BYO's transient update scratch space so `--clean` makes an update feel
+/// fresh: the download cache (`cache/downloads`, holding fetched archives) and the
+/// install staging area (`data/staging`). This deliberately never touches
+/// installed versions (kept for `byo rollback`), `current.json`, config, leases,
+/// the channel/PATH state, or any project — `.firm`/PLAN/HANDOFF live in the
+/// project tree, not here. Returns the directories actually removed.
+fn clear_transient_caches(paths: &ProductPaths) -> Result<Vec<PathBuf>> {
+    let mut cleared = Vec::new();
+    for dir in [paths.cache.join("downloads"), paths.staging()] {
+        if dir.is_dir() {
+            std::fs::remove_dir_all(&dir)
+                .with_context(|| format!("failed to clear {}", dir.display()))?;
+            cleared.push(dir);
+        }
+    }
+    Ok(cleared)
+}
+
 pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOutcome> {
     let _lock = install::InstallLock::acquire(paths)?;
     validate_channel_name(&arguments.channel)?;
@@ -579,13 +602,15 @@ pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOut
             );
         }
     }
-    let outcome = UpdateOutcome {
+    let mut outcome = UpdateOutcome {
         version: artifact.version.clone(),
         channel: metadata.channel,
         platform: artifact.platform.clone(),
         architecture: artifact.architecture.clone(),
         url: artifact.url.clone(),
         dry_run: arguments.dry_run,
+        clean: arguments.clean,
+        cleaned: Vec::new(),
     };
     if arguments.dry_run {
         return Ok(outcome);
@@ -628,6 +653,23 @@ pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOut
     })();
     let _ = std::fs::remove_dir_all(&staging);
     result?;
+    // The install has already atomically switched `current.json`, so the update
+    // has succeeded by this point. `--clean` is best-effort cleanup of BYO-owned
+    // scratch space: a failure to remove it must not turn a good update into a
+    // reported failure, so surface it as a warning and leave the outcome a success.
+    if arguments.clean {
+        match clear_transient_caches(paths) {
+            Ok(cleared) => {
+                outcome.cleaned = cleared
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+            }
+            Err(error) => {
+                eprintln!("warning: --clean could not clear BYO scratch space: {error:#}");
+            }
+        }
+    }
     Ok(outcome)
 }
 
@@ -713,6 +755,7 @@ mod tests {
             metadata_url: None,
             metadata_file: None,
             dry_run: true,
+            clean: false,
         };
         assert_eq!(
             select_artifact(&metadata, &arguments).unwrap().version,
@@ -808,6 +851,40 @@ mod tests {
         assert!(validate_channel_name("beta_1").is_ok());
         assert!(validate_channel_name("../stable").is_err());
         assert!(validate_channel_name("stable/channel").is_err());
+    }
+
+    #[test]
+    fn clean_clears_scratch_but_preserves_rollback_versions_and_pointer() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-update-clean-test-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root).unwrap();
+        // Scratch space a --clean update should remove.
+        let downloads = paths.cache.join("downloads");
+        std::fs::create_dir_all(&downloads).unwrap();
+        std::fs::write(downloads.join("byo-1.0.0-linux-x86_64.tar.gz"), b"archive").unwrap();
+        std::fs::create_dir_all(paths.staging().join("1.0.0-deadbeef")).unwrap();
+        // State that must survive: an installed prior version (for `byo rollback`)
+        // and the active `current.json` pointer.
+        let version = paths.versions().join("1.0.0");
+        std::fs::create_dir_all(&version).unwrap();
+        std::fs::write(version.join("release-manifest.json"), b"{}").unwrap();
+        std::fs::write(paths.current(), b"{}").unwrap();
+
+        let cleared = super::clear_transient_caches(&paths).unwrap();
+
+        assert!(!downloads.exists(), "download cache should be cleared");
+        assert!(
+            !paths.staging().exists(),
+            "install staging should be cleared"
+        );
+        assert!(cleared.contains(&downloads) && cleared.contains(&paths.staging()));
+        // Rollback material and the active pointer are untouched.
+        assert!(version.join("release-manifest.json").is_file());
+        assert!(paths.current().is_file());
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

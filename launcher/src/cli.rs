@@ -171,6 +171,12 @@ pub struct UpdateArgs {
     pub metadata_file: Option<PathBuf>,
     #[arg(long)]
     pub dry_run: bool,
+    /// After the atomic install succeeds, clear BYO's download cache and install
+    /// staging so the update feels like a fresh install. This is never a
+    /// destructive pre-uninstall: prior versions (kept for `byo rollback`) and
+    /// every project's `.firm`/PLAN/HANDOFF data are always preserved.
+    #[arg(long)]
+    pub clean: bool,
 }
 
 #[derive(Debug, Args)]
