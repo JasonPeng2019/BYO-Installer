@@ -55,6 +55,10 @@ pub struct InitArgs {
     pub yes: bool,
     #[arg(long)]
     pub allow_full_access: bool,
+    /// Opt in to putting the BYO bin directory on PATH, recorded so uninstall
+    /// can reverse exactly what was added.
+    #[arg(long)]
+    pub modify_path: bool,
 }
 
 #[derive(Debug, Args)]
@@ -193,6 +197,9 @@ pub struct UninstallArgs {
     pub purge_data: bool,
     #[arg(long)]
     pub yes: bool,
+    /// Also write a machine-readable JSON uninstall receipt to this path.
+    #[arg(long)]
+    pub receipt: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

@@ -229,7 +229,16 @@ def main() -> int:
             evidence = verify_platform(bundle, archive, args.public_key)
             test = Path(__file__).with_name("test_installed_e2e.py")
             evidence.append(
-                run_checked([sys.executable, str(test), "--bundle", str(bundle)])
+                run_checked(
+                    [
+                        sys.executable,
+                        str(test),
+                        "--bundle",
+                        str(bundle),
+                        "--archive",
+                        str(archive),
+                    ]
+                )
             )
         args.receipt.parent.mkdir(parents=True, exist_ok=True)
         args.receipt.write_text(

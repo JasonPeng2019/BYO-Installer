@@ -27,9 +27,11 @@ function Expand-BoundedByoZip {
         [System.IO.Path]::AltDirectorySeparatorChar
     ) + [System.IO.Path]::DirectorySeparatorChar
     $zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)
+    $topLevel = $null
+    $hasNestedEntry = $false
     try {
         if ($zip.Entries.Count -eq 0 -or $zip.Entries.Count -gt $maximumEntries) {
-            throw "Downloaded ZIP is empty or contains too many entries."
+            throw "ZIP archive is empty or contains too many entries."
         }
         [long]$expandedBytes = 0
         foreach ($entry in $zip.Entries) {
@@ -44,7 +46,22 @@ function Expand-BoundedByoZip {
                 ($segments | Where-Object { -not $_ -or $_ -eq "." -or $_ -eq ".." }) -or
                 -not $seen.Add($normalized)
             ) {
-                throw "Downloaded ZIP contains an unsafe or duplicate path: $name"
+                throw "ZIP archive contains an unsafe or duplicate path: $name"
+            }
+            if ($null -eq $topLevel) {
+                $topLevel = $segments[0]
+            }
+            elseif (
+                -not [string]::Equals(
+                    $topLevel,
+                    $segments[0],
+                    [System.StringComparison]::Ordinal
+                )
+            ) {
+                throw "ZIP archive contains more than one top-level path."
+            }
+            if ($segments.Count -gt 1) {
+                $hasNestedEntry = $true
             }
 
             $attributes = [BitConverter]::ToUInt32(
@@ -53,7 +70,7 @@ function Expand-BoundedByoZip {
             )
             $unixType = ($attributes -shr 16) -band 0xF000
             if ($unixType -notin @(0, 0x4000, 0x8000)) {
-                throw "Downloaded ZIP contains a forbidden non-file entry: $name"
+                throw "ZIP archive contains a forbidden non-file entry: $name"
             }
             $isDirectory = $name.EndsWith("/")
             if (
@@ -61,14 +78,14 @@ function Expand-BoundedByoZip {
                 (-not $isDirectory -and $unixType -eq 0x4000) -or
                 ($isDirectory -and $entry.Length -ne 0)
             ) {
-                throw "Downloaded ZIP entry type is inconsistent: $name"
+                throw "ZIP archive entry type is inconsistent: $name"
             }
             if ($entry.Length -gt $maximumFileBytes) {
-                throw "Downloaded ZIP contains an oversized file."
+                throw "ZIP archive contains an oversized file."
             }
             $expandedBytes += $entry.Length
             if ($expandedBytes -gt $maximumExpandedBytes) {
-                throw "Downloaded ZIP expands beyond the allowed size."
+                throw "ZIP archive expands beyond the allowed size."
             }
 
             $relative = $normalized.Replace(
@@ -77,7 +94,7 @@ function Expand-BoundedByoZip {
             )
             $target = [System.IO.Path]::GetFullPath((Join-Path $root $relative))
             if (-not $target.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Downloaded ZIP entry escapes its extraction directory."
+                throw "ZIP archive entry escapes its extraction directory."
             }
             if ($isDirectory) {
                 [System.IO.Directory]::CreateDirectory($target) | Out-Null
@@ -101,16 +118,21 @@ function Expand-BoundedByoZip {
                 $source.Dispose()
             }
             if ((Get-Item -LiteralPath $target).Length -ne $entry.Length) {
-                throw "Downloaded ZIP entry size does not match its metadata."
+                throw "ZIP archive entry size does not match its metadata."
             }
         }
     }
     finally {
         $zip.Dispose()
     }
+    if (-not $topLevel -or -not $hasNestedEntry) {
+        throw "ZIP archive does not contain one top-level bundle directory."
+    }
+    return $topLevel
 }
 
 $temporary = $null
+$verifyDownloadedSignatures = $false
 try {
     if (-not $Bundle) {
         if (-not $Version -or -not $BaseUrl -or -not $Sha256) {
@@ -140,15 +162,43 @@ try {
         if ($actualSha -ne $Sha256.ToLowerInvariant()) {
             throw "Downloaded archive SHA-256 mismatch."
         }
-        Expand-BoundedByoZip -Archive $archive -Destination $temporary
-        $Bundle = Join-Path $temporary "byo-$Version-windows-$architecture"
+        $Bundle = $archive
+        $verifyDownloadedSignatures = $true
+    }
+
+    if (Test-Path -LiteralPath $Bundle -PathType Leaf) {
+        $archive = (Get-Item -LiteralPath $Bundle).FullName
+        if (-not $archive.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Windows bundle archives must use the .zip format."
+        }
+        if (-not $temporary) {
+            $temporary = Join-Path (
+                [System.IO.Path]::GetTempPath()
+            ) ("byo-install-" + [guid]::NewGuid())
+            New-Item -ItemType Directory -Path $temporary | Out-Null
+        }
+        $extractionRoot = Join-Path $temporary "extracted"
+        New-Item -ItemType Directory -Path $extractionRoot | Out-Null
+        $bundleRoot = Expand-BoundedByoZip `
+            -Archive $archive `
+            -Destination $extractionRoot
+        $Bundle = Join-Path $extractionRoot $bundleRoot
+        if (-not (Test-Path -LiteralPath $Bundle -PathType Container)) {
+            throw "ZIP archive did not create its declared bundle directory."
+        }
+    }
+    elseif (Test-Path -LiteralPath $Bundle -PathType Container) {
+        $Bundle = (Get-Item -LiteralPath $Bundle).FullName
+    }
+    else {
+        throw "Bundle path is not a ZIP archive or extracted directory: $Bundle"
     }
 
     $launcher = Join-Path $Bundle "byo.exe"
     if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) {
         throw "Bundle launcher is missing: $launcher"
     }
-    if ($temporary) {
+    if ($verifyDownloadedSignatures) {
         $signedFiles = Get-ChildItem -LiteralPath $Bundle -Recurse -File |
             Where-Object { $_.Extension -in @(".exe", ".dll", ".pyd") }
         if (-not $signedFiles) {

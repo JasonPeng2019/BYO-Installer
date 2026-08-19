@@ -4,6 +4,7 @@ mod install;
 mod lease;
 mod manifest;
 mod pack;
+mod path_setup;
 mod paths;
 mod project;
 mod update;
@@ -278,6 +279,34 @@ fn print_doctor(checks: &[Check], json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Run the same global + project checks as `byo doctor` and reduce them to one
+/// line for the end of `byo init`.
+fn init_health_summary(project: &std::path::Path, paths: &ProductPaths) -> Result<String> {
+    let mut checks = global_doctor(paths)?;
+    project::doctor_project(project, paths)?;
+    checks.push(Check {
+        id: "project.capsule".to_string(),
+        status: "passed".to_string(),
+        code: None,
+        remedy: None,
+    });
+    let warnings = checks
+        .iter()
+        .filter(|check| check.status == "warning")
+        .count();
+    let passed = checks
+        .iter()
+        .filter(|check| check.status == "passed")
+        .count();
+    Ok(if warnings == 0 {
+        format!("Health check: OK ({passed} checks passed)")
+    } else {
+        format!(
+            "Health check: {passed} passed, {warnings} warning(s) — run `byo doctor` for details"
+        )
+    })
+}
+
 fn apply_sidecar_environment(command: &mut ProcessCommand) {
     command.env_clear();
     for name in SIDECAR_ENVIRONMENT {
@@ -466,6 +495,32 @@ fn run() -> Result<i32> {
                 ExitCategory::CapsuleConflict,
             )?;
             println!("{}", serde_json::to_string_pretty(&preview)?);
+            if !arguments.dry_run {
+                // Fold `byo doctor` into init: report health as one line so the
+                // documented flow is just install → `byo init`. Non-fatal — a
+                // health problem is surfaced, not a reason to fail the capsule
+                // that was just written.
+                match init_health_summary(&project, &paths) {
+                    Ok(summary) => println!("{summary}"),
+                    Err(error) => println!(
+                        "Health check: could not complete ({error:#}); run `byo doctor` for details"
+                    ),
+                }
+                if arguments.modify_path {
+                    match categorize(path_setup::add_bin_to_path(&paths), ExitCategory::Installer)?
+                    {
+                        path_setup::PathSetupOutcome::AlreadyPresent => {
+                            println!("PATH already includes {}", paths.bin.display());
+                        }
+                        path_setup::PathSetupOutcome::Configured { target } => {
+                            println!(
+                                "Added {} to PATH in {target}; open a new shell to use `byo`.",
+                                paths.bin.display()
+                            );
+                        }
+                    }
+                }
+            }
         }
         Command::Doctor(arguments) => {
             let mut checks = categorize(global_doctor(&paths), ExitCategory::Doctor)?;
@@ -652,19 +707,47 @@ fn run() -> Result<i32> {
             println!("BYO runtime repaired: {}", repaired.display());
         }
         Command::Uninstall(arguments) => {
-            if arguments.global {
+            let receipt = if arguments.global {
                 if arguments.purge_data && !arguments.yes {
+                    // Show the operator exactly what a purge would delete, then
+                    // refuse until they confirm with --yes. This is the explicit
+                    // target preview the refusal message refers to.
+                    let targets = install::purge_targets(&paths);
+                    eprintln!("--purge-data would permanently remove these BYO roots:");
+                    if targets.is_empty() {
+                        eprintln!("  (nothing — no BYO installation detected)");
+                    } else {
+                        for target in &targets {
+                            eprintln!("  {}", target.display());
+                        }
+                    }
                     return Err(error::fail(
                         ExitCategory::Uninstall,
-                        "--purge-data requires --yes and an explicit target preview",
+                        "--purge-data requires --yes to confirm the wipe shown above",
                     ));
                 }
+                // Reverse only the PATH edits BYO itself recorded, before the
+                // state directory (which holds the record) is touched.
+                let reverted = categorize(
+                    path_setup::revert_recorded_edits(&paths),
+                    ExitCategory::Uninstall,
+                )?;
                 let removed = categorize(
                     install::uninstall_global(&paths, arguments.purge_data),
                     ExitCategory::Uninstall,
                 )?;
-                for path in removed {
-                    println!("Removed {}", path.display());
+                let preserved = if arguments.purge_data {
+                    Vec::new()
+                } else {
+                    install::remaining_data_roots(&paths)
+                };
+                UninstallReceipt {
+                    scope: "global",
+                    purge: arguments.purge_data,
+                    note: None,
+                    removed,
+                    preserved,
+                    reverted,
                 }
             } else {
                 let project = categorize(
@@ -674,11 +757,27 @@ fn run() -> Result<i32> {
                 let preserved = categorize(
                     project::uninstall_project(&project, &paths),
                     ExitCategory::Uninstall,
-                )?;
-                println!("Removed BYO project integration. Preserved:");
-                for relative in preserved {
-                    println!("  {}", project.join(relative).display());
+                )?
+                .into_iter()
+                .map(|relative| project.join(relative))
+                .collect();
+                UninstallReceipt {
+                    scope: "project",
+                    purge: false,
+                    note: Some(
+                        "removed BYO-managed integration blocks in place; the listed \
+                         paths were preserved"
+                            .to_string(),
+                    ),
+                    removed: Vec::new(),
+                    preserved,
+                    reverted: Vec::new(),
                 }
+            };
+            receipt.print();
+            if let Some(path) = arguments.receipt.as_deref() {
+                categorize(receipt.write_json(path), ExitCategory::Uninstall)?;
+                println!("Receipt written to {}", path.display());
             }
         }
         Command::InstallRuntime(arguments) => {
@@ -705,6 +804,59 @@ fn run() -> Result<i32> {
         Command::Internal(arguments) => return run_helper(arguments.command, &paths),
     }
     Ok(0)
+}
+
+/// A record of exactly what an `uninstall` removed and what it preserved. Printed
+/// as a human-readable receipt, and — with `--receipt <path>` — also written as
+/// JSON for automation and audit.
+#[derive(Serialize)]
+struct UninstallReceipt {
+    scope: &'static str,
+    purge: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+    removed: Vec<std::path::PathBuf>,
+    preserved: Vec<std::path::PathBuf>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reverted: Vec<String>,
+}
+
+impl UninstallReceipt {
+    fn print(&self) {
+        let mode = if self.purge { " --purge-data" } else { "" };
+        println!("BYO uninstall receipt (scope: {}{})", self.scope, mode);
+        if let Some(note) = &self.note {
+            println!("Note: {note}");
+        }
+        Self::print_section("Removed", &self.removed);
+        Self::print_section("Preserved", &self.preserved);
+        if !self.reverted.is_empty() {
+            println!("Reverted PATH edits ({}):", self.reverted.len());
+            for target in &self.reverted {
+                println!("  {target}");
+            }
+        }
+    }
+
+    fn print_section(label: &str, paths: &[std::path::PathBuf]) {
+        if paths.is_empty() {
+            println!("{label} (0): none");
+        } else {
+            println!("{label} ({}):", paths.len());
+            for path in paths {
+                println!("  {}", path.display());
+            }
+        }
+    }
+
+    fn write_json(&self, path: &std::path::Path) -> Result<()> {
+        let mut json =
+            serde_json::to_vec_pretty(self).context("failed to serialize uninstall receipt")?;
+        json.push(b'\n');
+        std::fs::write(path, json)
+            .with_context(|| format!("failed to write uninstall receipt to {}", path.display()))?;
+        Ok(())
+    }
 }
 
 fn main() -> ExitCode {

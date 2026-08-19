@@ -6,7 +6,8 @@ Users do not need Python, Rust, `uv`, or a source checkout.
 ## Quick install
 
 1. Download the archive, its `.sha256` receipt, and the installer for your
-   computer:
+   computer. The installer is a separate file; extracting the archive does not
+   create `install.sh` or `install.ps1`.
 
 | Computer | Archive | Installer |
 |---|---|---|
@@ -15,30 +16,50 @@ Users do not need Python, Rust, `uv`, or a source checkout.
 | 64-bit Windows | `byo-0.1.1-windows-x86_64.zip` | `install.ps1` |
 | 64-bit Linux | `byo-0.1.1-linux-x86_64.tar.gz` | `install.sh` |
 
-2. Check the archive against its `.sha256` receipt, then extract it.
-3. Run the matching installer. These examples assume the extracted folder and
-   installer are in your Downloads folder:
+2. Check the archive against its `.sha256` receipt.
+3. Run the matching installer directly against the archive. These examples
+   assume the archive and installer are in your Downloads folder:
 
 | Computer | Command |
 |---|---|
-| Apple silicon Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-aarch64"` |
-| Intel Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-x86_64"` |
-| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.1-windows-x86_64"` |
-| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64"` |
+| Apple silicon Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-aarch64.zip"` |
+| Intel Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"` |
+| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.1-windows-x86_64.zip"` |
+| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz"` |
+
+Before running one of these commands, confirm that both paths exist. For
+example, on macOS or Linux:
+
+```sh
+test -f "$HOME/Downloads/install.sh"
+test -f "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"
+```
+
+On Windows:
+
+```powershell
+Test-Path -LiteralPath "$HOME\Downloads\install.ps1" -PathType Leaf
+Test-Path -LiteralPath "$HOME\Downloads\byo-0.1.1-windows-x86_64.zip" -PathType Leaf
+```
+
+Every command should report success before installation. Retype the command if
+a pasted line contains a marker such as `<200b>`; that marker represents an
+unwanted zero-width character and is not part of any BYO path or option.
 
 4. Open a terminal in your firmware project and initialize both Codex and
-   Claude:
+   Claude. `byo init` now runs the health check automatically and prints a
+   one-line result, so this is the whole setup:
 
 ```sh
 byo init
-byo doctor
 byo codex firmware
 # Or launch Claude:
 byo claude firmware
 ```
 
-That is the complete normal setup. If `byo` is not found after installation,
-add its `bin` directory to `PATH` as described below.
+That is the complete normal setup. If `byo` is not found in a new shell, re-run
+`byo init --modify-path` to put its `bin` directory on `PATH` (recorded so
+uninstall reverses exactly that), or add it yourself as described below.
 
 ## What the installer installs
 
@@ -143,12 +164,8 @@ prints `arm64`, then run:
 
 ```sh
 cd "$HOME/Downloads"
-byo_extract_dir="$(mktemp -d)"
-ditto -x -k \
-  "./byo-0.1.1-macos-aarch64.zip" \
-  "$byo_extract_dir"
 sh "./install.sh" \
-  --bundle "$byo_extract_dir/byo-0.1.1-macos-aarch64"
+  --bundle "./byo-0.1.1-macos-aarch64.zip"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -161,12 +178,8 @@ Requirements: macOS 12 or newer and an Intel processor. Confirm that
 
 ```sh
 cd "$HOME/Downloads"
-byo_extract_dir="$(mktemp -d)"
-ditto -x -k \
-  "./byo-0.1.1-macos-x86_64.zip" \
-  "$byo_extract_dir"
 sh "./install.sh" \
-  --bundle "$byo_extract_dir/byo-0.1.1-macos-x86_64"
+  --bundle "./byo-0.1.1-macos-x86_64.zip"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -179,16 +192,8 @@ PowerShell:
 
 ```powershell
 Set-Location "$HOME\Downloads"
-$ExtractDirectory = Join-Path `
-  $env:TEMP `
-  ("byo-install-" + [guid]::NewGuid())
-Expand-Archive `
-  -LiteralPath ".\byo-0.1.1-windows-x86_64.zip" `
-  -DestinationPath $ExtractDirectory
 & ".\install.ps1" `
-  -Bundle (Join-Path `
-    $ExtractDirectory `
-    "byo-0.1.1-windows-x86_64")
+  -Bundle ".\byo-0.1.1-windows-x86_64.zip"
 ```
 
 To install below `$HOME\Applications\BYO` instead, add
@@ -211,12 +216,8 @@ that `uname -m` prints `x86_64` and inspect the glibc version with
 
 ```sh
 cd "$HOME/Downloads"
-byo_extract_dir="$(mktemp -d)"
-tar -xzf \
-  "./byo-0.1.1-linux-x86_64.tar.gz" \
-  -C "$byo_extract_dir"
 sh "./install.sh" \
-  --bundle "$byo_extract_dir/byo-0.1.1-linux-x86_64"
+  --bundle "./byo-0.1.1-linux-x86_64.tar.gz"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -353,6 +354,24 @@ a public update channel.
 needed, and reruns health checks. `byo rollback` activates the previous
 installed and verified runtime.
 
+### Windows MCP startup failure
+
+Run `byo status` and check `runtime_version` before troubleshooting Codex.
+BYO `0.1.0` on Windows did not preserve the Windows profile environment when
+starting its compiled MCP sidecar, so the sidecar could close during the
+`initialize` handshake even though installation succeeded. Install the
+Windows `0.1.1` bundle, then run:
+
+```powershell
+$env:Path = "$env:LOCALAPPDATA\BYO\bin;$env:Path"
+byo status
+byo init
+byo doctor
+byo codex firmware
+```
+
+Do not continue if `byo status` still reports `0.1.0`.
+
 ## Uninstall
 
 Remove BYO from a project before removing the product:
@@ -366,10 +385,21 @@ byo uninstall --global
 Project uninstall removes only managed integrations. It preserves `.firm`,
 `PLAN.md`, `HANDOFF.md`, specifications, and unrelated client configuration.
 Global uninstall refuses to proceed while registered projects or live MCP
-leases remain.
+leases remain, and preserves your product data and configuration by default.
 
-To remove the global runtime and its cache and configuration after reviewing
-the targets, use:
+Every uninstall prints a receipt of exactly what was removed and what was
+preserved; add `--receipt <path>` to also write it as JSON for your records.
+
+To remove the global runtime along with its data, cache, and configuration,
+first review the exact targets by running the command **without** `--yes`:
+
+```sh
+byo uninstall --global --purge-data
+```
+
+This prints the precise list of BYO roots that would be deleted and makes no
+changes. Re-run with `--yes` to confirm the wipe (board profiles and captured
+evidence may be unrecoverable):
 
 ```sh
 byo uninstall --global --purge-data --yes
@@ -383,13 +413,15 @@ in `release/source-lock.json`.
 
 When downloaded from GitHub Actions, each outer workflow artifact contains:
 
+- `install.sh` and `install.ps1`; use the installer for the target computer;
 - `dist/`, with the installable archive, `.sha256` receipt, extracted bundle,
   SBOM, and provenance; and
 - `symbols/`, with private diagnostic symbols and the Nuitka compilation
   report.
 
-Copy the archive and receipt from `dist/` to the example Downloads location
-used above. The `symbols/` files are not required for installation.
+Copy the matching installer plus the archive and receipt from `dist/` to the
+example Downloads location used above. The `symbols/` files are not required
+for installation.
 
 Each target includes an extracted bundle, archive, checksum receipt, CycloneDX
 SBOM, and source provenance. Nuitka reports and native symbols are retained as
@@ -410,13 +442,13 @@ these files as production releases.
 ## Test in a temporary installation directory
 
 On macOS or Linux, use `--install-dir` to keep a test installation separate
-from the normal per-user locations. Point `--bundle` at the extracted bundle
-for the current platform:
+from the normal per-user locations. Point `--bundle` at the archive for the
+current platform:
 
 ```sh
 byo_test_root="$(mktemp -d)"
 sh "$HOME/Downloads/install.sh" \
-  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64" \
+  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz" \
   --install-dir "$byo_test_root"
 "$byo_test_root/bin/byo" paths
 ```

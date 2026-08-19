@@ -148,6 +148,7 @@ def stop_mcp(process: subprocess.Popen[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
+    parser.add_argument("--archive", type=Path)
     args = parser.parse_args()
     bundle = args.bundle.resolve(strict=True)
     manifest = json.loads(
@@ -156,6 +157,14 @@ def main() -> int:
     expected_version = manifest.get("version")
     if not isinstance(expected_version, str) or not expected_version:
         raise AcceptanceFailure("bundle manifest contains no release version")
+    archive_suffix = ".tar.gz" if manifest.get("platform") == "linux" else ".zip"
+    archive = (
+        args.archive
+        if args.archive is not None
+        else bundle.parent / f"{bundle.name}{archive_suffix}"
+    ).resolve(strict=True)
+    if not archive.is_file():
+        raise AcceptanceFailure("bundle archive is missing")
     bundle_launcher = bundle / ("byo.exe" if os.name == "nt" else "byo")
     if not bundle_launcher.is_file():
         raise AcceptanceFailure("bundle launcher is missing")
@@ -202,6 +211,11 @@ def main() -> int:
             "BYO_HOME": str(home),
             "PATH": os.pathsep.join((str(home / "bin"), os.environ.get("PATH", ""))),
         }
+        if os.name == "nt":
+            # Match a normal PowerShell environment, where HOME is not
+            # guaranteed. The launcher must preserve the native Windows
+            # profile variables needed by the compiled sidecar.
+            env.pop("HOME", None)
 
         invoke([str(bundle_launcher), "status"], env=env, expected=20)
         if os.name == "nt":
@@ -219,10 +233,10 @@ def main() -> int:
                 "-File",
                 str(ROOT / "install.ps1"),
                 "-Bundle",
-                str(bundle),
+                str(archive),
             ]
         else:
-            install_command = [str(ROOT / "install.sh"), "--bundle", str(bundle)]
+            install_command = [str(ROOT / "install.sh"), "--bundle", str(archive)]
         invoke(install_command, env=env, cwd=ROOT)
         byo = home / "bin" / ("byo.exe" if os.name == "nt" else "byo")
         if not byo.is_file():
@@ -501,6 +515,18 @@ def main() -> int:
             raise AcceptanceFailure(
                 "global uninstall left the active launcher or pointer"
             )
+
+        # Clean-machine: reinstalling the product over a project whose .firm was
+        # preserved across a full global uninstall must recover the project.
+        invoke(install_command, env=env, cwd=ROOT)
+        if not byo.is_file():
+            raise AcceptanceFailure("product reinstall did not restore the launcher")
+        invoke([str(byo), "init", "--project", str(project)], env=offline_env)
+        if not firm_marker.is_file():
+            raise AcceptanceFailure(
+                "product reinstall over preserved state lost .firm data"
+            )
+        invoke([str(byo), "uninstall", "--global"], env=env)
 
         custom_root = root / "custom product location"
         custom_env = {

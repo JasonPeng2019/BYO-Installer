@@ -35,6 +35,11 @@ jobs:
           pipx run ruff==0.15.21 check release/scripts hil
           pipx run ruff==0.15.21 format --check release/scripts hil
 
+      - name: Release script unit tests
+        run: |
+          python3 release/scripts/test_verify_build_output.py
+          python3 release/scripts/test_build_release.py
+
       - name: Validate shell bootstrap
         run: sh -n install.sh
 

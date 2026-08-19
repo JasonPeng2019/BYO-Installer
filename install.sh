@@ -3,7 +3,7 @@ set -eu
 
 usage() {
   echo "usage:" >&2
-  echo "  ./install.sh --bundle <extracted-byo-bundle> [--install-dir <absolute-path>]" >&2
+  echo "  ./install.sh --bundle <byo-archive-or-extracted-bundle> [--install-dir <absolute-path>]" >&2
   echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--install-dir <absolute-path>]" >&2
   exit 2
 }
@@ -48,6 +48,99 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
+make_temporary() {
+  if [ -z "$temporary" ]; then
+    temporary=$(mktemp -d "${TMPDIR:-/tmp}/byo-install.XXXXXXXX")
+  fi
+}
+
+extract_archive() {
+  candidate_archive=$1
+  extraction_destination=$2
+  if [ "$product_platform" = "macos" ]; then
+    bundle_root=$(/usr/bin/zipinfo -1 "$candidate_archive" | awk '
+      BEGIN { bad = 0; count = 0; top = ""; has_child = 0 }
+      {
+        path = $0
+        sub(/\/$/, "", path)
+        count++
+        lowered = tolower(path)
+        parts_count = split(path, parts, "/")
+        if (path == "" || path ~ /^\// || path ~ /\/\// || path ~ /\\/ ||
+            path ~ /(^|\/)\.\.?($|\/)/ || path ~ /^[A-Za-z]:/ ||
+            seen[lowered]++) {
+          bad = 1
+        }
+        if (top == "") {
+          top = parts[1]
+        } else if (top != parts[1]) {
+          bad = 1
+        }
+        if (parts_count > 1) {
+          has_child = 1
+        }
+      }
+      END {
+        if (count == 0 || count > 20000 || top == "" || !has_child) bad = 1
+        if (bad) exit 1
+        print top
+      }
+    ') || {
+      echo "ZIP archive contains an unsafe, duplicate, excessive, or multi-root path set." >&2
+      exit 21
+    }
+    /usr/bin/zipinfo -l "$candidate_archive" | awk '
+      BEGIN { bad = 0 }
+      $1 ~ /^[bclps-]/ && substr($1, 1, 1) != "-" { bad = 1 }
+      END { exit bad }
+    ' || { echo "ZIP archive contains a forbidden non-file entry." >&2; exit 21; }
+    /usr/bin/ditto -x -k "$candidate_archive" "$extraction_destination"
+  else
+    bundle_root=$(tar -tzf "$candidate_archive" | awk '
+      BEGIN { bad = 0; count = 0; top = ""; has_child = 0 }
+      {
+        path = $0
+        sub(/\/$/, "", path)
+        count++
+        lowered = tolower(path)
+        parts_count = split(path, parts, "/")
+        if (path == "" || path ~ /^\// || path ~ /\/\// || path ~ /\\/ ||
+            path ~ /(^|\/)\.\.?($|\/)/ || path ~ /^[A-Za-z]:/ ||
+            seen[lowered]++) {
+          bad = 1
+        }
+        if (top == "") {
+          top = parts[1]
+        } else if (top != parts[1]) {
+          bad = 1
+        }
+        if (parts_count > 1) {
+          has_child = 1
+        }
+      }
+      END {
+        if (count == 0 || count > 20000 || top == "" || !has_child) bad = 1
+        if (bad) exit 1
+        print top
+      }
+    ') || {
+      echo "Archive contains an unsafe, duplicate, excessive, or multi-root path set." >&2
+      exit 21
+    }
+    tar -tvzf "$candidate_archive" | awk '
+      BEGIN { bad = 0 }
+      $1 ~ /^[bchlps-]/ && substr($1, 1, 1) != "-" { bad = 1 }
+      END { exit bad }
+    ' || { echo "Archive contains a forbidden non-file entry." >&2; exit 21; }
+    tar -xzf "$candidate_archive" -C "$extraction_destination" --no-same-owner --no-same-permissions
+  fi
+  [ -d "$extraction_destination/$bundle_root" ] || {
+    echo "Archive did not create its declared bundle directory." >&2
+    exit 21
+  }
+}
+
+verify_downloaded_platform_signature=0
 if [ -z "$bundle" ]; then
   [ -n "$version" ] && [ -n "$base_url" ] && [ -n "$expected_sha" ] || usage
   case "$version" in *[!0-9A-Za-z.+-]*|'') echo "Invalid exact version." >&2; exit 2 ;; esac
@@ -64,7 +157,7 @@ if [ -z "$bundle" ]; then
   fi
   archive_name="byo-$version-$product_platform-$product_arch.$archive_extension"
   archive_url="${base_url%/}/$archive_name"
-  temporary=$(mktemp -d "${TMPDIR:-/tmp}/byo-install.XXXXXXXX")
+  make_temporary
   archive="$temporary/$archive_name"
   curl --fail --location --proto '=https' --tlsv1.2 --output "$archive" "$archive_url"
 
@@ -93,53 +186,25 @@ if [ -z "$bundle" ]; then
       exit 23
     }
   fi
+  bundle=$archive
+  verify_downloaded_platform_signature=1
+fi
 
-  if [ "$product_platform" = "macos" ]; then
-    /usr/bin/zipinfo -1 "$archive" | awk '
-      BEGIN { bad = 0; count = 0 }
-      {
-        path = $0
-        sub(/\/$/, "", path)
-        count++
-        lowered = tolower(path)
-        if (path == "" || path ~ /^\// || path ~ /\\/ ||
-            path ~ /(^|\/)\.\.?($|\/)/ || path ~ /^[A-Za-z]:/ ||
-            seen[lowered]++) {
-          bad = 1
-        }
-      }
-      END { if (count == 0 || count > 20000) bad = 1; exit bad }
-    ' || { echo "Downloaded ZIP contains an unsafe, duplicate, or excessive path set." >&2; exit 21; }
-    /usr/bin/zipinfo -l "$archive" | awk '
-      BEGIN { bad = 0 }
-      $1 ~ /^[bclps-]/ && substr($1, 1, 1) != "-" { bad = 1 }
-      END { exit bad }
-    ' || { echo "Downloaded ZIP contains a forbidden non-file entry." >&2; exit 21; }
-    /usr/bin/ditto -x -k "$archive" "$temporary"
-  else
-    tar -tzf "$archive" | awk '
-      BEGIN { bad = 0; count = 0 }
-      {
-        count++
-        path = $0
-        sub(/\/$/, "", path)
-        lowered = tolower(path)
-        if (path == "" || path ~ /^\// || path ~ /\\/ ||
-            path ~ /(^|\/)\.\.?($|\/)/ || path ~ /^[A-Za-z]:/ ||
-            seen[lowered]++) {
-          bad = 1
-        }
-      }
-      END { if (count == 0 || count > 20000) bad = 1; exit bad }
-    ' || { echo "Downloaded archive contains an unsafe, duplicate, or excessive path set." >&2; exit 21; }
-    tar -tvzf "$archive" | awk '
-      BEGIN { bad = 0 }
-      $1 ~ /^[bchlps-]/ && substr($1, 1, 1) != "-" { bad = 1 }
-      END { exit bad }
-    ' || { echo "Downloaded archive contains a forbidden non-file entry." >&2; exit 21; }
-    tar -xzf "$archive" -C "$temporary" --no-same-owner --no-same-permissions
-  fi
-  bundle="$temporary/byo-$version-$product_platform-$product_arch"
+if [ -f "$bundle" ]; then
+  case "$product_platform:$bundle" in
+    macos:*.zip|linux:*.tar.gz) ;;
+    macos:*) echo "macOS bundle archives must use the .zip format." >&2; exit 2 ;;
+    linux:*) echo "Linux bundle archives must use the .tar.gz format." >&2; exit 2 ;;
+  esac
+  archive=$bundle
+  make_temporary
+  extraction_root="$temporary/extracted"
+  mkdir -p "$extraction_root"
+  extract_archive "$archive" "$extraction_root"
+  bundle="$extraction_root/$bundle_root"
+elif [ ! -d "$bundle" ]; then
+  echo "Bundle path is not an archive or extracted directory: $bundle" >&2
+  exit 2
 fi
 
 launcher="$bundle/byo"
@@ -152,7 +217,7 @@ if [ -n "$install_dir" ]; then
   esac
 fi
 
-if [ -n "$temporary" ] && [ "$product_platform" = "macos" ]; then
+if [ "$verify_downloaded_platform_signature" -eq 1 ] && [ "$product_platform" = "macos" ]; then
   codesign --verify --deep --strict --verbose=2 "$bundle"
   spctl --assess --type execute --verbose=2 "$launcher"
 fi

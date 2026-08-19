@@ -117,6 +117,8 @@ jobs:
             --clean-run-id "${{ inputs.clean_run_id }}" \
             --safe-hil-run-id "${{ inputs.safe_hil_run_id }}" \
             --destructive-hil-run-id "${{ inputs.destructive_hil_run_id }}"
+          test -f publication/install.sh
+          test -f publication/install.ps1
 
       - name: Create draft and attach every asset
         shell: bash

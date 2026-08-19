@@ -9,6 +9,7 @@ import json
 import shutil
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
 TARGETS = {
     ("macos", "aarch64"): "macos-aarch64",
     ("macos", "x86_64"): "macos-x86_64",
@@ -125,12 +126,22 @@ def main() -> int:
             "target manifests do not expose one behavioral protocol contract"
         )
 
+    installers = []
+    for name in ("install.sh", "install.ps1"):
+        source = ROOT / name
+        if not source.is_file():
+            raise RuntimeError(f"publication installer is missing: {source}")
+        destination = args.output / name
+        shutil.copy2(source, destination)
+        installers.append({"name": name, "sha256": digest(destination)})
+
     index = {
         "schema": 1,
         "version": next(iter(versions)),
         "source": source_documents[0],
         "toolchains": dict(sorted(target_toolchains.items())),
         "artifacts": sorted(records, key=lambda value: str(value["target"])),
+        "installers": installers,
         "evidence": {
             "release_run_id": args.release_run_id,
             "clean_run_id": args.clean_run_id,

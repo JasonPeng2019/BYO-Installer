@@ -32,6 +32,34 @@ def run(
     subprocess.run(argv, cwd=cwd, env=env, check=True)
 
 
+def remap_encoded_rustflags(env: dict[str, str]) -> str:
+    """Return `CARGO_ENCODED_RUSTFLAGS` that strip build-machine paths from the
+    launcher.
+
+    rustc bakes absolute dependency source paths (panic locations and the like)
+    into the binary; `--remap-path-prefix` rewrites the cargo registry and this
+    checkout to stable placeholders so the shipped `byo` does not leak the build
+    host's home directory or internal layout. `CARGO_ENCODED_RUSTFLAGS` (0x1f
+    separated) is used instead of `RUSTFLAGS` so a checkout path containing spaces
+    is handled correctly. Any pre-existing flags are preserved. C-compiled
+    dependencies (e.g. `ring`) keep their own public build paths — those are not
+    remappable via a rustc flag and are tolerated by the leakage gate.
+    """
+    cargo_home = Path(env.get("CARGO_HOME") or (Path.home() / ".cargo")).resolve()
+    existing: list[str] = []
+    encoded = env.get("CARGO_ENCODED_RUSTFLAGS")
+    if encoded:
+        existing.extend(encoded.split("\x1f"))
+    plain = env.pop("RUSTFLAGS", None)
+    if plain:
+        existing.extend(plain.split())
+    remaps = [
+        f"--remap-path-prefix={cargo_home}=/cargo",
+        f"--remap-path-prefix={ROOT}=/src",
+    ]
+    return "\x1f".join([*existing, *remaps])
+
+
 def digest(path: Path) -> str:
     hasher = hashlib.sha256()
     with path.open("rb") as handle:
@@ -716,6 +744,9 @@ def main() -> int:
             cargo.append("--no-default-features")
             assert signing is not None
             cargo_environment["BYO_RELEASE_PUBLIC_KEYS"] = signing[2]
+        cargo_environment["CARGO_ENCODED_RUSTFLAGS"] = remap_encoded_rustflags(
+            cargo_environment
+        )
         run(cargo, cwd=ROOT / "launcher", env=cargo_environment)
     launcher = (
         ROOT / "launcher/target/release" / ("byo.exe" if os.name == "nt" else "byo")

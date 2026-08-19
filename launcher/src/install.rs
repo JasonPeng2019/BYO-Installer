@@ -431,6 +431,48 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     Ok(candidate)
 }
 
+/// Existing directories among `candidates`, dropping any nested under one already
+/// kept (on macOS/Windows `state`/`cache` live under `data`). The retained order
+/// follows the input order, so parents always precede — and thus absorb — their
+/// descendants.
+fn non_nested_existing_dirs<'a>(candidates: impl IntoIterator<Item = &'a PathBuf>) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    for dir in candidates {
+        if dir.is_dir() && !roots.iter().any(|existing| dir.starts_with(existing)) {
+            roots.push(dir.clone());
+        }
+    }
+    roots
+}
+
+/// The BYO-owned paths a `--purge-data` wipe removes, in removal order, that
+/// currently exist: the public launcher and install locator (files under the
+/// shared `bin` dir, which itself is never removed), then the non-nested data
+/// roots. This is both the operator preview shown before confirmation and the
+/// exact set `uninstall_global(paths, true)` deletes.
+pub fn purge_targets(paths: &ProductPaths) -> Vec<PathBuf> {
+    let mut targets = Vec::new();
+    if paths.public_launcher().is_file() {
+        targets.push(paths.public_launcher());
+    }
+    if paths.install_locator().is_file() {
+        targets.push(paths.install_locator());
+    }
+    targets.extend(non_nested_existing_dirs([
+        &paths.data,
+        &paths.state,
+        &paths.config,
+        &paths.cache,
+    ]));
+    targets
+}
+
+/// The BYO data roots that survive a non-purge global uninstall — reported as
+/// preserved user data in the uninstall receipt.
+pub fn remaining_data_roots(paths: &ProductPaths) -> Vec<PathBuf> {
+    non_nested_existing_dirs([&paths.data, &paths.state, &paths.config, &paths.cache])
+}
+
 pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf>> {
     let _lock = InstallLock::acquire(paths)?;
     let active: Vec<_> = crate::lease::inspect(paths, true)?
@@ -456,6 +498,27 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
         }
     }
     let mut removed = Vec::new();
+    if purge {
+        // Destructive path — reached only with `--purge-data --yes`. Remove every
+        // BYO-owned root so a purge truly leaves nothing behind, and do NOT gate on
+        // `verify_runtime`: a corrupt or half-written runtime must not be able to
+        // block a wipe the operator explicitly confirmed. `purge_targets` returns
+        // the exact set the `--purge-data` preview shows, already filtered so no
+        // entry is nested under another — so each still exists when reached and
+        // this never escapes the BYO install footprint (the shared `bin` dir is
+        // never included).
+        for target in purge_targets(paths) {
+            if target.is_dir() {
+                std::fs::remove_dir_all(&target)?;
+            } else if target == paths.public_launcher() {
+                remove_public_launcher(&target)?;
+            } else {
+                std::fs::remove_file(&target)?;
+            }
+            removed.push(target);
+        }
+        return Ok(removed);
+    }
     if paths.versions().exists() {
         for entry in std::fs::read_dir(paths.versions())? {
             let candidate = entry?.path();
@@ -483,14 +546,6 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
         std::fs::remove_file(paths.current())?;
         removed.push(paths.current());
     }
-    if purge {
-        for target in [&paths.cache, &paths.config] {
-            if target.is_dir() {
-                std::fs::remove_dir_all(target)?;
-                removed.push(target.clone());
-            }
-        }
-    }
     Ok(removed)
 }
 
@@ -507,6 +562,76 @@ mod tests {
         assert_eq!(portable_relative_path(&path).unwrap(), "versions/0.1.0");
         assert!(portable_relative_path(std::path::Path::new("")).is_err());
         assert!(portable_relative_path(std::path::Path::new("../0.1.0")).is_err());
+    }
+
+    #[test]
+    fn purge_removes_every_byo_owned_root() {
+        let root =
+            std::env::temp_dir().join(format!("byo-purge-test-{:032x}", rand::random::<u128>()));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root).unwrap();
+        for dir in [
+            &paths.data,
+            &paths.state,
+            &paths.config,
+            &paths.cache,
+            &paths.bin,
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        // Populate the roots the previous implementation left behind on purge:
+        // state/ (registry + would-be leases), staging/, and an empty versions/.
+        std::fs::create_dir_all(paths.staging()).unwrap();
+        std::fs::create_dir_all(paths.versions().join("0.1.0")).unwrap();
+        std::fs::write(paths.state.join("projects.json"), b"{}").unwrap();
+        std::fs::write(paths.current(), b"{}").unwrap();
+        std::fs::write(paths.public_launcher(), b"launcher").unwrap();
+        std::fs::write(paths.install_locator(), b"{}").unwrap();
+
+        super::uninstall_global(&paths, true).unwrap();
+
+        for leftover in [&paths.data, &paths.state, &paths.config, &paths.cache] {
+            assert!(
+                !leftover.exists(),
+                "purge left {} behind",
+                leftover.display()
+            );
+        }
+        assert!(!paths.public_launcher().exists());
+        assert!(!paths.install_locator().exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn purge_targets_match_removed_set_and_exclude_bin() {
+        let root =
+            std::env::temp_dir().join(format!("byo-purge-targets-{:032x}", rand::random::<u128>()));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root).unwrap();
+        for dir in [
+            &paths.data,
+            &paths.state,
+            &paths.config,
+            &paths.cache,
+            &paths.bin,
+        ] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(paths.public_launcher(), b"launcher").unwrap();
+        std::fs::write(paths.install_locator(), b"{}").unwrap();
+
+        let preview = super::purge_targets(&paths);
+        assert!(preview.contains(&paths.public_launcher()));
+        assert!(preview.contains(&paths.install_locator()));
+        for dir in [&paths.data, &paths.state, &paths.config, &paths.cache] {
+            assert!(preview.contains(dir), "preview missing {}", dir.display());
+        }
+        // The shared `bin` directory is never a purge target.
+        assert!(!preview.contains(&paths.bin));
+
+        // The preview must equal exactly what removal deletes, so the operator
+        // confirmation is honest.
+        let removed = super::uninstall_global(&paths, true).unwrap();
+        assert_eq!(removed, preview);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
