@@ -36,6 +36,7 @@ MAX_ENTRIES = 20_000
 GENERIC_BUILD_ACCOUNTS = frozenset(
     {
         "runner",
+        "runneradmin",  # GitHub-hosted Windows runner account
         "root",
         "sysadmin",
         "admin",

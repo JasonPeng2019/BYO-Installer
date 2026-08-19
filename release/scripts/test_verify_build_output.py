@@ -67,6 +67,23 @@ def test_shared_ci_account_paths_are_tolerated() -> None:
     assert findings == [], findings
 
 
+def test_windows_runner_account_is_tolerated() -> None:
+    # GitHub's Windows runner account is `runneradmin`; upstream Rust->Python
+    # extensions embed C:\Users\runneradmin\.cargo\... which must not fail a clean
+    # build (regression: the account was missing from the generic set).
+    leak = (
+        rb"internal error C:\Users\runneradmin\.cargo\registry\src\index\pydantic_core"
+    )
+    bundle = _bundle({"sidecar/_pydantic_core.pyd": leak})
+    needles = vbo.build_leak_needles(
+        home=Path("C:/Users/runneradmin"),
+        user="runneradmin",
+        checkout_root=None,
+        extra=[],
+    )
+    assert vbo.scan_bundle_for_leaks(bundle, needles) == []
+
+
 def test_our_checkout_path_is_flagged_even_on_ci() -> None:
     checkout = Path("/Users/runner/work/BYO-Installer/BYO-Installer")
     bundle = _bundle({"sidecar/foo.so": f"built at {checkout}/launcher".encode()})

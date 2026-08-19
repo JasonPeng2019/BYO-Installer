@@ -526,6 +526,9 @@ def main() -> int:
             raise AcceptanceFailure(
                 "product reinstall over preserved state lost .firm data"
             )
+        # Deregister the project before the global uninstall, which refuses while
+        # any project remains registered.
+        invoke([str(byo), "uninstall", "--project", str(project)], env=env)
         invoke([str(byo), "uninstall", "--global"], env=env)
 
         custom_root = root / "custom product location"
