@@ -44,8 +44,45 @@ pub struct WorkflowCatalog {
     pub schema: u32,
     pub workflow_protocol: u32,
     pub modes: Vec<CompiledMode>,
-    pub skills: BTreeMap<String, String>,
+    pub skills: BTreeMap<String, CompiledSkillEntry>,
     pub agents: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompiledSkill {
+    pub resource: String,
+    pub description: String,
+    pub disable_model_invocation: bool,
+    pub user_invocable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CompiledSkillEntry {
+    Legacy(String),
+    Current(CompiledSkill),
+}
+
+impl CompiledSkillEntry {
+    fn resource(&self) -> &str {
+        match self {
+            Self::Legacy(resource) => resource,
+            Self::Current(skill) => &skill.resource,
+        }
+    }
+
+    pub fn metadata(&self, skill_id: &str) -> CompiledSkill {
+        match self {
+            Self::Legacy(resource) => CompiledSkill {
+                resource: resource.clone(),
+                description: format!("Use the private BYO {skill_id} workflow."),
+                disable_model_invocation: true,
+                user_invocable: true,
+            },
+            Self::Current(skill) => skill.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,7 +213,9 @@ impl WorkspacePack {
         let catalog: WorkflowCatalog =
             serde_json::from_slice(&self.resource("compiled/workflow.json")?)
                 .context("compiled workflow catalog is invalid")?;
-        if catalog.schema != 1 || catalog.workflow_protocol != self.header.workflow_protocol {
+        if !matches!(catalog.schema, 1..=2)
+            || catalog.workflow_protocol != self.header.workflow_protocol
+        {
             bail!("compiled workflow catalog schema or protocol is incompatible");
         }
         for mode in &catalog.modes {
@@ -196,10 +235,18 @@ impl WorkspacePack {
                 bail!("compiled workflow catalog contains an invalid mode");
             }
         }
-        if catalog
-            .skills
+        if catalog.skills.iter().any(|(id, entry)| {
+            id.is_empty()
+                || !self.positions.contains_key(entry.resource())
+                || match entry {
+                    CompiledSkillEntry::Legacy(_) => catalog.schema != 1,
+                    CompiledSkillEntry::Current(skill) => {
+                        catalog.schema != 2 || skill.description.trim().is_empty()
+                    }
+                }
+        }) || catalog
+            .agents
             .values()
-            .chain(catalog.agents.values())
             .any(|resource| !self.positions.contains_key(resource))
         {
             bail!("compiled workflow catalog references a missing resource");
@@ -224,7 +271,7 @@ impl WorkspacePack {
             .skills
             .get(skill)
             .with_context(|| format!("compiled skill is missing: {skill}"))?;
-        self.resource(resource)
+        self.resource(resource.resource())
     }
 
     pub fn agent_resource(&self, agent: &str) -> Result<Vec<u8>> {
@@ -234,5 +281,20 @@ impl WorkspacePack {
             .get(agent)
             .with_context(|| format!("compiled agent is missing: {agent}"))?;
         self.resource(resource)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompiledSkillEntry;
+
+    #[test]
+    fn legacy_skill_catalog_entries_receive_safe_loader_metadata() {
+        let entry = CompiledSkillEntry::Legacy("skills-src/firmware/mcp-help/SKILL.md".to_string());
+        let metadata = entry.metadata("mcp-help");
+        assert_eq!(metadata.resource, "skills-src/firmware/mcp-help/SKILL.md");
+        assert!(metadata.description.contains("mcp-help"));
+        assert!(metadata.disable_model_invocation);
+        assert!(metadata.user_invocable);
     }
 }

@@ -708,69 +708,46 @@ fn run() -> Result<i32> {
         }
         Command::Uninstall(arguments) => {
             let receipt = if arguments.global {
-                if arguments.purge_data && !arguments.yes {
-                    // Show the operator exactly what a purge would delete, then
-                    // refuse until they confirm with --yes. This is the explicit
-                    // target preview the refusal message refers to.
-                    let targets = install::purge_targets(&paths);
-                    eprintln!("--purge-data would permanently remove these BYO roots:");
-                    if targets.is_empty() {
-                        eprintln!("  (nothing — no BYO installation detected)");
-                    } else {
-                        for target in &targets {
-                            eprintln!("  {}", target.display());
-                        }
-                    }
-                    return Err(error::fail(
-                        ExitCategory::Uninstall,
-                        "--purge-data requires --yes to confirm the wipe shown above",
-                    ));
-                }
-                // Reverse only the PATH edits BYO itself recorded, before the
-                // state directory (which holds the record) is touched.
-                let reverted = categorize(
-                    path_setup::revert_recorded_edits(&paths),
-                    ExitCategory::Uninstall,
-                )?;
-                let removed = categorize(
-                    install::uninstall_global(&paths, arguments.purge_data),
-                    ExitCategory::Uninstall,
-                )?;
-                let preserved = if arguments.purge_data {
-                    Vec::new()
-                } else {
-                    install::remaining_data_roots(&paths)
-                };
+                let outcome =
+                    categorize(install::uninstall_global(&paths), ExitCategory::Uninstall)?;
                 UninstallReceipt {
                     scope: "global",
-                    purge: arguments.purge_data,
-                    note: None,
-                    removed,
-                    preserved,
-                    reverted,
+                    purge: true,
+                    note: Some(
+                        "purged every registered BYO project before removing global BYO application data"
+                            .to_string(),
+                    ),
+                    project_integrations: outcome.project_integrations,
+                    removed: outcome.removed,
+                    preserved: Vec::new(),
+                    reverted: outcome.reverted_path_edits,
                 }
             } else {
                 let project = categorize(
                     project::canonical_project(arguments.project.as_deref(), &paths),
                     ExitCategory::ProjectRoot,
                 )?;
-                let preserved = categorize(
-                    project::uninstall_project(&project, &paths),
+                let outcome = categorize(
+                    project::uninstall_project(&project, &paths, arguments.purge),
                     ExitCategory::Uninstall,
-                )?
-                .into_iter()
-                .map(|relative| project.join(relative))
-                .collect();
+                )?;
                 UninstallReceipt {
-                    scope: "project",
-                    purge: false,
-                    note: Some(
-                        "removed BYO-managed integration blocks in place; the listed \
-                         paths were preserved"
-                            .to_string(),
-                    ),
-                    removed: Vec::new(),
-                    preserved,
+                    scope: if arguments.purge {
+                        "project-purge"
+                    } else {
+                        "project"
+                    },
+                    purge: arguments.purge,
+                    note: Some(if arguments.purge {
+                        "removed the project integration and all dedicated project-local BYO data"
+                            .to_string()
+                    } else {
+                        "removed BYO integration files and entries; retained project working data is listed below"
+                            .to_string()
+                    }),
+                    project_integrations: vec![project],
+                    removed: outcome.removed,
+                    preserved: outcome.preserved,
                     reverted: Vec::new(),
                 }
             };
@@ -830,6 +807,8 @@ struct UninstallReceipt {
     purge: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    project_integrations: Vec<std::path::PathBuf>,
     removed: Vec<std::path::PathBuf>,
     preserved: Vec<std::path::PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -838,11 +817,16 @@ struct UninstallReceipt {
 
 impl UninstallReceipt {
     fn print(&self) {
-        let mode = if self.purge { " --purge-data" } else { "" };
+        let mode = if self.scope == "project-purge" {
+            " --purge"
+        } else {
+            ""
+        };
         println!("BYO uninstall receipt (scope: {}{})", self.scope, mode);
         if let Some(note) = &self.note {
             println!("Note: {note}");
         }
+        Self::print_section("Removed project integrations", &self.project_integrations);
         Self::print_section("Removed", &self.removed);
         Self::print_section("Preserved", &self.preserved);
         if !self.reverted.is_empty() {

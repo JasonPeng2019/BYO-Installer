@@ -195,17 +195,46 @@ pub struct RepairArgs {
 
 #[derive(Debug, Args)]
 pub struct UninstallArgs {
-    #[arg(long)]
+    #[arg(long, conflicts_with = "global")]
     pub project: Option<PathBuf>,
-    #[arg(long)]
+    /// Remove every registered project integration and all global BYO data.
+    #[arg(long, conflicts_with = "purge")]
     pub global: bool,
+    /// Remove this project's integration and all project-local BYO data.
     #[arg(long)]
-    pub purge_data: bool,
-    #[arg(long)]
-    pub yes: bool,
+    pub purge: bool,
     /// Also write a machine-readable JSON uninstall receipt to this path.
     #[arg(long)]
     pub receipt: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+
+    #[test]
+    fn uninstall_exposes_three_non_overlapping_modes() {
+        for arguments in [
+            vec!["byo", "uninstall"],
+            vec!["byo", "uninstall", "--purge"],
+            vec!["byo", "uninstall", "--global"],
+        ] {
+            Cli::try_parse_from(arguments).expect("supported uninstall form should parse");
+        }
+        for arguments in [
+            vec!["byo", "uninstall", "--global", "--purge"],
+            vec!["byo", "uninstall", "--global", "--project", "."],
+            vec!["byo", "uninstall", "--purge-data"],
+            vec!["byo", "uninstall", "--yes"],
+        ] {
+            assert!(
+                Cli::try_parse_from(arguments).is_err(),
+                "unsupported uninstall form parsed successfully"
+            );
+        }
+    }
 }
 
 #[derive(Debug, Args)]

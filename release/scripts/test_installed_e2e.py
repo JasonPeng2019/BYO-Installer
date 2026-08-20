@@ -197,6 +197,10 @@ def main() -> int:
         (project / ".claude" / "settings.json").write_text(
             '{"unrelated":{"preserved":true}}\n', encoding="utf-8"
         )
+        (project / ".claude" / "settings.local.json").write_text(
+            '{"enabledMcpjsonServers":["byo","customer"],"unrelated":true}\n',
+            encoding="utf-8",
+        )
         (project / ".mcp.json").write_text(
             '{"mcpServers":{"customer":{"command":"customer-server"}}}\n',
             encoding="utf-8",
@@ -324,6 +328,20 @@ def main() -> int:
             raise AcceptanceFailure("init changed an unrelated Claude MCP server")
         if claude_mcp.get("mcpServers", {}).get("byo", {}).get("command") != "byo":
             raise AcceptanceFailure("init did not configure the Claude BYO MCP server")
+        for skill_id in ("mcp-help", "verify", "board-setup"):
+            loader = project / f".claude/skills/{skill_id}/SKILL.md"
+            if not loader.is_file():
+                raise AcceptanceFailure(
+                    f"init did not project native Claude skill {skill_id}"
+                )
+            loader_text = loader.read_text(encoding="utf-8")
+            if (
+                f"name: {skill_id}" not in loader_text
+                or f"!`byo workflow guidance {skill_id}`" not in loader_text
+            ):
+                raise AcceptanceFailure(
+                    f"Claude skill loader {skill_id} does not load private guidance"
+                )
         if "Preserve this text." not in (project / "AGENTS.md").read_text(
             encoding="utf-8"
         ):
@@ -440,7 +458,13 @@ def main() -> int:
             env=env,
             expected=11,
         )
-        invoke([str(byo), "uninstall", "--global"], env=env, expected=42)
+        blocked_uninstall = invoke(
+            [str(byo), "uninstall", "--global"], env=env, expected=42
+        )
+        if str(project) not in blocked_uninstall.stderr:
+            raise AcceptanceFailure(
+                "lease-blocked global uninstall did not report the registered project"
+            )
         stop_mcp(mcp)
         if list((home / "state" / "leases").glob("*.json")):
             raise AcceptanceFailure("runtime lease remained after MCP exit")
@@ -478,14 +502,12 @@ def main() -> int:
         unicode_project.mkdir()
         invoke([str(byo), "init", "--project", str(unicode_project)], env=offline_env)
         invoke([str(byo), "doctor", "--project", str(unicode_project)], env=env)
-        invoke([str(byo), "uninstall", "--project", str(unicode_project)], env=env)
 
         monorepo = root / "monorepo"
         nested_project = monorepo / "firmware" / "board"
         nested_project.mkdir(parents=True)
         (monorepo / ".git").mkdir()
         invoke([str(byo), "init", "--project", str(nested_project)], env=offline_env)
-        invoke([str(byo), "uninstall", "--project", str(nested_project)], env=env)
 
         if os.name != "nt" and (not hasattr(os, "geteuid") or os.geteuid() != 0):
             read_only = root / "read only project"
@@ -527,29 +549,70 @@ def main() -> int:
             raise AcceptanceFailure(
                 "project uninstall removed unrelated CLAUDE.md content"
             )
+        local_settings = json.loads(
+            (project / ".claude/settings.local.json").read_text(encoding="utf-8")
+        )
+        if "byo" in local_settings.get("enabledMcpjsonServers", []):
+            raise AcceptanceFailure("project uninstall left Claude's BYO MCP approval")
+        if local_settings.get("enabledMcpjsonServers") != ["customer"]:
+            raise AcceptanceFailure(
+                "project uninstall changed another Claude MCP approval"
+            )
+
+        purge_project = root / "purge project"
+        purge_project.mkdir()
+        customer_file = purge_project / "customer.txt"
+        customer_file.write_text("preserve\n", encoding="utf-8")
+        invoke([str(byo), "init", "--project", str(purge_project)], env=offline_env)
+        (purge_project / ".firm" / "purge-me").parent.mkdir(exist_ok=True)
+        (purge_project / ".firm" / "purge-me").write_text("remove\n", encoding="utf-8")
+        invoke(
+            [str(byo), "uninstall", "--purge", "--project", str(purge_project)],
+            env=env,
+        )
+        for relative in (
+            ".agent-workspace",
+            ".agent-backups",
+            ".firm",
+            ".generated/byo",
+        ):
+            if (purge_project / relative).exists():
+                raise AcceptanceFailure(
+                    f"project purge left dedicated BYO path {relative}"
+                )
+        if not customer_file.is_file():
+            raise AcceptanceFailure("project purge removed unrelated project content")
+
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
         if not firm_marker.is_file():
             raise AcceptanceFailure("reinstall over preserved state removed .firm data")
-        invoke([str(byo), "uninstall", "--project", str(project)], env=env)
-        invoke([str(byo), "uninstall", "--global"], env=env)
+        global_receipt = invoke([str(byo), "uninstall", "--global"], env=env)
+        for registered_project in (project, unicode_project, nested_project):
+            if str(registered_project) not in global_receipt.stdout:
+                raise AcceptanceFailure(
+                    "global uninstall receipt omitted a project integration: "
+                    f"{registered_project}"
+                )
+            if (registered_project / ".agent-workspace/manifest.json").exists():
+                raise AcceptanceFailure(
+                    "global uninstall left a registered project integration: "
+                    f"{registered_project}"
+                )
+        if firm_marker.exists() or (project / ".firm").exists():
+            raise AcceptanceFailure("global uninstall did not purge project .firm data")
         if byo.exists() or (home / "data/current.json").exists():
             raise AcceptanceFailure(
                 "global uninstall left the active launcher or pointer"
             )
 
-        # Clean-machine: reinstalling the product over a project whose .firm was
-        # preserved across a full global uninstall must recover the project.
+        # Clean-machine: reinstalling after a full global purge must recreate a
+        # usable project integration from scratch.
         invoke(install_command, env=env, cwd=ROOT)
         if not byo.is_file():
             raise AcceptanceFailure("product reinstall did not restore the launcher")
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
-        if not firm_marker.is_file():
-            raise AcceptanceFailure(
-                "product reinstall over preserved state lost .firm data"
-            )
-        # Deregister the project before the global uninstall, which refuses while
-        # any project remains registered.
-        invoke([str(byo), "uninstall", "--project", str(project)], env=env)
+        if firm_marker.exists():
+            raise AcceptanceFailure("product reinstall resurrected purged .firm data")
         invoke([str(byo), "uninstall", "--global"], env=env)
 
         custom_root = root / "custom product location"

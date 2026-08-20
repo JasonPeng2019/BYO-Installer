@@ -211,6 +211,62 @@ def _valid_identifier(value: str) -> bool:
     )
 
 
+def _frontmatter_scalar(lines: list[str], key: str, path: Path) -> str:
+    prefix = f"{key}:"
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        value = line[len(prefix) :].strip()
+        if value in {">", ">-", "|", "|-"}:
+            parts: list[str] = []
+            for continuation in lines[index + 1 :]:
+                if continuation and not continuation[0].isspace():
+                    break
+                stripped = continuation.strip()
+                if stripped:
+                    parts.append(stripped)
+            value = " ".join(parts)
+        elif len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if not value:
+            raise CompileError(f"{path} has an empty {key!r} frontmatter value")
+        return value
+    raise CompileError(f"{path} is missing {key!r} frontmatter")
+
+
+def _frontmatter_bool(lines: list[str], key: str, path: Path) -> bool:
+    value = _frontmatter_scalar(lines, key, path)
+    if value not in {"true", "false"}:
+        raise CompileError(f"{path} {key!r} must be true or false")
+    return value == "true"
+
+
+def _skill_metadata(path: Path, source: Path) -> dict[str, object]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise CompileError(f"skill is not UTF-8: {path}") from exc
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        raise CompileError(f"{path} is missing YAML frontmatter")
+    try:
+        end = lines.index("---", 1)
+    except ValueError as exc:
+        raise CompileError(f"{path} has unterminated YAML frontmatter") from exc
+    frontmatter = lines[1:end]
+    name = _frontmatter_scalar(frontmatter, "name", path)
+    if name != path.parent.name or not _valid_identifier(name):
+        raise CompileError(f"skill identity mismatch in {path}")
+    return {
+        "resource": path.relative_to(source).as_posix(),
+        "description": _frontmatter_scalar(frontmatter, "description", path),
+        "disable_model_invocation": _frontmatter_bool(
+            frontmatter, "disable-model-invocation", path
+        ),
+        "user_invocable": _frontmatter_bool(frontmatter, "user-invocable", path),
+    }
+
+
 def _compile_modes(source: Path) -> bytes:
     mode_dir = source / "modes"
     raw_modes: dict[str, dict[str, object]] = {}
@@ -259,14 +315,14 @@ def _compile_modes(source: Path) -> bytes:
             raise CompileError(f"mode {name!r} resolves to multiple families")
         return next(iter(roots))
 
-    available_skills: dict[str, str] = {}
+    available_skills: dict[str, dict[str, object]] = {}
     for skill_path in sorted((source / "skills-src").glob("*/*/SKILL.md")):
         skill_id = skill_path.parent.name
         if not _valid_identifier(skill_id):
             raise CompileError(f"invalid skill identifier {skill_id!r}")
         if skill_id in available_skills:
             raise CompileError(f"duplicate skill identifier {skill_id!r}")
-        available_skills[skill_id] = skill_path.relative_to(source).as_posix()
+        available_skills[skill_id] = _skill_metadata(skill_path, source)
 
     compiled_modes: list[dict[str, object]] = []
     for name in sorted(raw_modes):
@@ -382,7 +438,7 @@ def _compile_modes(source: Path) -> bytes:
             raise CompileError(f"invalid agent identifier {agent_id!r}")
         agents[agent_id] = path.relative_to(source).as_posix()
     payload = {
-        "schema": 1,
+        "schema": 2,
         "workflow_protocol": 1,
         "modes": compiled_modes,
         "skills": available_skills,

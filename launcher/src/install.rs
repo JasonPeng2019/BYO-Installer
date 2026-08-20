@@ -461,11 +461,10 @@ fn non_nested_existing_dirs<'a>(candidates: impl IntoIterator<Item = &'a PathBuf
     roots
 }
 
-/// The BYO-owned paths a `--purge-data` wipe removes, in removal order, that
+/// The BYO-owned paths a global uninstall removes, in removal order, that
 /// currently exist: the public launcher and install locator (files under the
 /// shared `bin` dir, which itself is never removed), then the non-nested data
-/// roots. This is both the operator preview shown before confirmation and the
-/// exact set `uninstall_global(paths, true)` deletes.
+/// roots. This is the exact global product footprint removed after project purge.
 pub fn purge_targets(paths: &ProductPaths) -> Vec<PathBuf> {
     let mut targets = Vec::new();
     if paths.public_launcher().is_file() {
@@ -483,46 +482,57 @@ pub fn purge_targets(paths: &ProductPaths) -> Vec<PathBuf> {
     targets
 }
 
-/// The BYO data roots that survive a non-purge global uninstall — reported as
-/// preserved user data in the uninstall receipt.
-pub fn remaining_data_roots(paths: &ProductPaths) -> Vec<PathBuf> {
-    non_nested_existing_dirs([&paths.data, &paths.state, &paths.config, &paths.cache])
+#[derive(Debug)]
+pub struct GlobalUninstallOutcome {
+    pub removed: Vec<PathBuf>,
+    pub project_integrations: Vec<PathBuf>,
+    pub reverted_path_edits: Vec<String>,
 }
 
-pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf>> {
+fn project_locations(projects: &[PathBuf]) -> String {
+    if projects.is_empty() {
+        return "  (none registered)".to_string();
+    }
+    projects
+        .iter()
+        .map(|project| format!("  {}", project.display()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> {
     let _lock = InstallLock::acquire(paths)?;
+    let registered = crate::project::registered_projects(paths)?;
+    let registered_paths: Vec<_> = registered
+        .iter()
+        .map(|project| project.path.clone())
+        .collect();
     let active: Vec<_> = crate::lease::inspect(paths, true)?
         .into_iter()
         .filter(|status| status.live)
         .collect();
     if !active.is_empty() {
         bail!(
-            "global uninstall refused while {} MCP runtime lease(s) are active",
-            active.len()
+            "global uninstall refused while {} MCP runtime lease(s) are active\nRegistered project integrations:\n{}",
+            active.len(),
+            project_locations(&registered_paths)
         );
     }
-    let registry = paths.state.join("projects.json");
-    if registry.is_file() {
-        let projects: std::collections::BTreeMap<String, String> =
-            serde_json::from_slice(&std::fs::read(&registry)?)
-                .context("global project registry is invalid")?;
-        if !projects.is_empty() {
-            bail!(
-                "global uninstall refused while {} project(s) remain registered; uninstall their BYO integration first",
-                projects.len()
-            );
-        }
-    }
-    let mut removed = Vec::new();
-    if purge {
-        // Destructive path — reached only with `--purge-data --yes`. Remove every
-        // BYO-owned root so a purge truly leaves nothing behind, and do NOT gate on
-        // `verify_runtime`: a corrupt or half-written runtime must not be able to
-        // block a wipe the operator explicitly confirmed. `purge_targets` returns
-        // the exact set the `--purge-data` preview shows, already filtered so no
-        // entry is nested under another — so each still exists when reached and
-        // this never escapes the BYO install footprint (the shared `bin` dir is
-        // never included).
+    let plans = crate::project::plan_registered_project_uninstalls(paths, &registered)?;
+    let project_cleanup = crate::project::apply_registered_project_uninstalls(plans, paths)?;
+    let reverted_path_edits = crate::path_setup::revert_recorded_edits(paths).with_context(|| {
+        format!(
+            "project integrations were removed, but recorded PATH cleanup failed\nRemoved project integrations:\n{}",
+            project_locations(&project_cleanup.projects)
+        )
+    })?;
+
+    let removal = (|| -> Result<Vec<PathBuf>> {
+        let mut removed = project_cleanup.removed.clone();
+        // `--global` is the explicit full-removal request. Remove every BYO-owned
+        // root and do not gate on `verify_runtime`: a corrupt runtime must not be
+        // able to block a requested wipe. The preview helper returns non-nested,
+        // product-scoped targets and never includes the shared bin directory.
         for target in purge_targets(paths) {
             if target.is_dir() {
                 std::fs::remove_dir_all(&target)?;
@@ -533,36 +543,22 @@ pub fn uninstall_global(paths: &ProductPaths, purge: bool) -> Result<Vec<PathBuf
             }
             removed.push(target);
         }
-        return Ok(removed);
-    }
-    if paths.versions().exists() {
-        for entry in std::fs::read_dir(paths.versions())? {
-            let candidate = entry?.path();
-            if candidate.is_dir() {
-                verify_runtime(&candidate).with_context(|| {
-                    format!(
-                        "refusing to remove unverified runtime directory {}",
-                        candidate.display()
-                    )
-                })?;
-                std::fs::remove_dir_all(&candidate)?;
-                removed.push(candidate);
-            }
+        Ok(removed)
+    })();
+    let removed = match removal {
+        Ok(removed) => removed,
+        Err(error) => {
+            bail!(
+                "global product removal failed after registered project integrations were removed: {error:#}\nRemoved project integrations:\n{}",
+                project_locations(&project_cleanup.projects)
+            )
         }
-    }
-    if paths.public_launcher().is_file() {
-        remove_public_launcher(&paths.public_launcher())?;
-        removed.push(paths.public_launcher());
-    }
-    if paths.install_locator().is_file() {
-        std::fs::remove_file(paths.install_locator())?;
-        removed.push(paths.install_locator());
-    }
-    if paths.current().is_file() {
-        std::fs::remove_file(paths.current())?;
-        removed.push(paths.current());
-    }
-    Ok(removed)
+    };
+    Ok(GlobalUninstallOutcome {
+        removed,
+        project_integrations: project_cleanup.projects,
+        reverted_path_edits,
+    })
 }
 
 #[cfg(test)]
@@ -571,6 +567,57 @@ mod tests {
 
     #[cfg(windows)]
     use super::remove_public_launcher;
+
+    fn write_registered_project(
+        paths: &crate::paths::ProductPaths,
+        project: &std::path::Path,
+        project_id: &str,
+    ) -> std::path::PathBuf {
+        std::fs::create_dir_all(project.join(".agent-workspace")).unwrap();
+        std::fs::create_dir_all(project.join(".generated/byo")).unwrap();
+        std::fs::create_dir_all(project.join(".firm")).unwrap();
+        std::fs::write(project.join(".firm/preserved"), b"user data").unwrap();
+        std::fs::write(project.join(".agent-workspace/PLAN.md"), b"user plan").unwrap();
+        crate::manifest::write_json(
+            &project.join(".agent-workspace/manifest.json"),
+            &serde_json::json!({
+                "schema": 1,
+                "product": "byo",
+                "workspace_version": "test",
+                "workflow_protocol": 1,
+                "minimum_launcher": "0.1.0",
+                "maximum_launcher": "0.x",
+                "minimum_mcp_protocol": 1,
+                "project_id": project_id,
+                "mode": "firmware",
+                "installed_at": "2026-08-20T00:00:00Z",
+                "managed_inventory_sha256": "unused-in-test"
+            }),
+        )
+        .unwrap();
+        crate::manifest::write_json(
+            &project.join(".generated/byo/projection-manifest.json"),
+            &serde_json::json!({
+                "schema": 1,
+                "managed_files": [],
+                "agents_block_sha256": "unused-in-test",
+                "codex_server_sha256": "unused-in-test",
+                "codex_hooks_sha256": "unused-in-test"
+            }),
+        )
+        .unwrap();
+        let project = project.canonicalize().unwrap();
+        std::fs::create_dir_all(&paths.state).unwrap();
+        let registry_path = paths.state.join("projects.json");
+        let mut registry: std::collections::BTreeMap<String, String> = if registry_path.is_file() {
+            serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+        registry.insert(project_id.to_string(), project.display().to_string());
+        crate::manifest::write_json(&registry_path, &registry).unwrap();
+        project
+    }
 
     #[test]
     fn current_runtime_paths_use_portable_separators() {
@@ -603,7 +650,7 @@ mod tests {
         std::fs::write(paths.public_launcher(), b"launcher").unwrap();
         std::fs::write(paths.install_locator(), b"{}").unwrap();
 
-        super::uninstall_global(&paths, true).unwrap();
+        super::uninstall_global(&paths).unwrap();
 
         for leftover in [&paths.data, &paths.state, &paths.config, &paths.cache] {
             assert!(
@@ -643,11 +690,84 @@ mod tests {
         // The shared `bin` directory is never a purge target.
         assert!(!preview.contains(&paths.bin));
 
-        // The preview must equal exactly what removal deletes, so the operator
-        // confirmation is honest.
-        let removed = super::uninstall_global(&paths, true).unwrap();
-        assert_eq!(removed, preview);
+        let outcome = super::uninstall_global(&paths).unwrap();
+        assert_eq!(outcome.removed, preview);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn global_uninstall_removes_registered_project_integrations_first() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-global-project-cleanup-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let project = write_registered_project(&paths, &root.join("project"), "project-a");
+
+        let outcome = super::uninstall_global(&paths).unwrap();
+
+        assert_eq!(
+            outcome.project_integrations.as_slice(),
+            std::slice::from_ref(&project)
+        );
+        assert!(!project.join(".agent-workspace/manifest.json").exists());
+        assert!(!project
+            .join(".generated/byo/projection-manifest.json")
+            .exists());
+        assert!(!project.join(".agent-workspace").exists());
+        assert!(!project.join(".firm").exists());
+        assert!(!paths.state.exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn global_uninstall_deduplicates_stale_registry_aliases_by_project_path() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-global-project-alias-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let project = write_registered_project(&paths, &root.join("project"), "project-current");
+        let registry_path = paths.state.join("projects.json");
+        let mut registry: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+        registry.insert("stale-alias".to_string(), project.display().to_string());
+        crate::manifest::write_json(&registry_path, &registry).unwrap();
+
+        let outcome = super::uninstall_global(&paths).unwrap();
+
+        assert_eq!(outcome.project_integrations, vec![project.clone()]);
+        assert!(!project.join(".agent-workspace").exists());
+        assert!(!project.join(".firm").exists());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn global_uninstall_preflight_names_every_project_and_changes_nothing() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-global-project-preflight-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let valid = write_registered_project(&paths, &root.join("valid project"), "project-a");
+        let missing = root.join("missing project");
+        let registry_path = paths.state.join("projects.json");
+        let mut registry: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+        registry.insert("project-b".to_string(), missing.display().to_string());
+        crate::manifest::write_json(&registry_path, &registry).unwrap();
+        std::fs::write(paths.state.join("path-edits.json"), b"untouched").unwrap();
+
+        let error = super::uninstall_global(&paths).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(&valid.display().to_string()));
+        assert!(message.contains(&missing.display().to_string()));
+        assert!(valid.join(".agent-workspace/manifest.json").is_file());
+        assert_eq!(
+            std::fs::read(paths.state.join("path-edits.json")).unwrap(),
+            b"untouched"
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -37,6 +37,7 @@ jobs:
 
       - name: Release script unit tests
         run: |
+          python3 release/scripts/test_compile_workspace.py
           python3 release/scripts/test_verify_build_output.py
           python3 release/scripts/test_build_release.py
 
