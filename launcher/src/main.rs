@@ -791,12 +791,27 @@ fn run() -> Result<i32> {
                 manifest.version,
                 paths.public_launcher().display()
             );
-            if !env::var_os("PATH")
+            if arguments.modify_path {
+                // Route the edit through the same recorded mechanism as
+                // `byo init --modify-path`, so `uninstall --global` reverses
+                // exactly this entry and nothing else.
+                match categorize(path_setup::add_bin_to_path(&paths), ExitCategory::Installer)? {
+                    path_setup::PathSetupOutcome::AlreadyPresent => {
+                        println!("PATH already includes {}", paths.bin.display());
+                    }
+                    path_setup::PathSetupOutcome::Configured { target } => {
+                        println!(
+                            "Added {} to PATH in {target}; open a new shell to use `byo`.",
+                            paths.bin.display()
+                        );
+                    }
+                }
+            } else if !env::var_os("PATH")
                 .map(|value| env::split_paths(&value).any(|entry| entry == paths.bin))
                 .unwrap_or(false)
             {
                 eprintln!(
-                    "PATH note: add {} to PATH in your shell profile.",
+                    "PATH note: add {} to PATH in your shell profile, or re-run install with --modify-path.",
                     paths.bin.display()
                 );
             }

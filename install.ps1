@@ -3,7 +3,8 @@ param(
     [string]$Version,
     [string]$BaseUrl,
     [string]$Sha256,
-    [string]$InstallDir
+    [string]$InstallDir,
+    [switch]$ModifyPath
 )
 
 $ErrorActionPreference = "Stop"
@@ -218,11 +219,19 @@ try {
             [System.IO.Path]::GetFullPath($InstallDir)
         )
     }
+    if ($ModifyPath) {
+        $installArguments += "--modify-path"
+    }
     & $launcher @installArguments
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
-    Write-Host "BYO installed. Add the bin path reported by 'byo paths' to PATH if needed."
+    if ($ModifyPath) {
+        Write-Host "BYO installed and added to PATH. Open a new terminal, then run 'byo'."
+    }
+    else {
+        Write-Host "BYO installed. Add the bin path reported by 'byo paths' to PATH if needed (or re-run install with -ModifyPath)."
+    }
 }
 finally {
     if ($temporary -and (Test-Path -LiteralPath $temporary)) {

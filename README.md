@@ -225,8 +225,30 @@ To install below `$HOME/Applications/BYO` instead, add
 
 ## Put `byo` on `PATH`
 
-The installer prints the public launcher directory. Open a new terminal after
-installation. If `byo` is still not found, add that directory to `PATH`.
+By default the installer does **not** modify any shell profile — it prints the
+public launcher directory and leaves `PATH` to you. To have installation put the
+`byo` bin directory on `PATH` for you, pass the opt-in flag:
+
+```sh
+# macOS or Linux
+./install.sh --bundle <byo-archive-or-extracted-bundle> --modify-path
+```
+
+```powershell
+# Windows
+./install.ps1 -Bundle <byo-archive-or-extracted-bundle> -ModifyPath
+```
+
+This appends a single marked block to the login shell's profile (`.zshrc` /
+`.bashrc` / `.profile`) on macOS or Linux, or the `HKCU\Environment\Path` user
+variable on Windows, and **records each edit** so that `byo uninstall --global`
+reverses exactly what was added and nothing else. Open a new terminal
+afterward. (The same edit is available post-install via `byo init
+--modify-path`.)
+
+To put `byo` on `PATH` manually instead — open a new terminal after
+installation, and if `byo` is still not found, add the launcher directory to
+`PATH`.
 
 For the default macOS or Linux installation, update the current shell with:
 
@@ -245,7 +267,8 @@ For a custom installation, add its `bin` directory instead—for example,
 `$HOME/Applications/BYO/bin` on macOS or Linux, or
 `$HOME\Applications\BYO\bin` on Windows. To make the change persistent, add it
 to the user's shell profile or Windows user environment settings. The
-installer deliberately does not modify either.
+installer does not modify either unless you pass `--modify-path`
+(`-ModifyPath` on Windows).
 
 Confirm the active product paths and runtime:
 

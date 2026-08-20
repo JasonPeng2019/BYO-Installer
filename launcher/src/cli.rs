@@ -214,6 +214,12 @@ pub struct InstallRuntimeArgs {
     pub bundle: PathBuf,
     #[arg(long)]
     pub install_dir: Option<PathBuf>,
+    /// Opt in to putting the BYO bin directory on PATH at install time, recorded
+    /// so uninstall can reverse exactly what was added. Same mechanism as
+    /// `byo init --modify-path`; lets the bootstrap scripts offer PATH setup
+    /// directly instead of printing a manual hint.
+    #[arg(long)]
+    pub modify_path: bool,
 }
 
 #[derive(Debug, Args)]
