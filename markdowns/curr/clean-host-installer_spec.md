@@ -1,4 +1,4 @@
-> STATUS: IMPLEMENTED LOCALLY - agent-verifiable checks are clean; native Windows CI and release publication remain pending.
+> STATUS: COMPLETE - implemented, native CI passed on all four targets, and the repaired preview was published and post-download verified.
 
 # Clean-host installer portability
 
@@ -21,15 +21,15 @@ Out of scope:
 
 - changing the pinned Firmware MCP or AgentWorkspace commits;
 - code signing, notarization, or enabling the signed network installer;
-- publishing or replacing GitHub release assets without separate authorization;
+- publishing or replacing GitHub release assets as part of the original implementation scope (publication was separately authorized and completed afterward);
 - hardware validation, because both failures occur before any probe access.
 
 ## Reconciliation summary
 
-- Published release: the current macOS Intel archive matches its published SHA-256 and installs successfully when the exact release-note snippet supplies its extracted directory.
-- Current bootstrap: `install.sh` decides archive format from the filename suffix before invoking the safe extractor, so a valid ZIP with a renamed or suffixless download produces the reported `.zip format` error.
-- Current launcher: `ProductPaths::resolve()` fetches and validates `HOME` before the Windows-only `LOCALAPPDATA` / `APPDATA` branch can run.
-- Current acceptance test: Windows removes `HOME`, but also sets `BYO_HOME`, which returns before the defective default-path branch and therefore masks the bug.
+- Pre-repair published release: the macOS Intel archive matched its published SHA-256 and installed successfully when the exact release-note snippet supplied its extracted directory.
+- Before repair, `install.sh` decided archive format from the filename suffix before invoking the safe extractor, so a valid ZIP with a renamed or suffixless download produced the reported `.zip format` error.
+- Before repair, `ProductPaths::resolve()` fetched and validated `HOME` before the Windows-only `LOCALAPPDATA` / `APPDATA` branch could run.
+- Before the regression update, the Windows acceptance test removed `HOME` but also set `BYO_HOME`, returning before the defective default-path branch and masking the bug.
 - Source locks: remain unchanged; this is launcher/bootstrap work only.
 
 ## Design
@@ -65,11 +65,11 @@ Out of scope:
 - A malformed regular file is rejected as an invalid platform archive.
 - On Windows, default path resolution succeeds with `LOCALAPPDATA` and `APPDATA` set and both `HOME` and `BYO_HOME` absent.
 - Existing custom `BYO_HOME` and installation-locator behavior remains unchanged.
-- No Firmware MCP, workflow pack, source lock, or release payload content changes.
+- No Firmware MCP, workflow pack, or source-lock changes; release payload changes are limited to the installer/launcher portability repair.
 
 ## Verified
 
-- Published macOS x86_64 asset SHA-256: `e7d6196c723e2252da00fdc825361154c97cf9e53eb024b3749d9becca555d4d`.
+- Pre-repair published macOS x86_64 asset SHA-256: `e7d6196c723e2252da00fdc825361154c97cf9e53eb024b3749d9becca555d4d`.
 - Exact published macOS x86_64 release-note flow installed and `byo status` reported runtime `0.1.1` on macOS Intel.
 - Source inspection reproduced the Windows early-`HOME` dependency and the acceptance-test masking condition.
 - Before the fix, the published macOS ZIP copied to a suffixless filename exited 2 with `macOS bundle archives must use the .zip format.`
@@ -77,9 +77,11 @@ Out of scope:
 - Full installed macOS x86_64 acceptance passed against the published archive, including install, init, MCP startup, uninstall/reinstall, custom-location rediscovery, and the suffixless bootstrap input.
 - `sh -n install.sh`, `git diff --check`, Rust format, clippy with warnings denied, all 39 launcher tests, and the optimized launcher build passed.
 - Ruff check/format passed for the changed E2E script; release verification tests passed 11/11 and release-build tests passed 3/3.
+- Native build-matrix run `32411329430` passed macOS Apple silicon, macOS Intel, Windows x86-64, and Linux x86-64, including packaging, archive verification, and installed E2E on every target.
+- The Windows native E2E completed the default install/status/uninstall cycle with both `HOME` and `BYO_HOME` absent; the Linux and both macOS jobs passed the suffixless-archive regression.
+- The ten public `v0.1.1-preview` assets were replaced from the exact CI artifacts, downloaded again, and confirmed byte-for-byte identical; all four receipts and archive-integrity checks passed.
+- Published bundle SHA-256 values: macOS ARM `108362e267d1c5b3f364ff38892a61f2cb2353fd5112c112726bfccc45b253dd`, macOS Intel `0d3048cfbc2dec85d33ed09eeb79e27e06ac695411ae7d8860912906ce6db838`, Windows `7621a825e4b5b723422348f37a7bc7c438b6cbd99c9f1db8a124cb2668a0f8be`, and Linux `3b0d29badcaca6854304d23aae14b01c41d958c938811d5e65c00fbba3d4a97a`.
 
 ## Pending verification
 
-- Native Windows build-matrix E2E, including PowerShell parsing and the default install with `HOME` / `BYO_HOME` absent.
-- Native Linux build-matrix E2E for the suffixless tar.gz input.
-- An authorized rebuild and replacement of the currently published pre-fix release assets.
+- None for this agent-verifiable repair. Hardware behavior and production signing/notarization remain outside this task.

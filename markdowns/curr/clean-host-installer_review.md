@@ -4,7 +4,7 @@ Task: Fix the current macOS archive-format error and the clean-Windows `HOME` fa
 
 ## Verdict
 
-CLEAN FOR NATIVE CI. The local, agent-verifiable surface is clean. The current public preview remains pre-fix and must not be described as repaired until rebuilt assets pass the native matrix and are explicitly authorized for publication.
+CLEAN AND PUBLISHED. Native build-matrix run `32411329430` passed all four targets, the authorized `v0.1.1-preview` replacement is live, and the ten published assets match the verified CI publication set byte-for-byte.
 
 ## Findings table
 
@@ -15,7 +15,7 @@ CLEAN FOR NATIVE CI. The local, agent-verifiable surface is clean. The current p
 ## Spec reconciliation
 
 - Scope stayed within bootstrap scripts, launcher path resolution, regression coverage, and user-facing documentation.
-- `release/source-lock.json`, Firmware MCP sources, AgentWorkspace sources, manifests, and published payloads were not changed.
+- `release/source-lock.json`, Firmware MCP sources, AgentWorkspace sources, and their pinned manifest identities were not changed; only the repaired installer/launcher payload was rebuilt and published.
 - Content-based recognition still feeds the existing bounded safe extractors; it does not weaken traversal, duplicate, multi-root, entry-count, or forbidden-entry checks.
 - Windows defaults now reach the existing native `LOCALAPPDATA` / `APPDATA` branch without a prior Unix `HOME` requirement.
 - The Windows E2E no longer relies solely on `BYO_HOME`: it performs a complete default install/status/uninstall cycle with both `HOME` and `BYO_HOME` absent.
@@ -32,8 +32,10 @@ CLEAN FOR NATIVE CI. The local, agent-verifiable surface is clean. The current p
 | Rust format / clippy / unit tests / release build | PASS — 39 tests |
 | Release verification / build-script tests | PASS — 11 + 3 tests |
 | Changed Python lint / format / compile | PASS |
-| Native Windows PowerShell + runtime | PENDING — no Windows or PowerShell runtime on this host; coverage is wired into the native matrix |
-| Native Linux suffixless archive runtime | PENDING — native matrix hand-off |
+| Native Windows PowerShell + runtime | PASS — run `32411329430`; default install/status/uninstall completed with `HOME` and `BYO_HOME` absent |
+| Native Linux suffixless archive runtime | PASS — run `32411329430` |
+| Native macOS Apple silicon / Intel | PASS — run `32411329430` |
+| Published asset replacement | PASS — ten assets downloaded after publication and matched the CI publication set byte-for-byte; checksums and archive integrity passed |
 
 ## Hardware hand-off status
 
@@ -41,4 +43,4 @@ Not required. Both defects occur during bootstrap and product-path resolution be
 
 ## What's genuinely good
 
-The fix addresses the two root causes at their actual boundaries, preserves the existing safe extraction rules, and converts the previously masked Windows clean-host condition into a product-level regression test. Documentation and `PLAN.md` now distinguish the locally fixed source from the still-unrepaired public preview.
+The fix addresses the two root causes at their actual boundaries, preserves the existing safe extraction rules, and converts the previously masked Windows clean-host condition into a product-level regression test. The public preview and its documentation now carry the repaired, native-CI-verified assets.
