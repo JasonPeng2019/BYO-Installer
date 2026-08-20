@@ -1,4 +1,4 @@
-> STATUS: IMPLEMENTED LOCALLY — macOS upgrade and full installed acceptance are green; native four-target CI and publication remain pending.
+> STATUS: COMPLETE — the immutable `v0.1.2-preview` is published and independently verified after a green four-target native matrix.
 
 # Immutable preview version collision
 
@@ -68,8 +68,12 @@ Out of scope:
 - The full installed macOS acceptance suite passes against the real `0.1.2` bundle.
 - Launcher formatting/clippy, all 39 Rust tests, release-version regression tests, release verification tests, Python lint/format/compile, shell syntax, archive checksum/integrity, and the isolated build-output verifier pass. The local leakage verifier used its documented allowance for the local CPython toolchain path; native CI remains the clean shared-account authority.
 - The Firmware-CLI workflow-core ladder also passes: 489 pytest tests, Ruff, and mypy over 72 source files.
+- Native build-matrix run `32417292800` passed all four targets from installer commit `ec1d3fbff06095ef2505ff046b0bf9f86636c861`, including each installed hardware-free E2E step and artifact upload.
+- Every CI archive manifest declares version `0.1.2`, the expected platform/architecture, development-unsigned status, and the exact locked AgentWorkspace (`33fdd6d`), Firmware MCP (`d3aa778`), and installer (`ec1d3fb`) commits.
+- `v0.1.2-preview` was created as a new prerelease with exactly ten assets. All assets were downloaded anonymously from the public URLs and matched the publication set byte-for-byte; all four receipts and archive integrity checks pass.
+- A final Intel Mac smoke test installed the public `v0.1.1` bundle and then the anonymously downloaded public `v0.1.2` bundle into a fresh product root. Both `data/versions/0.1.1` and `data/versions/0.1.2` remain, while `current.json` and `byo status` report `0.1.2`.
+- Public archive SHA-256 values are `86939dab…bf86` (macOS ARM), `c2d80814…d88f` (macOS Intel), `5c0416bd…700f` (Windows), and `87318602…965a` (Linux). Public installer hashes are `ded38347…93b` (`install.sh`) and `9ad735aa…849` (`install.ps1`).
 
 ## Pending verification
 
-- Native four-target CI.
-- New immutable preview publication and post-download verification.
+- None for this host-side release-identity repair. Hardware verification was not required because the failure occurs before probe access.

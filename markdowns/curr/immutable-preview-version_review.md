@@ -4,7 +4,7 @@ Task: Resolve the `0.1.1` immutable-runtime collision without weakening rollback
 
 ## Verdict
 
-CLEAN FOR NATIVE CI. The defect is reproduced, the version identity is corrected to `0.1.2`, the real macOS old-to-new transaction and exact reinstall pass, and no must-fix finding remains on the agent-verifiable surface.
+CLEAN AND PUBLISHED. The defect is reproduced, the version identity is corrected to `0.1.2`, the real macOS old-to-new transaction and exact reinstall pass, the four-target native matrix is green, and the public release passed independent post-download verification.
 
 ## Findings table
 
@@ -26,6 +26,7 @@ CLEAN FOR NATIVE CI. The defect is reproduced, the version identity is corrected
 |---|---|
 | Original `0.1.1` → repaired `0.1.1` isolated repro | PASS — exit 24, distinct manifest digests |
 | Real `0.1.1` → locally built `0.1.2` | PASS — both runtimes retained, `0.1.2` active |
+| Public `v0.1.1-preview` → public `v0.1.2-preview` on Intel Mac | PASS — both runtimes retained, `0.1.2` active in pointer and status |
 | Exact `0.1.2` reinstall | PASS — idempotent |
 | Reused `0.1.2` with changed manifest | PASS — refused with actionable diagnostic, exit 24 |
 | Full installed macOS Intel acceptance | PASS |
@@ -36,8 +37,8 @@ CLEAN FOR NATIVE CI. The defect is reproduced, the version identity is corrected
 | Workflow YAML parse and shell syntax | PASS |
 | Firmware sidecar lock / focused tests / Ruff | PASS — 7 tests |
 | Firmware-CLI workflow-core ladder | PASS — 489 pytest tests, Ruff, mypy over 72 files |
-| Native macOS ARM / macOS Intel / Windows / Linux | PENDING — build-matrix hand-off |
-| Public `v0.1.2-preview` assets | PENDING — only after native matrix passes |
+| Native macOS ARM / macOS Intel / Windows / Linux | PASS — run `32417292800`, including installed E2E and artifact upload |
+| Public `v0.1.2-preview` assets | PASS — ten assets anonymously downloaded and byte-identical to staging; receipts and archive integrity valid |
 
 ## Hardware hand-off status
 
@@ -51,8 +52,9 @@ The repair preserves the invariant that made the failure visible instead of erod
 
 - Every local and non-hardware check listed above produced a passing result in this session.
 - The full old-to-new transaction used the original published `0.1.1` macOS Intel archive and the newly compiled `0.1.2` archive.
+- Native run `32417292800` built and tested exact installer source `ec1d3fbff06095ef2505ff046b0bf9f86636c861` on all four targets.
+- The public release body, asset count/names, GitHub asset digests, archive checksums, and all ten downloaded bytes match the reviewed publication set.
 
 ## Pending verification
 
-- Four-target native build-matrix execution.
-- New-release publication and post-download byte comparison.
+- None for this task.
