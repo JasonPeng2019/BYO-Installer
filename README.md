@@ -11,10 +11,10 @@ Users do not need Python, Rust, `uv`, or a source checkout.
 
 | Computer | Archive | Installer |
 |---|---|---|
-| Apple silicon Mac | `byo-0.1.1-macos-aarch64.zip` | `install.sh` |
-| Intel Mac | `byo-0.1.1-macos-x86_64.zip` | `install.sh` |
-| 64-bit Windows | `byo-0.1.1-windows-x86_64.zip` | `install.ps1` |
-| 64-bit Linux | `byo-0.1.1-linux-x86_64.tar.gz` | `install.sh` |
+| Apple silicon Mac | `byo-0.1.2-macos-aarch64.zip` | `install.sh` |
+| Intel Mac | `byo-0.1.2-macos-x86_64.zip` | `install.sh` |
+| 64-bit Windows | `byo-0.1.2-windows-x86_64.zip` | `install.ps1` |
+| 64-bit Linux | `byo-0.1.2-linux-x86_64.tar.gz` | `install.sh` |
 
 2. Check the archive against its `.sha256` receipt.
 3. Run the matching installer directly against the archive. These examples
@@ -29,24 +29,24 @@ $Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
 
 | Computer | Command |
 |---|---|
-| Apple silicon Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-aarch64.zip"` |
-| Intel Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"` |
-| 64-bit Windows | `& (Join-Path $Downloads "install.ps1") -Bundle (Join-Path $Downloads "byo-0.1.1-windows-x86_64.zip")` |
-| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz"` |
+| Apple silicon Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.2-macos-aarch64.zip"` |
+| Intel Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.2-macos-x86_64.zip"` |
+| 64-bit Windows | `& (Join-Path $Downloads "install.ps1") -Bundle (Join-Path $Downloads "byo-0.1.2-windows-x86_64.zip")` |
+| 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.2-linux-x86_64.tar.gz"` |
 
 Before running one of these commands, confirm that both paths exist. For
 example, on macOS or Linux:
 
 ```sh
 test -f "$HOME/Downloads/install.sh"
-test -f "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"
+test -f "$HOME/Downloads/byo-0.1.2-macos-x86_64.zip"
 ```
 
 On Windows:
 
 ```powershell
 Test-Path -LiteralPath (Join-Path $Downloads "install.ps1") -PathType Leaf
-Test-Path -LiteralPath (Join-Path $Downloads "byo-0.1.1-windows-x86_64.zip") -PathType Leaf
+Test-Path -LiteralPath (Join-Path $Downloads "byo-0.1.2-windows-x86_64.zip") -PathType Leaf
 ```
 
 Every command should report success before installation. Retype the command if
@@ -88,6 +88,11 @@ directory, creates a public `byo` launcher, records the selected installation
 paths, and runs a global health check before succeeding. It requires no
 administrator access and does not edit the user's shell profile.
 
+Every distinct release must use a new version. The installer deliberately
+refuses different bundle contents that reuse an installed version instead of
+overwriting rollback evidence. Version `0.1.2` therefore installs alongside an
+existing `0.1.1` runtime and activates the new version atomically.
+
 Default locations are:
 
 | Platform | Public launcher | Runtime data |
@@ -97,8 +102,8 @@ Default locations are:
 | Windows | `$env:LOCALAPPDATA\BYO\bin\byo.exe` | `$env:LOCALAPPDATA\BYO` |
 
 The compiled MCP executable is stored below the runtime data directory at
-`versions/0.1.1/sidecar/byo-mcp-sidecar` on macOS and Linux, or
-`versions\0.1.1\sidecar\byo-mcp-sidecar.exe` on Windows. Codex and Claude start
+`versions/0.1.2/sidecar/byo-mcp-sidecar` on macOS and Linux, or
+`versions\0.1.2\sidecar\byo-mcp-sidecar.exe` on Windows. Codex and Claude start
 it through `byo mcp serve`; project configuration never points directly at the
 private executable.
 
@@ -137,18 +142,18 @@ expected SHA-256 and archive filename.
 ```sh
 # Apple silicon Mac
 cd "$HOME/Downloads"
-shasum -a 256 --check byo-0.1.1-macos-aarch64.sha256
+shasum -a 256 --check byo-0.1.2-macos-aarch64.sha256
 
-# Intel Mac: use byo-0.1.1-macos-x86_64.sha256 instead
+# Intel Mac: use byo-0.1.2-macos-x86_64.sha256 instead
 ```
 
 ```powershell
 # Windows
 $Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
 Set-Location $Downloads
-$Expected = ((Get-Content ".\byo-0.1.1-windows-x86_64.sha256").Trim() -split '\s+')[0]
+$Expected = ((Get-Content ".\byo-0.1.2-windows-x86_64.sha256").Trim() -split '\s+')[0]
 $Actual = (Get-FileHash `
-  ".\byo-0.1.1-windows-x86_64.zip" `
+  ".\byo-0.1.2-windows-x86_64.zip" `
   -Algorithm SHA256).Hash
 if ($Actual -ne $Expected) {
     throw "BYO archive checksum does not match its receipt"
@@ -158,7 +163,7 @@ if ($Actual -ne $Expected) {
 ```sh
 # Linux
 cd "$HOME/Downloads"
-sha256sum --check byo-0.1.1-linux-x86_64.sha256
+sha256sum --check byo-0.1.2-linux-x86_64.sha256
 ```
 
 The command must report a successful match. Do not install an archive if it
@@ -178,7 +183,7 @@ prints `arm64`, then run:
 ```sh
 cd "$HOME/Downloads"
 sh "./install.sh" \
-  --bundle "./byo-0.1.1-macos-aarch64.zip"
+  --bundle "./byo-0.1.2-macos-aarch64.zip"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -192,7 +197,7 @@ Requirements: macOS 12 or newer and an Intel processor. Confirm that
 ```sh
 cd "$HOME/Downloads"
 sh "./install.sh" \
-  --bundle "./byo-0.1.1-macos-x86_64.zip"
+  --bundle "./byo-0.1.2-macos-x86_64.zip"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -207,7 +212,7 @@ PowerShell:
 $Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
 Set-Location $Downloads
 & ".\install.ps1" `
-  -Bundle ".\byo-0.1.1-windows-x86_64.zip"
+  -Bundle ".\byo-0.1.2-windows-x86_64.zip"
 ```
 
 To choose a custom install root, add `-InstallDir` with an absolute path, for
@@ -232,7 +237,7 @@ that `uname -m` prints `x86_64` and inspect the glibc version with
 ```sh
 cd "$HOME/Downloads"
 sh "./install.sh" \
-  --bundle "./byo-0.1.1-linux-x86_64.tar.gz"
+  --bundle "./byo-0.1.2-linux-x86_64.tar.gz"
 ```
 
 To install below `$HOME/Applications/BYO` instead, add
@@ -414,7 +419,7 @@ Run `byo status` and check `runtime_version` before troubleshooting Codex.
 BYO `0.1.0` on Windows did not preserve the Windows profile environment when
 starting its compiled MCP sidecar, so the sidecar could close during the
 `initialize` handshake even though installation succeeded. Install the
-Windows `0.1.1` bundle, then run:
+Windows `0.1.2` bundle, then run:
 
 ```powershell
 $env:Path = "$env:LOCALAPPDATA\BYO\bin;$env:Path"
@@ -461,7 +466,7 @@ byo uninstall --global --purge-data --yes
 
 ## Current development artifacts
 
-Version `0.1.1` is built natively for macOS Apple silicon, macOS Intel, Windows
+Version `0.1.2` is built natively for macOS Apple silicon, macOS Intel, Windows
 x86_64, and Linux x86_64. Every matrix job uses the same source revisions pinned
 in `release/source-lock.json`.
 
@@ -502,7 +507,7 @@ current platform:
 ```sh
 byo_test_root="$(mktemp -d)"
 sh "$HOME/Downloads/install.sh" \
-  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz" \
+  --bundle "$HOME/Downloads/byo-0.1.2-linux-x86_64.tar.gz" \
   --install-dir "$byo_test_root"
 "$byo_test_root/bin/byo" paths
 ```
@@ -552,7 +557,7 @@ Run the installed hardware-free acceptance suite with:
 ```sh
 cd "$HOME/Projects/example-byo-installer"
 python3 ./release/scripts/test_installed_e2e.py \
-  --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64"
+  --bundle "$HOME/Downloads/byo-0.1.2-linux-x86_64"
 ```
 
 ## Updates and production signatures

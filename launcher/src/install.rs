@@ -192,7 +192,10 @@ pub(crate) fn install_bundle_locked(
             || sha256_file(&final_runtime.join("release-manifest.json"))?
                 != sha256_file(&bundle.join("release-manifest.json"))?
         {
-            bail!("existing immutable version directory does not match the candidate release");
+            bail!(
+                "candidate reuses installed version {} with different contents; publish or install it under a new version (the existing immutable runtime was left unchanged)",
+                source_manifest.version
+            );
         }
     } else {
         let staging = paths.staging().join(format!(

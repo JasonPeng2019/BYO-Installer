@@ -20,15 +20,12 @@ jobs:
           - target: macos-aarch64
             runner: macos-15
             archive: zip
-            bundle: byo-0.1.1-macos-aarch64
           - target: macos-x86_64
             runner: macos-15-intel
             archive: zip
-            bundle: byo-0.1.1-macos-x86_64
           - target: windows-x86_64
             runner: windows-2025
             archive: zip
-            bundle: byo-0.1.1-windows-x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     env:
@@ -38,6 +35,11 @@ jobs:
     steps:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read release version
+        id: release
+        shell: bash
+        run: echo "version=$(python -c 'import tomllib; print(tomllib.load(open("launcher/Cargo.toml","rb"))["package"]["version"])')" >> "$GITHUB_OUTPUT"
 
       - name: Read locked external commits
         id: source
@@ -85,7 +87,9 @@ jobs:
 
       - name: Build native launcher, sidecar, SBOM, and archive
         shell: bash
-        run: python release/scripts/build_release.py --version 0.1.1
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: python release/scripts/build_release.py --version "$VERSION"
 
       - name: Check target and archive contract
         shell: bash
@@ -96,7 +100,7 @@ jobs:
 
       - name: Run installed hardware-free E2E
         shell: bash
-        run: python release/scripts/test_installed_e2e.py --bundle "release/dist/${{ matrix.bundle }}"
+        run: python release/scripts/test_installed_e2e.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}"
 
       - name: Upload target artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -137,6 +141,11 @@ jobs:
     steps:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Read release version
+        id: release
+        shell: bash
+        run: echo "version=$("$BYO_BUILD_PYTHON" -c 'import tomllib; print(tomllib.load(open("launcher/Cargo.toml","rb"))["package"]["version"])')" >> "$GITHUB_OUTPUT"
 
       - name: Read locked external commits
         id: source
@@ -185,9 +194,11 @@ jobs:
 
       - name: Build native launcher, sidecar, SBOM, and archive
         shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          "$BYO_BUILD_PYTHON" release/scripts/build_release.py --version 0.1.1
+          "$BYO_BUILD_PYTHON" release/scripts/build_release.py --version "$VERSION"
 
       - name: Check target and archive contract
         shell: bash
@@ -201,7 +212,7 @@ jobs:
         shell: bash
         run: |
           "$BYO_BUILD_PYTHON" release/scripts/test_installed_e2e.py \
-            --bundle release/dist/byo-0.1.1-linux-x86_64
+            --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64"
 
       - name: Upload target artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

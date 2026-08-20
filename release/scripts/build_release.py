@@ -87,6 +87,23 @@ def sidecar_version() -> str:
         return str(tomllib.load(handle)["project"]["version"])
 
 
+def release_version(requested: str | None) -> str:
+    """Resolve one release identity from the launcher and pinned sidecar."""
+
+    versions = {launcher_version(), sidecar_version()}
+    if len(versions) != 1:
+        raise RuntimeError(
+            f"launcher and sidecar versions must match, got {sorted(versions)!r}"
+        )
+    version = next(iter(versions))
+    if requested is not None and requested != version:
+        raise RuntimeError(
+            f"release version {requested!r} must match launcher and sidecar version "
+            f"{version!r}"
+        )
+    return version
+
+
 def signing_configuration(args: argparse.Namespace) -> tuple[Path, str, str]:
     raw_key = args.signing_key or os.environ.get("BYO_RELEASE_SIGNING_KEY")
     key_id = args.key_id or os.environ.get("BYO_RELEASE_KEY_ID")
@@ -649,7 +666,7 @@ def collect_private_symbols(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--version", default="0.1.1")
+    parser.add_argument("--version")
     parser.add_argument("--channel", default="development")
     parser.add_argument("--output", type=Path, default=ROOT / "release" / "dist")
     parser.add_argument(
@@ -689,12 +706,7 @@ def main() -> int:
         / ("Scripts/python.exe" if os.name == "nt" else "bin/python"),
     )
     args = parser.parse_args()
-    versions = {launcher_version(), sidecar_version()}
-    if versions != {args.version}:
-        raise RuntimeError(
-            f"release version {args.version!r} must match launcher and sidecar versions "
-            f"{sorted(versions)!r}"
-        )
+    args.version = release_version(args.version)
     if args.production and args.channel == "development":
         raise RuntimeError("production builds must use a non-development channel")
     if (args.prepare_platform_signing or args.platform_signing_complete) and (

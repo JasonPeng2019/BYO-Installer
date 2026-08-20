@@ -9,6 +9,7 @@ Run directly (stdlib only, no pytest):
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import build_release as br
 
@@ -43,6 +44,48 @@ def test_remap_preserves_existing_flags_and_folds_plain_rustflags() -> None:
     assert "-C" in parts and "opt-level=2" in parts
     # Plain RUSTFLAGS is consumed so cargo does not see both variables at once.
     assert "RUSTFLAGS" not in env
+
+
+def test_release_version_defaults_to_matching_component_metadata() -> None:
+    with (
+        patch.object(br, "launcher_version", return_value="1.2.3"),
+        patch.object(br, "sidecar_version", return_value="1.2.3"),
+    ):
+        assert br.release_version(None) == "1.2.3"
+        assert br.release_version("1.2.3") == "1.2.3"
+
+
+def test_release_version_rejects_component_or_requested_drift() -> None:
+    with (
+        patch.object(br, "launcher_version", return_value="1.2.3"),
+        patch.object(br, "sidecar_version", return_value="1.2.4"),
+    ):
+        try:
+            br.release_version(None)
+        except RuntimeError as error:
+            assert "must match" in str(error)
+        else:
+            raise AssertionError("mismatched component versions were accepted")
+
+    with (
+        patch.object(br, "launcher_version", return_value="1.2.3"),
+        patch.object(br, "sidecar_version", return_value="1.2.3"),
+    ):
+        try:
+            br.release_version("1.2.2")
+        except RuntimeError as error:
+            assert "must match" in str(error)
+        else:
+            raise AssertionError("a stale requested release version was accepted")
+
+
+def test_development_matrix_derives_bundle_version() -> None:
+    workflow = (br.ROOT / ".github/workflows/build-matrix.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "steps.release.outputs.version" in workflow
+    assert "--version 0." not in workflow
+    assert "bundle: byo-0." not in workflow
 
 
 def main() -> int:
