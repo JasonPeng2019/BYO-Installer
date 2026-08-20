@@ -98,7 +98,7 @@ jobs:
         shell: bash
         run: python release/scripts/test_installed_e2e.py --bundle "release/dist/${{ matrix.bundle }}"
 
-      - name: Upload target artifact and private symbols
+      - name: Upload target artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-${{ matrix.target }}
@@ -106,9 +106,20 @@ jobs:
             install.sh
             install.ps1
             release/dist/
-            release/symbols/
           if-no-files-found: error
           retention-days: 14
+
+      # Retain the stripped dSYM/PDB/.debug separately from the shipped bundle,
+      # keyed by build (per-target, per-commit run) and kept longer, so a crash
+      # from a shipped build can still be symbolicated. GitHub artifacts cap at
+      # 90 days; a durable/indefinite symbol store is the remaining owner step.
+      - name: Upload private symbols (crash symbolication)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: byo-symbols-${{ matrix.target }}
+          path: release/symbols/
+          if-no-files-found: error
+          retention-days: 90
 
   linux-x86_64:
     name: linux-x86_64-glibc-2.28
@@ -192,7 +203,7 @@ jobs:
           "$BYO_BUILD_PYTHON" release/scripts/test_installed_e2e.py \
             --bundle release/dist/byo-0.1.1-linux-x86_64
 
-      - name: Upload target artifact and private symbols
+      - name: Upload target artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-linux-x86_64-glibc-2.28
@@ -200,6 +211,15 @@ jobs:
             install.sh
             install.ps1
             release/dist/
-            release/symbols/
           if-no-files-found: error
           retention-days: 14
+
+      # See the note in the build job: retain stripped symbols separately, keyed
+      # by build, kept longer for crash symbolication.
+      - name: Upload private symbols (crash symbolication)
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: byo-symbols-linux-x86_64-glibc-2.28
+          path: release/symbols/
+          if-no-files-found: error
+          retention-days: 90
