@@ -193,11 +193,17 @@ if [ -z "$bundle" ]; then
 fi
 
 if [ -f "$bundle" ]; then
-  case "$product_platform:$bundle" in
-    macos:*.zip|linux:*.tar.gz) ;;
-    macos:*) echo "macOS bundle archives must use the .zip format." >&2; exit 2 ;;
-    linux:*) echo "Linux bundle archives must use the .tar.gz format." >&2; exit 2 ;;
-  esac
+  if [ "$product_platform" = "macos" ]; then
+    /usr/bin/zipinfo -t "$bundle" >/dev/null 2>&1 || {
+      echo "macOS bundle must be a valid ZIP archive: $bundle" >&2
+      exit 2
+    }
+  else
+    tar -tzf "$bundle" >/dev/null 2>&1 || {
+      echo "Linux bundle must be a valid gzip-compressed tar archive: $bundle" >&2
+      exit 2
+    }
+  fi
   archive=$bundle
   make_temporary
   extraction_root="$temporary/extracted"

@@ -34,12 +34,16 @@ impl ProductPaths {
             return Ok(paths);
         }
 
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("HOME is required to resolve per-user BYO paths")?;
-        if !home.is_absolute() {
-            bail!("HOME must be absolute");
-        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        let home = {
+            let home = env::var_os("HOME")
+                .map(PathBuf::from)
+                .context("HOME is required to resolve per-user BYO paths")?;
+            if !home.is_absolute() {
+                bail!("HOME must be absolute");
+            }
+            home
+        };
         #[cfg(target_os = "macos")]
         {
             Ok(Self {

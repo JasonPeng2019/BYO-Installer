@@ -8,7 +8,7 @@ firmware source, so the break is visible at review and caught in CI rather than
 on a customer's machine.
 
 - **Status:** Accepted / in force for installer `0.1.x`.
-- **Last updated:** 2026-08-18.
+- **Last updated:** 2026-08-20.
 - **Authoritative version numbers:** the constants in
   `Firmware MCP New/src/pyocd_debug_mcp/sidecar.py`
   (`SIDECAR_PROTOCOL`, `WORKER_PROTOCOL`, `WORKFLOW_PROTOCOL`, `CAPSULE_SCHEMA`,
@@ -87,7 +87,10 @@ operator.
    `sys.executable -m pyocd_debug_mcp.sidecar provider-worker`.
 6. **Filtered environment.** The launcher passes only an allowlisted environment
    (`SIDECAR_ENVIRONMENT` in `main.rs`); the sidecar must not depend on
-   variables outside it.
+   variables outside it. On Windows that allowlist includes the native profile
+   variables (`USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, and
+   `LOCALAPPDATA`); neither the launcher nor sidecar may require Unix-style
+   `HOME` on a clean Windows host.
 
 ## 4. `self-test` output contract
 

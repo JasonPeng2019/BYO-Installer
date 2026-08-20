@@ -169,8 +169,13 @@ try {
 
     if (Test-Path -LiteralPath $Bundle -PathType Leaf) {
         $archive = (Get-Item -LiteralPath $Bundle).FullName
-        if (-not $archive.EndsWith(".zip", [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Windows bundle archives must use the .zip format."
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zipCheck = [System.IO.Compression.ZipFile]::OpenRead($archive)
+            $zipCheck.Dispose()
+        }
+        catch {
+            throw "Windows bundle must be a valid ZIP archive: $archive"
         }
         if (-not $temporary) {
             $temporary = Join-Path (

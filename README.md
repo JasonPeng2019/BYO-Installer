@@ -20,11 +20,18 @@ Users do not need Python, Rust, `uv`, or a source checkout.
 3. Run the matching installer directly against the archive. These examples
    assume the archive and installer are in your Downloads folder:
 
+On Windows, first resolve the Downloads folder without depending on a `HOME`
+environment variable:
+
+```powershell
+$Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
+```
+
 | Computer | Command |
 |---|---|
 | Apple silicon Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-aarch64.zip"` |
 | Intel Mac | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"` |
-| 64-bit Windows | `& "$HOME\Downloads\install.ps1" -Bundle "$HOME\Downloads\byo-0.1.1-windows-x86_64.zip"` |
+| 64-bit Windows | `& (Join-Path $Downloads "install.ps1") -Bundle (Join-Path $Downloads "byo-0.1.1-windows-x86_64.zip")` |
 | 64-bit Linux | `sh "$HOME/Downloads/install.sh" --bundle "$HOME/Downloads/byo-0.1.1-linux-x86_64.tar.gz"` |
 
 Before running one of these commands, confirm that both paths exist. For
@@ -38,13 +45,18 @@ test -f "$HOME/Downloads/byo-0.1.1-macos-x86_64.zip"
 On Windows:
 
 ```powershell
-Test-Path -LiteralPath "$HOME\Downloads\install.ps1" -PathType Leaf
-Test-Path -LiteralPath "$HOME\Downloads\byo-0.1.1-windows-x86_64.zip" -PathType Leaf
+Test-Path -LiteralPath (Join-Path $Downloads "install.ps1") -PathType Leaf
+Test-Path -LiteralPath (Join-Path $Downloads "byo-0.1.1-windows-x86_64.zip") -PathType Leaf
 ```
 
 Every command should report success before installation. Retype the command if
 a pasted line contains a marker such as `<200b>`; that marker represents an
 unwanted zero-width character and is not part of any BYO path or option.
+
+The offline bootstraps identify an archive from its contents, so a browser- or
+tool-renamed download can still be installed. Keep the published filename until
+after checking the `.sha256` receipt, because the receipt names the original
+file.
 
 4. Open a terminal in your firmware project and initialize both Codex and
    Claude. `byo init` now runs the health check automatically and prints a
@@ -101,7 +113,7 @@ Add one option to the normal install command:
 
 ```powershell
 # Windows example
--InstallDir "$HOME\Applications\BYO"
+-InstallDir (Join-Path ([Environment]::GetFolderPath("UserProfile")) "Applications\BYO")
 ```
 
 The selected directory will contain `bin`, `data`, `config`, `state`, and
@@ -132,7 +144,8 @@ shasum -a 256 --check byo-0.1.1-macos-aarch64.sha256
 
 ```powershell
 # Windows
-Set-Location "$HOME\Downloads"
+$Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
+Set-Location $Downloads
 $Expected = ((Get-Content ".\byo-0.1.1-windows-x86_64.sha256").Trim() -split '\s+')[0]
 $Actual = (Get-FileHash `
   ".\byo-0.1.1-windows-x86_64.zip" `
@@ -191,13 +204,15 @@ Requirements: Windows 10 22H2 or Windows 11 on an x64 computer. Run in
 PowerShell:
 
 ```powershell
-Set-Location "$HOME\Downloads"
+$Downloads = Join-Path ([Environment]::GetFolderPath("UserProfile")) "Downloads"
+Set-Location $Downloads
 & ".\install.ps1" `
   -Bundle ".\byo-0.1.1-windows-x86_64.zip"
 ```
 
-To install below `$HOME\Applications\BYO` instead, add
-`-InstallDir "$HOME\Applications\BYO"` to the final command.
+To choose a custom install root, add `-InstallDir` with an absolute path, for
+example `(Join-Path ([Environment]::GetFolderPath("UserProfile"))
+"Applications\BYO")`.
 
 If local policy blocks the unsigned development installer, the user may choose
 to allow scripts only in the current PowerShell process:

@@ -184,6 +184,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="byo-installed-e2e-") as raw_root:
         root = Path(raw_root)
+        bootstrap_archive = root / "downloaded BYO bundle"
+        shutil.copyfile(archive, bootstrap_archive)
         home = root / "isolated product home"
         project = root / "firmware project"
         project.mkdir()
@@ -233,10 +235,29 @@ def main() -> int:
                 "-File",
                 str(ROOT / "install.ps1"),
                 "-Bundle",
-                str(archive),
+                str(bootstrap_archive),
             ]
+            native_env = {**env}
+            native_env.pop("BYO_HOME", None)
+            native_env.pop("HOME", None)
+            native_local = root / "native Windows local app data"
+            native_roaming = root / "native Windows roaming app data"
+            native_env["LOCALAPPDATA"] = str(native_local)
+            native_env["APPDATA"] = str(native_roaming)
+            invoke(install_command, env=native_env, cwd=ROOT)
+            native_byo = native_local / "BYO" / "bin" / "byo.exe"
+            if not native_byo.is_file():
+                raise AcceptanceFailure(
+                    "default Windows install did not use LOCALAPPDATA without HOME"
+                )
+            invoke([str(native_byo), "status"], env=native_env)
+            invoke([str(native_byo), "uninstall", "--global"], env=native_env)
         else:
-            install_command = [str(ROOT / "install.sh"), "--bundle", str(archive)]
+            install_command = [
+                str(ROOT / "install.sh"),
+                "--bundle",
+                str(bootstrap_archive),
+            ]
         invoke(install_command, env=env, cwd=ROOT)
         byo = home / "bin" / ("byo.exe" if os.name == "nt" else "byo")
         if not byo.is_file():
