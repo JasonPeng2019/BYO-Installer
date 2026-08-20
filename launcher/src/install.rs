@@ -6,7 +6,9 @@ use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use walkdir::WalkDir;
 
-use crate::manifest::{sha256_file, verify_runtime, write_json, CurrentRuntime, ReleaseManifest};
+use crate::manifest::{
+    retry_transient_io, sha256_file, verify_runtime, write_json, CurrentRuntime, ReleaseManifest,
+};
 use crate::paths::{ensure_private_directory, ProductPaths};
 
 pub struct InstallLock {
@@ -47,12 +49,15 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
             );
         }
         if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
+            retry_transient_io(|| std::fs::create_dir_all(&target))
+                .with_context(|| format!("failed to create {}", target.display()))?;
         } else if entry.file_type().is_file() {
             if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
+                retry_transient_io(|| std::fs::create_dir_all(parent))
+                    .with_context(|| format!("failed to create {}", parent.display()))?;
             }
-            std::fs::copy(entry.path(), &target)?;
+            retry_transient_io(|| std::fs::copy(entry.path(), &target))
+                .with_context(|| format!("failed to copy runtime file to {}", target.display()))?;
         } else {
             bail!(
                 "bundle contains a forbidden special entry: {}",
@@ -195,7 +200,8 @@ pub(crate) fn install_bundle_locked(
             source_manifest.version,
             rand::random::<u64>()
         ));
-        std::fs::create_dir(&staging)?;
+        retry_transient_io(|| std::fs::create_dir(&staging))
+            .with_context(|| format!("failed to create staging directory {}", staging.display()))?;
         if let Err(error) = copy_tree(&bundle, &staging)
             .and_then(|_| verify_runtime(&staging).map(|_| ()))
             .and_then(|_| {
@@ -208,7 +214,14 @@ pub(crate) fn install_bundle_locked(
             let _ = std::fs::remove_dir_all(&staging);
             return Err(error);
         }
-        std::fs::rename(&staging, &final_runtime)?;
+        // On Windows the prior version directory may still be in the
+        // "delete-pending" state after an uninstall's `remove_dir_all`, and
+        // Defender may hold a freshly written sidecar executable open; either
+        // makes this rename transiently fail with `ERROR_ACCESS_DENIED`. Retry
+        // until the pending deletion finalizes and scans release their handles.
+        retry_transient_io(|| std::fs::rename(&staging, &final_runtime)).with_context(|| {
+            format!("failed to activate runtime at {}", final_runtime.display())
+        })?;
     }
 
     let manifest_digest = sha256_file(&final_runtime.join("release-manifest.json"))?;

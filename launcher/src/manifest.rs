@@ -362,9 +362,38 @@ pub fn load_current(paths: &crate::paths::ProductPaths) -> Result<(CurrentRuntim
     Ok((current, runtime))
 }
 
+/// Run a filesystem mutation, retrying briefly on the transient Windows errors
+/// that appear when antivirus/Defender is scanning a just-written executable or
+/// when a directory is still in the "delete-pending" state after removal:
+/// `ERROR_ACCESS_DENIED` (os error 5) and `ERROR_SHARING_VIOLATION` (os error
+/// 32). These surface as a bare `Access is denied. (os error 5)` from `rename`,
+/// `create_dir`, or `copy`. On non-Windows platforms the operation runs once.
+pub(crate) fn retry_transient_io<T>(
+    mut operation: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    #[cfg(windows)]
+    {
+        let mut delay = std::time::Duration::from_millis(20);
+        for _ in 0..24 {
+            match operation() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::PermissionDenied
+                        || error.raw_os_error() == Some(32) =>
+                {
+                    std::thread::sleep(delay);
+                    delay = (delay * 2).min(std::time::Duration::from_millis(750));
+                }
+                result => return result,
+            }
+        }
+    }
+    operation()
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("atomic target has no parent")?;
-    std::fs::create_dir_all(parent)?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
     let temporary = parent.join(format!(
         ".{}.tmp-{}",
         path.file_name()
@@ -373,11 +402,13 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         rand::random::<u64>()
     ));
     {
-        let mut file = File::create(&temporary)?;
+        let mut file = retry_transient_io(|| File::create(&temporary))
+            .with_context(|| format!("failed to create {}", temporary.display()))?;
         file.write_all(bytes)?;
         file.sync_all()?;
     }
-    std::fs::rename(&temporary, path)?;
+    retry_transient_io(|| std::fs::rename(&temporary, path))
+        .with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
 
@@ -444,5 +475,28 @@ mod tests {
         assert!(safe_relative("/absolute").is_err());
         assert!(safe_relative(r"C:\escape").is_err());
         assert!(safe_relative("C:/escape").is_err());
+    }
+
+    #[test]
+    fn retry_transient_io_passes_success_and_does_not_retry_other_errors() {
+        // Success is returned on the first call, with no retry.
+        let mut calls = 0;
+        let value = super::retry_transient_io(|| {
+            calls += 1;
+            Ok::<_, std::io::Error>(7)
+        })
+        .unwrap();
+        assert_eq!((value, calls), (7, 1));
+
+        // A non-transient error (NotFound is not access-denied/sharing-violation)
+        // is surfaced immediately without spinning the retry loop.
+        let mut calls = 0;
+        let error = super::retry_transient_io(|| {
+            calls += 1;
+            Err::<(), _>(std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(calls, 1);
     }
 }
