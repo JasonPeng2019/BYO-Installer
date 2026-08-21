@@ -158,22 +158,42 @@ def output_names_path(output: str, expected: Path) -> bool:
     """Return whether diagnostic output names the expected existing path.
 
     Windows can report the same path through long-name and 8.3 aliases. Prefer
-    the literal fast path, then compare each diagnostic line by filesystem
-    identity so an alias does not weaken the path-reporting acceptance check.
+    the literal fast path, then compare normalized text so an extended-length
+    prefix still works after purge removes the path. Finally, compare each
+    existing diagnostic line by filesystem identity so an 8.3 alias does not
+    weaken the path-reporting acceptance check.
     """
 
     if str(expected) in output:
         return True
+    expected_text = comparable_diagnostic_path(expected)
     for line in output.splitlines():
         candidate = line.strip()
         if not candidate:
             continue
+        if comparable_diagnostic_path(candidate) == expected_text:
+            return True
         try:
             if os.path.samefile(candidate, expected):
                 return True
         except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
             continue
     return False
+
+
+def comparable_diagnostic_path(path: str | Path) -> str:
+    """Normalize a diagnostic path without requiring it to still exist."""
+
+    normalized = os.path.normcase(os.path.normpath(str(path)))
+    if os.name != "nt":
+        return normalized
+    extended_unc = "\\\\?\\unc\\"
+    if normalized.casefold().startswith(extended_unc):
+        return "\\\\" + normalized[len(extended_unc) :]
+    extended = "\\\\?\\"
+    if normalized.startswith(extended):
+        return normalized[len(extended) :]
+    return normalized
 
 
 def main() -> int:
