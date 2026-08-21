@@ -22,15 +22,15 @@ directory until process exit, so synchronous removal of its ancestor failed.
 When the Windows public launcher is nested inside a directory selected for
 global purge, rename the launcher to a random tombstone beside that purge root
 before deleting product directories. This keeps the live executable on the same
-volume but outside every purge target. After the rename succeeds, use Windows'
-POSIX delete disposition to remove the external tombstone pathname immediately;
-the unnamed live image can finish outside the BYO directory being purged. If
-that disposition is unavailable, a detached hidden `cmd.exe` helper deletes
-only the exact tombstone after process exit. Invoke the compound `/C` loop as a
-raw argument because `cmd.exe` does not use the standard Windows C-runtime
-argument decoder. If the helper cannot start, restore the launcher to its
-public path before returning an error. For layouts whose launcher is not inside
-a purge root, retain the same POSIX/deferred file-deletion path.
+volume but outside every purge target. After the rename succeeds, a detached
+hidden `cmd.exe` helper deletes only the exact tombstone after process exit.
+Invoke the compound `/C` loop as a raw argument because `cmd.exe` does not use
+the standard Windows C-runtime argument decoder. Do not use POSIX delete
+disposition for this evacuated live image: Windows can make a delete-pending
+executable temporarily invisible without completing removal, which can skip
+the required post-exit helper. If the helper cannot start, restore the launcher
+to its public path before returning an error. For layouts whose launcher is not
+inside a purge root, retain the same POSIX/deferred file-deletion path.
 
 The tombstone must never be placed inside a purge target. Product directories
 remain synchronously deleted, and the helper must not recursively delete a root;
@@ -44,7 +44,8 @@ that prevents a fast reinstall from being erased by delayed cleanup.
   two-minute retry window as the product helper so transient Defender or
   antivirus handles do not create a false failure.
 - Add Windows launcher tests for the evacuation-path selection and visible-path
-  removal.
+  removal, including a copied test executable that schedules cleanup of its own
+  running image and must disappear after it exits.
 - Run Rust format, Clippy, and tests, then rerun the four-target native matrix.
 
 ## Documentation impact
@@ -78,6 +79,12 @@ detail without adding operator-facing flags or caveats.
   scanner locks for roughly two minutes. The installed assertion now exercises
   the product's actual bounded retry contract, and the direct helper regression
   uses a path containing spaces like the failed native install.
+- Native CI run 32443769442 showed the tombstone still remained after the full
+  retry window. Together with the passing direct helper test, this isolates the
+  POSIX disposition shortcut: a live delete-pending image can appear absent and
+  suppress helper startup without completing deletion. Evacuated launchers now
+  always start the helper after the rename, and a live copied-executable test
+  covers the exact lifecycle.
 
 ## Pending verification
 

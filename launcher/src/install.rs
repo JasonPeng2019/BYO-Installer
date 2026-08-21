@@ -395,18 +395,21 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
                 root.display()
             )
         })?;
-        if let Err(disposition_error) = mark_windows_launcher_for_posix_deletion(&tombstone) {
-            if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
-                retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
-                    format!(
-                        "Windows launcher deletion failed ({disposition_error:#}); the cleanup helper also failed ({helper_error:#}); and the public launcher could not be restored to {}",
-                        path.display()
-                    )
-                })?;
-                return Err(helper_error.context(format!(
-                    "Windows launcher POSIX deletion also failed: {disposition_error:#}"
-                )));
-            }
+        // Do not apply a POSIX delete disposition to the evacuated live image.
+        // Windows can make a delete-pending executable temporarily invisible,
+        // causing the disposition path to report success without starting the
+        // post-exit cleanup that is still required. The raw cmd.exe helper is
+        // deterministic here: the tombstone exists before it starts, it retries
+        // while this process owns the image, and it deletes the exact file after
+        // this process exits.
+        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
+                format!(
+                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
+                    path.display()
+                )
+            })?;
+            return Err(helper_error);
         }
         if path.exists() {
             bail!(
@@ -885,6 +888,44 @@ mod tests {
         std::fs::write(&tombstone, b"placeholder").unwrap();
         start_windows_launcher_cleanup(&tombstone).unwrap();
         for _ in 0..100 {
+            if !tombstone.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!tombstone.exists());
+        std::fs::remove_dir(container).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_helper_child_process() {
+        let Some(target) = std::env::var_os("BYO_TEST_LIVE_CLEANUP_TARGET") else {
+            return;
+        };
+        start_windows_launcher_cleanup(std::path::Path::new(&target)).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_helper_deletes_an_exited_executable() {
+        let container = std::env::temp_dir().join(format!(
+            "byo live cleanup helper test {:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir_all(&container).unwrap();
+        let tombstone = container.join(".byo-uninstall-live-test.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &tombstone).unwrap();
+        let status = std::process::Command::new(&tombstone)
+            .args([
+                "--exact",
+                "install::tests::windows_cleanup_helper_child_process",
+            ])
+            .env("BYO_TEST_LIVE_CLEANUP_TARGET", &tombstone)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        for _ in 0..1300 {
             if !tombstone.exists() {
                 break;
             }
