@@ -285,13 +285,17 @@ fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn remove_public_launcher(path: &Path, _evacuation_root: Option<&Path>) -> Result<()> {
+fn remove_public_launcher(
+    path: &Path,
+    _evacuation_root: Option<&Path>,
+    _wait_for_pid: Option<u32>,
+) -> Result<()> {
     std::fs::remove_file(path)
         .with_context(|| format!("failed to remove public launcher {}", path.display()))
 }
 
 #[cfg(windows)]
-fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
+fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -> Result<()> {
     use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
@@ -299,7 +303,20 @@ fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
     let command_shell =
         std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
     let mut command = Command::new(command_shell);
-    let cleanup = r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#;
+    // A delete can temporarily report success while the executable image is
+    // still mapped, only for the visible path to reappear when that process
+    // exits. When this helper is evacuating the current launcher, first poll
+    // the exact parent PID. Successful `tasklist` matches sleep for a second;
+    // once the parent is absent, the remaining iterations complete quickly and
+    // the deletion loop begins. A transient tasklist failure cannot end the
+    // wait because every iteration queries the PID again.
+    let wait = if wait_for_pid.is_some() {
+        r#"for /L %I in (1,1,120) do @(tasklist /FI "PID eq %BYO_UNINSTALL_PID%" /NH 2>NUL | findstr.exe /R /C:"[ ]%BYO_UNINSTALL_PID%[ ]" >NUL && ping 127.0.0.1 -n 2 >NUL) & "#
+    } else {
+        ""
+    };
+    let delete = r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#;
+    let cleanup = format!("{wait}{delete}");
     command
         .args(["/D", "/Q", "/S", "/C"])
         // `cmd.exe /C` does not use the standard Windows C-runtime argument
@@ -313,6 +330,9 @@ fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW);
+    if let Some(pid) = wait_for_pid {
+        command.env("BYO_UNINSTALL_PID", pid.to_string());
+    }
     let temporary_directory = std::env::temp_dir();
     if temporary_directory.is_dir() {
         command.current_dir(temporary_directory);
@@ -379,7 +399,11 @@ fn mark_windows_launcher_for_posix_deletion(path: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result<()> {
+fn remove_public_launcher(
+    path: &Path,
+    evacuation_root: Option<&Path>,
+    wait_for_pid: Option<u32>,
+) -> Result<()> {
     if let Some(root) = evacuation_root {
         if !path.starts_with(root) {
             bail!("public launcher is not contained by its evacuation root");
@@ -399,10 +423,10 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
         // Windows can make a delete-pending executable temporarily invisible,
         // causing the disposition path to report success without starting the
         // post-exit cleanup that is still required. The raw cmd.exe helper is
-        // deterministic here: the tombstone exists before it starts, it retries
-        // while this process owns the image, and it deletes the exact file after
-        // this process exits.
-        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+        // deterministic here: the tombstone exists before it starts, it waits
+        // for this process to release the image, and then it deletes the exact
+        // file with bounded retries.
+        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone, wait_for_pid) {
             retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
                 format!(
                     "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
@@ -431,7 +455,7 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
                 path.display()
             )
         })?;
-        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone, wait_for_pid) {
             retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
                 format!(
                     "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
@@ -615,7 +639,11 @@ pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> 
             .find(|target| target.is_dir() && public_launcher.starts_with(target));
         for target in targets.iter().filter(|target| !target.is_dir()) {
             if target == &public_launcher {
-                remove_public_launcher(target, launcher_evacuation_root.map(PathBuf::as_path))?;
+                remove_public_launcher(
+                    target,
+                    launcher_evacuation_root.map(PathBuf::as_path),
+                    Some(std::process::id()),
+                )?;
             } else {
                 std::fs::remove_file(target).with_context(|| {
                     format!("failed to remove global BYO file {}", target.display())
@@ -886,7 +914,7 @@ mod tests {
         std::fs::create_dir_all(&container).unwrap();
         let tombstone = container.join(".byo-uninstall-test.exe");
         std::fs::write(&tombstone, b"placeholder").unwrap();
-        start_windows_launcher_cleanup(&tombstone).unwrap();
+        start_windows_launcher_cleanup(&tombstone, None).unwrap();
         for _ in 0..100 {
             if !tombstone.exists() {
                 break;
@@ -903,7 +931,12 @@ mod tests {
         let Some(target) = std::env::var_os("BYO_TEST_LIVE_CLEANUP_TARGET") else {
             return;
         };
-        start_windows_launcher_cleanup(std::path::Path::new(&target)).unwrap();
+        start_windows_launcher_cleanup(std::path::Path::new(&target), Some(std::process::id()))
+            .unwrap();
+        if let Some(ready) = std::env::var_os("BYO_TEST_LIVE_CLEANUP_READY") {
+            std::fs::write(ready, b"ready").unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
     }
 
     #[cfg(windows)]
@@ -916,14 +949,28 @@ mod tests {
         std::fs::create_dir_all(&container).unwrap();
         let tombstone = container.join(".byo-uninstall-live-test.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &tombstone).unwrap();
-        let status = std::process::Command::new(&tombstone)
+        let ready = container.join("helper-ready");
+        let mut child = std::process::Command::new(&tombstone)
             .args([
                 "--exact",
                 "install::tests::windows_cleanup_helper_child_process",
             ])
             .env("BYO_TEST_LIVE_CLEANUP_TARGET", &tombstone)
-            .status()
+            .env("BYO_TEST_LIVE_CLEANUP_READY", &ready)
+            .spawn()
             .unwrap();
+        for _ in 0..100 {
+            if ready.is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(ready.is_file());
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(tombstone.is_file());
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert!(tombstone.is_file());
+        let status = child.wait().unwrap();
         assert!(status.success());
         for _ in 0..1300 {
             if !tombstone.exists() {
@@ -932,6 +979,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert!(!tombstone.exists());
+        std::fs::remove_file(ready).unwrap();
         std::fs::remove_dir(container).unwrap();
     }
 
@@ -946,7 +994,7 @@ mod tests {
         let launcher = root.join("bin/byo.exe");
         std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
         std::fs::write(&launcher, b"placeholder").unwrap();
-        remove_public_launcher(&launcher, Some(&root)).unwrap();
+        remove_public_launcher(&launcher, Some(&root), None).unwrap();
         assert!(!launcher.exists());
         std::fs::remove_dir_all(&root).unwrap();
         for _ in 0..100 {

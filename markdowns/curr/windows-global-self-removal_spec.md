@@ -28,7 +28,9 @@ Invoke the compound `/C` loop as a raw argument because `cmd.exe` does not use
 the standard Windows C-runtime argument decoder. Do not use POSIX delete
 disposition for this evacuated live image: Windows can make a delete-pending
 executable temporarily invisible without completing removal, which can skip
-the required post-exit helper. If the helper cannot start, restore the launcher
+the required post-exit helper. The helper must poll the exact launcher PID and
+begin deletion only after that process exits; a live mapped image can also make
+`del` report success too early. If the helper cannot start, restore the launcher
 to its public path before returning an error. For layouts whose launcher is not
 inside a purge root, retain the same POSIX/deferred file-deletion path.
 
@@ -85,6 +87,13 @@ detail without adding operator-facing flags or caveats.
   suppress helper startup without completing deletion. Evacuated launchers now
   always start the helper after the rename, and a live copied-executable test
   covers the exact lifecycle.
+- Native CI run 32446143110 passed all non-Windows targets and the Windows
+  build/archive contract, but the installed launcher still reappeared after the
+  helper's full retry window. The helper could call `del` while the image was
+  mapped, observe a transient success, and exit before the launcher process.
+  Cleanup now waits for the exact parent PID before attempting deletion, and
+  the Windows regression requires the copied live image to remain visible while
+  its child is running and disappear after exit.
 
 ## Pending verification
 

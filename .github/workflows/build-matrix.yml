@@ -85,6 +85,11 @@ jobs:
         run: |
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
 
+      - name: Run Windows launcher cleanup regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cargo test --manifest-path launcher/Cargo.toml --locked 'install::tests::windows_'
+
       - name: Build native launcher, sidecar, SBOM, and archive
         shell: bash
         env:
