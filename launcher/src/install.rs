@@ -325,7 +325,7 @@ fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result<()> {
+fn mark_windows_launcher_for_posix_deletion(path: &Path) -> Result<()> {
     use std::mem::size_of;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
@@ -336,46 +336,13 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
         FILE_DISPOSITION_INFO_EX, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
 
-    if let Some(root) = evacuation_root {
-        if !path.starts_with(root) {
-            bail!("public launcher is not contained by its evacuation root");
-        }
-        let parent = root
-            .parent()
-            .context("launcher evacuation root has no parent directory")?;
-        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
-            format!(
-                "failed to move the running public launcher {} outside purge root {}",
-                path.display(),
-                root.display()
-            )
-        })?;
-        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
-            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
-                format!(
-                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
-                    path.display()
-                )
-            })?;
-            return Err(helper_error);
-        }
-        if path.exists() {
-            bail!(
-                "public launcher remained visible after evacuation: {}",
-                path.display()
-            );
-        }
-        return Ok(());
-    }
-
     let file = OpenOptions::new()
         .access_mode(DELETE)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)
         .with_context(|| {
             format!(
-                "failed to open public launcher {} for deletion",
+                "failed to open Windows launcher {} for deletion",
                 path.display()
             )
         })?;
@@ -395,8 +362,63 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
         )
     };
     if result == 0 {
-        let disposition_error = std::io::Error::last_os_error();
+        let error = std::io::Error::last_os_error();
         drop(file);
+        bail!(
+            "failed to mark Windows launcher {} for POSIX deletion: {error}",
+            path.display()
+        );
+    }
+    drop(file);
+    if path.exists() {
+        bail!(
+            "Windows launcher remained visible after POSIX deletion: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result<()> {
+    if let Some(root) = evacuation_root {
+        if !path.starts_with(root) {
+            bail!("public launcher is not contained by its evacuation root");
+        }
+        let parent = root
+            .parent()
+            .context("launcher evacuation root has no parent directory")?;
+        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
+        retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
+            format!(
+                "failed to move the running public launcher {} outside purge root {}",
+                path.display(),
+                root.display()
+            )
+        })?;
+        if let Err(disposition_error) = mark_windows_launcher_for_posix_deletion(&tombstone) {
+            if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+                retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
+                    format!(
+                        "Windows launcher deletion failed ({disposition_error:#}); the cleanup helper also failed ({helper_error:#}); and the public launcher could not be restored to {}",
+                        path.display()
+                    )
+                })?;
+                return Err(helper_error.context(format!(
+                    "Windows launcher POSIX deletion also failed: {disposition_error:#}"
+                )));
+            }
+        }
+        if path.exists() {
+            bail!(
+                "public launcher remained visible after evacuation: {}",
+                path.display()
+            );
+        }
+        return Ok(());
+    }
+
+    if let Err(disposition_error) = mark_windows_launcher_for_posix_deletion(path) {
         let parent = path
             .parent()
             .context("public launcher has no parent directory")?;
@@ -423,13 +445,6 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
             );
         }
         return Ok(());
-    }
-    drop(file);
-    if path.exists() {
-        bail!(
-            "public launcher remained visible after deletion: {}",
-            path.display()
-        );
     }
     Ok(())
 }

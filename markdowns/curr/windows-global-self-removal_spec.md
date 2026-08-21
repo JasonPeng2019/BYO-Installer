@@ -22,11 +22,14 @@ directory until process exit, so synchronous removal of its ancestor failed.
 When the Windows public launcher is nested inside a directory selected for
 global purge, rename the launcher to a random tombstone beside that purge root
 before deleting product directories. This keeps the live executable on the same
-volume but outside every purge target. After the rename succeeds, a detached,
-hidden `cmd.exe` helper deletes only that exact tombstone after the launcher
-process exits. If the helper cannot start, restore the launcher to its public
-path before returning an error. For layouts whose launcher is not inside a
-purge root, retain the existing POSIX/deferred file-deletion path.
+volume but outside every purge target. After the rename succeeds, use Windows'
+POSIX delete disposition to remove the external tombstone pathname immediately;
+the unnamed live image can finish outside the BYO directory being purged. If
+that disposition is unavailable, a detached hidden `cmd.exe` helper deletes
+only the exact tombstone after process exit. If the helper cannot start, restore
+the launcher to its public path before returning an error. For layouts whose
+launcher is not inside a purge root, retain the same POSIX/deferred
+file-deletion path.
 
 The tombstone must never be placed inside a purge target. Product directories
 remain synchronously deleted, and the helper must not recursively delete a root;
@@ -56,6 +59,11 @@ detail without adding operator-facing flags or caveats.
 - Native CI run 32434293236 proved launcher evacuation releases and removes the
   complete `%LOCALAPPDATA%\BYO` root. It also exposed that starting the helper
   before the tombstone exists can exit without deleting the later rename.
+- Native CI run 32436543644 again removed the complete BYO root after starting
+  the helper after the rename, but the visible tombstone still outlived the
+  ten-second acceptance window. The already-proven POSIX disposition is now the
+  primary deletion mechanism after evacuation; deferred shell cleanup is only
+  the compatibility fallback.
 
 ## Pending verification
 
