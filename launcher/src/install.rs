@@ -299,16 +299,15 @@ fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
     let command_shell =
         std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
     let mut command = Command::new(command_shell);
+    let cleanup = r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#;
     command
-        .args([
-            "/D",
-            "/Q",
-            "/C",
-            // PROJECT-DEFINED: retry for up to roughly two minutes so the
-            // parent process and transient antivirus scans can release the
-            // renamed launcher without delaying the uninstall command itself.
-            r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#,
-        ])
+        .args(["/D", "/Q", "/S", "/C"])
+        // `cmd.exe /C` does not use the standard Windows C-runtime argument
+        // decoder. Passing the compound command through `Command::arg` can
+        // therefore leave the loop quoted as data instead of executing it.
+        // The target remains in the environment, so the literal command is
+        // fixed and the extra outer quotes follow cmd.exe's /S /C contract.
+        .raw_arg(format!("\"{cleanup}\""))
         .env("BYO_UNINSTALL_TARGET", tombstone)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -658,7 +657,7 @@ mod tests {
     use super::{portable_relative_path, write_if_changed};
 
     #[cfg(windows)]
-    use super::remove_public_launcher;
+    use super::{remove_public_launcher, start_windows_launcher_cleanup};
 
     fn write_registered_project(
         paths: &crate::paths::ProductPaths,
@@ -872,6 +871,27 @@ mod tests {
         assert!(!write_if_changed(&launcher, b"same").unwrap());
         assert_eq!(std::fs::read(&launcher).unwrap(), b"same");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_helper_executes_compound_command() {
+        let container = std::env::temp_dir().join(format!(
+            "byo-cleanup-helper-test-{:032x}",
+            rand::random::<u128>()
+        ));
+        std::fs::create_dir_all(&container).unwrap();
+        let tombstone = container.join(".byo-uninstall-test.exe");
+        std::fs::write(&tombstone, b"placeholder").unwrap();
+        start_windows_launcher_cleanup(&tombstone).unwrap();
+        for _ in 0..100 {
+            if !tombstone.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!tombstone.exists());
+        std::fs::remove_dir(container).unwrap();
     }
 
     #[cfg(windows)]

@@ -26,10 +26,11 @@ volume but outside every purge target. After the rename succeeds, use Windows'
 POSIX delete disposition to remove the external tombstone pathname immediately;
 the unnamed live image can finish outside the BYO directory being purged. If
 that disposition is unavailable, a detached hidden `cmd.exe` helper deletes
-only the exact tombstone after process exit. If the helper cannot start, restore
-the launcher to its public path before returning an error. For layouts whose
-launcher is not inside a purge root, retain the same POSIX/deferred
-file-deletion path.
+only the exact tombstone after process exit. Invoke the compound `/C` loop as a
+raw argument because `cmd.exe` does not use the standard Windows C-runtime
+argument decoder. If the helper cannot start, restore the launcher to its
+public path before returning an error. For layouts whose launcher is not inside
+a purge root, retain the same POSIX/deferred file-deletion path.
 
 The tombstone must never be placed inside a purge target. Product directories
 remain synchronously deleted, and the helper must not recursively delete a root;
@@ -64,6 +65,11 @@ detail without adding operator-facing flags or caveats.
   ten-second acceptance window. The already-proven POSIX disposition is now the
   primary deletion mechanism after evacuation; deferred shell cleanup is only
   the compatibility fallback.
+- Native CI run 32438855675 showed the POSIX disposition can still fall back on
+  the hosted Windows filesystem, and exposed that Rust's standard argument
+  quoting prevented the compound `cmd.exe /C` cleanup loop from executing.
+  The helper now uses the Windows raw-argument API and has a direct Windows
+  regression test.
 
 ## Pending verification
 
