@@ -300,31 +300,34 @@ fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -
 
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-    let command_shell =
-        std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
-    let mut command = Command::new(command_shell);
+    let powershell = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .map(|root| {
+            root.join("System32")
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe")
+        })
+        .filter(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from("powershell.exe"));
+    let mut command = Command::new(powershell);
     // A delete can temporarily report success while the executable image is
     // still mapped, only for the visible path to reappear when that process
     // exits. When this helper is evacuating the current launcher, first poll
-    // the exact parent PID. Successful `tasklist` matches sleep for a second;
-    // once the parent is absent, the remaining iterations complete quickly and
-    // the deletion loop begins. A transient tasklist failure cannot end the
-    // wait because every iteration queries the PID again.
-    let wait = if wait_for_pid.is_some() {
-        r#"for /L %I in (1,1,120) do @(tasklist /FI "PID eq %BYO_UNINSTALL_PID%" /NH 2>NUL | findstr.exe /R /C:"[ ]%BYO_UNINSTALL_PID%[ ]" >NUL && ping 127.0.0.1 -n 2 >NUL) & "#
-    } else {
-        ""
-    };
-    let delete = r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#;
-    let cleanup = format!("{wait}{delete}");
+    // the exact parent PID. PowerShell exposes the native process object, which
+    // avoids `cmd.exe` pipeline and quoting ambiguity. The target itself stays
+    // in the environment and is always consumed through `-LiteralPath`.
+    let cleanup = r#"$ErrorActionPreference='SilentlyContinue';$parentId=0;if([uint32]::TryParse($env:BYO_UNINSTALL_PID,[ref]$parentId)){$parent=Get-Process -Id $parentId -ErrorAction SilentlyContinue;if(($null -ne $parent) -and (-not $parent.WaitForExit(120000))){exit 1}};for($i=0;$i -lt 120;$i++){Remove-Item -LiteralPath $env:BYO_UNINSTALL_TARGET -Force -ErrorAction SilentlyContinue;if(-not (Test-Path -LiteralPath $env:BYO_UNINSTALL_TARGET)){exit 0};Start-Sleep -Seconds 1};exit 1"#;
     command
-        .args(["/D", "/Q", "/S", "/C"])
-        // `cmd.exe /C` does not use the standard Windows C-runtime argument
-        // decoder. Passing the compound command through `Command::arg` can
-        // therefore leave the loop quoted as data instead of executing it.
-        // The target remains in the environment, so the literal command is
-        // fixed and the extra outer quotes follow cmd.exe's /S /C contract.
-        .raw_arg(format!("\"{cleanup}\""))
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            cleanup,
+        ])
         .env("BYO_UNINSTALL_TARGET", tombstone)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -339,7 +342,7 @@ fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -
     }
     command
         .spawn()
-        .context("failed to start the Windows launcher cleanup helper")?;
+        .context("failed to start the Windows PowerShell launcher cleanup helper")?;
     Ok(())
 }
 
@@ -906,7 +909,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_cleanup_helper_executes_compound_command() {
+    fn windows_cleanup_helper_deletes_a_regular_file() {
         let container = std::env::temp_dir().join(format!(
             "byo cleanup helper test {:032x}",
             rand::random::<u128>()

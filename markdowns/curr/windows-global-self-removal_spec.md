@@ -23,16 +23,15 @@ When the Windows public launcher is nested inside a directory selected for
 global purge, rename the launcher to a random tombstone beside that purge root
 before deleting product directories. This keeps the live executable on the same
 volume but outside every purge target. After the rename succeeds, a detached
-hidden `cmd.exe` helper deletes only the exact tombstone after process exit.
-Invoke the compound `/C` loop as a raw argument because `cmd.exe` does not use
-the standard Windows C-runtime argument decoder. Do not use POSIX delete
-disposition for this evacuated live image: Windows can make a delete-pending
-executable temporarily invisible without completing removal, which can skip
-the required post-exit helper. The helper must poll the exact launcher PID and
-begin deletion only after that process exits; a live mapped image can also make
-`del` report success too early. If the helper cannot start, restore the launcher
-to its public path before returning an error. For layouts whose launcher is not
-inside a purge root, retain the same POSIX/deferred file-deletion path.
+hidden Windows PowerShell helper waits on the exact launcher process object,
+then deletes only the literal tombstone path with bounded retries. Do not use
+POSIX delete disposition for this evacuated live image: Windows can make a
+delete-pending executable temporarily invisible without completing removal,
+which can skip the required post-exit helper. Waiting on the native process
+object also prevents a live mapped image from making deletion report success
+too early. If the helper cannot start, restore the launcher to its public path
+before returning an error. For layouts whose launcher is not inside a purge
+root, retain the same POSIX/deferred file-deletion path.
 
 The tombstone must never be placed inside a purge target. Product directories
 remain synchronously deleted, and the helper must not recursively delete a root;
@@ -94,6 +93,11 @@ detail without adding operator-facing flags or caveats.
   Cleanup now waits for the exact parent PID before attempting deletion, and
   the Windows regression requires the copied live image to remain visible while
   its child is running and disappear after exit.
+- Native CI run 32448738978 executed the new Windows regression before release
+  packaging and proved that the embedded `tasklist | findstr` command pipeline
+  never reached reliable post-exit deletion. The helper now uses PowerShell's
+  process object with a bounded `WaitForExit`, followed by `-LiteralPath`
+  deletion retries; no target path is interpolated into shell code.
 
 ## Pending verification
 
