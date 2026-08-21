@@ -107,6 +107,10 @@ detail without adding operator-facing flags or caveats.
   The later cross-feature lease diagnostic check compared the Python 8.3 path
   spelling to Rust's canonical path as text. It now compares filesystem
   identity and always closes its MCP fixture in `finally`.
+- Native CI run 32451135924 passed that lease diagnostic and reached the final
+  global-uninstall receipt check, which contained the same valid canonical path
+  under a different 8.3 spelling. The remaining receipt assertion now uses the
+  shared filesystem-identity comparison as well.
 
 ## Pending verification
 
