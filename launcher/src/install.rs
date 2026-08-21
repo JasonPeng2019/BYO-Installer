@@ -344,7 +344,6 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
             .parent()
             .context("launcher evacuation root has no parent directory")?;
         let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        start_windows_launcher_cleanup(&tombstone)?;
         retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
             format!(
                 "failed to move the running public launcher {} outside purge root {}",
@@ -352,6 +351,15 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
                 root.display()
             )
         })?;
+        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
+                format!(
+                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
+                    path.display()
+                )
+            })?;
+            return Err(helper_error);
+        }
         if path.exists() {
             bail!(
                 "public launcher remained visible after evacuation: {}",
@@ -393,13 +401,21 @@ fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result
             .parent()
             .context("public launcher has no parent directory")?;
         let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        start_windows_launcher_cleanup(&tombstone)?;
         std::fs::rename(path, &tombstone).with_context(|| {
             format!(
                 "failed to mark public launcher {} for POSIX deletion ({disposition_error}) and failed to rename it for deferred deletion",
                 path.display()
             )
         })?;
+        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone) {
+            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
+                format!(
+                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
+                    path.display()
+                )
+            })?;
+            return Err(helper_error);
+        }
         if path.exists() {
             bail!(
                 "public launcher remained visible after deferred deletion: {}",
