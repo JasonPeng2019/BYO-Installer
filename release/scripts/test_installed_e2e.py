@@ -630,12 +630,19 @@ def main() -> int:
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
         if not firm_marker.is_file():
             raise AcceptanceFailure("reinstall over preserved state removed .firm data")
+        registered_projects = (project, unicode_project, nested_project)
+        receipt_paths = tuple(
+            Path(os.path.realpath(registered_project))
+            for registered_project in registered_projects
+        )
         global_receipt = invoke([str(byo), "uninstall", "--global"], env=env)
-        for registered_project in (project, unicode_project, nested_project):
-            if not output_names_path(global_receipt.stdout, registered_project):
+        for registered_project, receipt_path in zip(
+            registered_projects, receipt_paths, strict=True
+        ):
+            if not output_names_path(global_receipt.stdout, receipt_path):
                 raise AcceptanceFailure(
                     "global uninstall receipt omitted a project integration: "
-                    f"{registered_project}\nstdout:\n{global_receipt.stdout}"
+                    f"{receipt_path}\nstdout:\n{global_receipt.stdout}"
                 )
             if (registered_project / ".agent-workspace/manifest.json").exists():
                 raise AcceptanceFailure(
