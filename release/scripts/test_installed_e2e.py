@@ -187,13 +187,21 @@ def comparable_diagnostic_path(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if os.name != "nt":
         return normalized
+    # Windows compares paths case-insensitively through an uppercase table that
+    # also unifies characters `os.path.normcase` (a `str.lower()`) leaves
+    # distinct: the MICRO SIGN (U+00B5) and GREEK SMALL LETTER MU (U+03BC) both
+    # uppercase to U+039C, so they name the same directory. `canonicalize` /
+    # `GetFinalPathNameByHandle` can report one form in the launcher's
+    # registered path while `os.path.realpath` reports the other for the same
+    # project. Case-fold after normcase so this identity comparison honors that
+    # filesystem equivalence (`str.casefold()` folds both micro/mu to U+03BC).
     extended_unc = "\\\\?\\unc\\"
     if normalized.casefold().startswith(extended_unc):
-        return "\\\\" + normalized[len(extended_unc) :]
+        return ("\\\\" + normalized[len(extended_unc) :]).casefold()
     extended = "\\\\?\\"
     if normalized.startswith(extended):
-        return normalized[len(extended) :]
-    return normalized
+        return normalized[len(extended) :].casefold()
+    return normalized.casefold()
 
 
 def main() -> int:

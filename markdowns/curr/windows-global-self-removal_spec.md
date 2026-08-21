@@ -112,7 +112,19 @@ detail without adding operator-facing flags or caveats.
   under a different 8.3 spelling. The remaining receipt assertion now uses the
   shared filesystem-identity comparison as well.
 
+- Native CI runs 32456547358 and 32532649977 still failed the installed E2E,
+  but on the global-uninstall receipt's project-integration check for the
+  Unicode project `firmware-µ-测试`, not launcher self-removal (which run
+  32449345078 already proved). The launcher's registered canonical path and the
+  test's `os.path.realpath` expectation name the same NTFS directory through
+  case-fold-equivalent Mu codepoints — MICRO SIGN U+00B5 and GREEK SMALL LETTER
+  MU U+03BC, which both uppercase to U+039C. `comparable_diagnostic_path` used
+  `os.path.normcase` (a `str.lower()`), which does not unify them; it now
+  case-folds after normcase so the receipt identity check honors Windows'
+  case-insensitive path equivalence. The reproduced comparison was verified
+  locally to fail before and pass after the change.
+
 ## Pending verification
 
-- Windows unit and installed end-to-end proof after implementation.
-- The complete native release matrix and final 0.1.3 artifact checks.
+- The complete native release matrix and final 0.1.3 artifact checks with the
+  case-folded receipt comparison.
