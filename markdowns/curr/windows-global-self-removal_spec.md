@@ -102,6 +102,11 @@ detail without adding operator-facing flags or caveats.
   copied live-executable lifecycle in roughly three seconds. Its only Windows
   failure was the older placeholder evacuation assertion's two-second helper
   startup allowance; that bounded observation window is now ten seconds.
+- Native CI run 32449345078 passed the Windows cleanup regressions, the native
+  install without `HOME`, and complete launcher/application-root self-removal.
+  The later cross-feature lease diagnostic check compared the Python 8.3 path
+  spelling to Rust's canonical path as text. It now compares filesystem
+  identity and always closes its MCP fixture in `finally`.
 
 ## Pending verification
 

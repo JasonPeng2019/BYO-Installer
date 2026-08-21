@@ -154,6 +154,28 @@ def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:
         raise AcceptanceFailure(f"uninstall left BYO path behind: {path}")
 
 
+def output_names_path(output: str, expected: Path) -> bool:
+    """Return whether diagnostic output names the expected existing path.
+
+    Windows can report the same path through long-name and 8.3 aliases. Prefer
+    the literal fast path, then compare each diagnostic line by filesystem
+    identity so an alias does not weaken the path-reporting acceptance check.
+    """
+
+    if str(expected) in output:
+        return True
+    for line in output.splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        try:
+            if os.path.samefile(candidate, expected):
+                return True
+        except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+            continue
+    return False
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
@@ -467,22 +489,27 @@ def main() -> int:
         invoke([str(byo), "doctor", "--project", str(project)], env=env)
 
         mcp = start_initialized_mcp(byo, project, env, expected_version)
-        leases = list((home / "state" / "leases").glob("*.json"))
-        if len(leases) != 1:
-            raise AcceptanceFailure(f"expected one live runtime lease, found {leases}")
-        invoke(
-            [str(byo), "workspace", "update", "--project", str(project)],
-            env=env,
-            expected=11,
-        )
-        blocked_uninstall = invoke(
-            [str(byo), "uninstall", "--global"], env=env, expected=42
-        )
-        if str(project) not in blocked_uninstall.stderr:
-            raise AcceptanceFailure(
-                "lease-blocked global uninstall did not report the registered project"
+        try:
+            leases = list((home / "state" / "leases").glob("*.json"))
+            if len(leases) != 1:
+                raise AcceptanceFailure(
+                    f"expected one live runtime lease, found {leases}"
+                )
+            invoke(
+                [str(byo), "workspace", "update", "--project", str(project)],
+                env=env,
+                expected=11,
             )
-        stop_mcp(mcp)
+            blocked_uninstall = invoke(
+                [str(byo), "uninstall", "--global"], env=env, expected=42
+            )
+            if not output_names_path(blocked_uninstall.stderr, project):
+                raise AcceptanceFailure(
+                    "lease-blocked global uninstall did not report the registered "
+                    f"project\nstderr:\n{blocked_uninstall.stderr}"
+                )
+        finally:
+            stop_mcp(mcp)
         if list((home / "state" / "leases").glob("*.json")):
             raise AcceptanceFailure("runtime lease remained after MCP exit")
         invoke(
