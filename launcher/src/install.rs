@@ -501,7 +501,7 @@ fn project_locations(projects: &[PathBuf]) -> String {
 }
 
 pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> {
-    let _lock = InstallLock::acquire(paths)?;
+    let lock = InstallLock::acquire(paths)?;
     let registered = crate::project::registered_projects(paths)?;
     let registered_paths: Vec<_> = registered
         .iter()
@@ -533,14 +533,30 @@ pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> 
         // root and do not gate on `verify_runtime`: a corrupt runtime must not be
         // able to block a requested wipe. The preview helper returns non-nested,
         // product-scoped targets and never includes the shared bin directory.
-        for target in purge_targets(paths) {
-            if target.is_dir() {
-                std::fs::remove_dir_all(&target)?;
-            } else if target == paths.public_launcher() {
-                remove_public_launcher(&target)?;
+        let targets = purge_targets(paths);
+        let public_launcher = paths.public_launcher();
+        for target in targets.iter().filter(|target| !target.is_dir()) {
+            if target == &public_launcher {
+                remove_public_launcher(target)?;
             } else {
-                std::fs::remove_file(&target)?;
+                std::fs::remove_file(target).with_context(|| {
+                    format!("failed to remove global BYO file {}", target.display())
+                })?;
             }
+            removed.push(target.clone());
+        }
+
+        // The install lock itself lives below the state root. Windows refuses to
+        // remove a directory containing that open file, so release the lock only
+        // after the public launcher and locator are gone and before deleting the
+        // product roots. At that point a normal new mutation cannot start through
+        // the installed entry point or rediscover the installation through its
+        // locator.
+        drop(lock);
+        for target in targets.into_iter().filter(|target| target.is_dir()) {
+            std::fs::remove_dir_all(&target).with_context(|| {
+                format!("failed to remove global BYO directory {}", target.display())
+            })?;
             removed.push(target);
         }
         Ok(removed)
