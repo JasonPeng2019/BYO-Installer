@@ -285,24 +285,81 @@ fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn remove_public_launcher(path: &Path) -> Result<()> {
+fn remove_public_launcher(path: &Path, _evacuation_root: Option<&Path>) -> Result<()> {
     std::fs::remove_file(path)
         .with_context(|| format!("failed to remove public launcher {}", path.display()))
 }
 
 #[cfg(windows)]
-fn remove_public_launcher(path: &Path) -> Result<()> {
+fn start_windows_launcher_cleanup(tombstone: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    let command_shell =
+        std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
+    let mut command = Command::new(command_shell);
+    command
+        .args([
+            "/D",
+            "/Q",
+            "/C",
+            // PROJECT-DEFINED: retry for up to roughly two minutes so the
+            // parent process and transient antivirus scans can release the
+            // renamed launcher without delaying the uninstall command itself.
+            r#"for /L %I in (1,1,120) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#,
+        ])
+        .env("BYO_UNINSTALL_TARGET", tombstone)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    let temporary_directory = std::env::temp_dir();
+    if temporary_directory.is_dir() {
+        command.current_dir(temporary_directory);
+    }
+    command
+        .spawn()
+        .context("failed to start the Windows launcher cleanup helper")?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_public_launcher(path: &Path, evacuation_root: Option<&Path>) -> Result<()> {
     use std::mem::size_of;
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
-    use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfoEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_FLAG_DELETE,
         FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
         FILE_DISPOSITION_INFO_EX, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
-    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    if let Some(root) = evacuation_root {
+        if !path.starts_with(root) {
+            bail!("public launcher is not contained by its evacuation root");
+        }
+        let parent = root
+            .parent()
+            .context("launcher evacuation root has no parent directory")?;
+        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
+        retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
+            format!(
+                "failed to move the running public launcher {} outside purge root {}",
+                path.display(),
+                root.display()
+            )
+        })?;
+        start_windows_launcher_cleanup(&tombstone)?;
+        if path.exists() {
+            bail!(
+                "public launcher remained visible after evacuation: {}",
+                path.display()
+            );
+        }
+        return Ok(());
+    }
 
     let file = OpenOptions::new()
         .access_mode(DELETE)
@@ -336,28 +393,13 @@ fn remove_public_launcher(path: &Path) -> Result<()> {
             .parent()
             .context("public launcher has no parent directory")?;
         let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        let command_shell =
-            std::env::var_os("COMSPEC").unwrap_or_else(|| std::ffi::OsString::from("cmd.exe"));
-        Command::new(command_shell)
-            .args([
-                "/D",
-                "/Q",
-                "/C",
-                r#"for /L %I in (1,1,30) do @(del /F /Q "%BYO_UNINSTALL_TARGET%" >NUL 2>NUL && exit /B 0 || ping 127.0.0.1 -n 2 >NUL) & exit /B 1"#,
-            ])
-            .env("BYO_UNINSTALL_TARGET", &tombstone)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn()
-            .context("failed to start the Windows launcher cleanup helper")?;
         std::fs::rename(path, &tombstone).with_context(|| {
             format!(
                 "failed to mark public launcher {} for POSIX deletion ({disposition_error}) and failed to rename it for deferred deletion",
                 path.display()
             )
         })?;
+        start_windows_launcher_cleanup(&tombstone)?;
         if path.exists() {
             bail!(
                 "public launcher remained visible after deferred deletion: {}",
@@ -535,9 +577,12 @@ pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> 
         // product-scoped targets and never includes the shared bin directory.
         let targets = purge_targets(paths);
         let public_launcher = paths.public_launcher();
+        let launcher_evacuation_root = targets
+            .iter()
+            .find(|target| target.is_dir() && public_launcher.starts_with(target));
         for target in targets.iter().filter(|target| !target.is_dir()) {
             if target == &public_launcher {
-                remove_public_launcher(target)?;
+                remove_public_launcher(target, launcher_evacuation_root.map(PathBuf::as_path))?;
             } else {
                 std::fs::remove_file(target).with_context(|| {
                     format!("failed to remove global BYO file {}", target.display())
@@ -800,16 +845,25 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_public_launcher_delete_removes_the_visible_path() {
-        let root = std::env::temp_dir().join(format!(
+    fn windows_public_launcher_evacuation_releases_the_purge_root() {
+        let container = std::env::temp_dir().join(format!(
             "byo-uninstall-test-{:032x}",
             rand::random::<u128>()
         ));
-        std::fs::create_dir_all(&root).unwrap();
-        let launcher = root.join("byo.exe");
+        let root = container.join("BYO");
+        let launcher = root.join("bin/byo.exe");
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
         std::fs::write(&launcher, b"placeholder").unwrap();
-        remove_public_launcher(&launcher).unwrap();
+        remove_public_launcher(&launcher, Some(&root)).unwrap();
         assert!(!launcher.exists());
-        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        for _ in 0..100 {
+            if std::fs::read_dir(&container).unwrap().next().is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(std::fs::read_dir(&container).unwrap().next().is_none());
+        std::fs::remove_dir(container).unwrap();
     }
 }

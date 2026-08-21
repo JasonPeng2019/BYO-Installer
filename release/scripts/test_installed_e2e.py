@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -145,6 +146,14 @@ def stop_mcp(process: subprocess.Popen[str]) -> None:
         )
 
 
+def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while path.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if path.exists():
+        raise AcceptanceFailure(f"uninstall left BYO path behind: {path}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", type=Path, required=True)
@@ -256,6 +265,9 @@ def main() -> int:
                 )
             invoke([str(native_byo), "status"], env=native_env)
             invoke([str(native_byo), "uninstall", "--global"], env=native_env)
+            wait_until_absent(native_local / "BYO")
+            for tombstone in native_local.glob(".byo-uninstall-*.exe"):
+                wait_until_absent(tombstone)
         else:
             install_command = [
                 str(ROOT / "install.sh"),
