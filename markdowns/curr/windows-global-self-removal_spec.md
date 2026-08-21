@@ -19,23 +19,36 @@ directory until process exit, so synchronous removal of its ancestor failed.
 
 ## Design
 
-When the Windows public launcher is nested inside a directory selected for
-global purge, rename the launcher to a random tombstone beside that purge root
-before deleting product directories. This keeps the live executable on the same
-volume but outside every purge target. After the rename succeeds, a detached
-hidden Windows PowerShell helper waits on the exact launcher process object,
-then deletes only the literal tombstone path with bounded retries. Do not use
-POSIX delete disposition for this evacuated live image: Windows can make a
-delete-pending executable temporarily invisible without completing removal,
-which can skip the required post-exit helper. Waiting on the native process
-object also prevents a live mapped image from making deletion report success
-too early. If the helper cannot start, restore the launcher to its public path
-before returning an error. For layouts whose launcher is not inside a purge
-root, retain the same POSIX/deferred file-deletion path.
+`byo uninstall --global` removes every BYO-owned product directory (`data`,
+`state`, `config`, `cache`) plus the public launcher and install locator under
+the shared `bin` directory. On the default Windows layout those product
+directories are siblings of `bin`, so the executing
+`%LOCALAPPDATA%\BYO\bin\byo.exe` is *not* nested inside any purged directory.
+An earlier revision only evacuated the launcher when it was nested in a purge
+root and otherwise retained a POSIX/deferred file deletion; because the default
+layout is the non-nested case, every default install took that retained path,
+which is the failure this spec kept reproducing.
 
-The tombstone must never be placed inside a purge target. Product directories
-remain synchronously deleted, and the helper must not recursively delete a root;
-that prevents a fast reinstall from being erased by delayed cleanup.
+Windows will not delete a running executable image, and a POSIX delete
+disposition on the live launcher is unreliable: it can report success while the
+image is still mapped, only for the pathname to reappear when the process exits,
+which suppresses the post-exit cleanup that is still required. Renaming a running
+image, by contrast, is always permitted. The live launcher is therefore *always*
+moved aside to a random tombstone before product directories are deleted, and a
+detached hidden Windows PowerShell helper waits on the exact launcher process
+object, then deletes only that literal tombstone path with bounded retries.
+Waiting on the native process object prevents a live mapped image from making
+deletion report success too early. POSIX delete disposition is never used on the
+live image. If the helper cannot start, the launcher is restored to its public
+path before returning an error.
+
+The tombstone must survive whatever the uninstall removes next and must never be
+placed inside a purge target. When the launcher's own directory tree is being
+purged, the tombstone is written beside that purge root (outside it); otherwise
+the launcher's parent — the shared `bin` directory, which uninstall never
+removes — holds it until the helper runs. Product directories remain
+synchronously deleted, and the helper deletes only the literal tombstone file,
+never a directory, so a fast reinstall is never erased by delayed cleanup.
 
 ## Regression guard
 
@@ -112,7 +125,17 @@ detail without adding operator-facing flags or caveats.
   under a different 8.3 spelling. The remaining receipt assertion now uses the
   shared filesystem-identity comparison as well.
 
+- Native runs through 32459433950 continued to fail the installed Windows E2E
+  at `uninstall --global`, leaving `bin\byo.exe` behind. This isolated the
+  retained POSIX/deferred deletion path as the cause on the non-nested default
+  Windows layout (`bin` is a sibling of the purged `data`/`state`/`config`/
+  `cache` roots, so the launcher is never inside a purge target and the
+  evacuation branch never ran). The live launcher is now always renamed aside to
+  a tombstone and cleaned by the PID-waiting helper, and the POSIX delete
+  disposition is removed entirely. Rust format, Clippy, and the host test suite
+  pass.
+
 ## Pending verification
 
-- Windows unit and installed end-to-end proof after implementation.
-- The complete native release matrix and final 0.1.3 artifact checks.
+- The complete native release matrix and final 0.1.3 artifact checks after the
+  always-evacuate implementation.

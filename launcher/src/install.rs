@@ -347,133 +347,55 @@ fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -
 }
 
 #[cfg(windows)]
-fn mark_windows_launcher_for_posix_deletion(path: &Path) -> Result<()> {
-    use std::mem::size_of;
-    use std::os::windows::fs::OpenOptionsExt;
-    use std::os::windows::io::AsRawHandle;
-
-    use windows_sys::Win32::Storage::FileSystem::{
-        FileDispositionInfoEx, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_FLAG_DELETE,
-        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE, FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
-        FILE_DISPOSITION_INFO_EX, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
-    };
-
-    let file = OpenOptions::new()
-        .access_mode(DELETE)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
-        .open(path)
-        .with_context(|| {
-            format!(
-                "failed to open Windows launcher {} for deletion",
-                path.display()
-            )
-        })?;
-    let disposition = FILE_DISPOSITION_INFO_EX {
-        Flags: FILE_DISPOSITION_FLAG_DELETE
-            | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS
-            | FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE,
-    };
-    // SAFETY: `file` owns a valid Windows file handle, and `disposition` remains
-    // alive and correctly sized for the duration of this synchronous call.
-    let result = unsafe {
-        SetFileInformationByHandle(
-            file.as_raw_handle(),
-            FileDispositionInfoEx,
-            std::ptr::from_ref(&disposition).cast(),
-            size_of::<FILE_DISPOSITION_INFO_EX>() as u32,
-        )
-    };
-    if result == 0 {
-        let error = std::io::Error::last_os_error();
-        drop(file);
-        bail!(
-            "failed to mark Windows launcher {} for POSIX deletion: {error}",
-            path.display()
-        );
-    }
-    drop(file);
-    if path.exists() {
-        bail!(
-            "Windows launcher remained visible after POSIX deletion: {}",
-            path.display()
-        );
-    }
-    Ok(())
-}
-
-#[cfg(windows)]
 fn remove_public_launcher(
     path: &Path,
     evacuation_root: Option<&Path>,
     wait_for_pid: Option<u32>,
 ) -> Result<()> {
-    if let Some(root) = evacuation_root {
+    // Windows will not delete a running executable image, and a POSIX delete
+    // disposition on the live launcher is unreliable: it can report success
+    // while the image is still mapped, only for the original path to reappear
+    // when this process exits. Renaming a running image is always permitted, so
+    // move the launcher aside to a tombstone and let a process-aware helper
+    // delete it once this process releases the image.
+    //
+    // The tombstone must outlive whatever the caller removes next. When the
+    // launcher's own directory tree is being purged (`evacuation_root` contains
+    // it), place the tombstone outside that tree; otherwise the launcher's
+    // parent (the shared `bin` directory, which uninstall never removes) holds
+    // it until the helper runs.
+    let tombstone_dir = if let Some(root) = evacuation_root {
         if !path.starts_with(root) {
             bail!("public launcher is not contained by its evacuation root");
         }
-        let parent = root
-            .parent()
-            .context("launcher evacuation root has no parent directory")?;
-        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
+        root.parent()
+            .context("launcher evacuation root has no parent directory")?
+    } else {
+        path.parent()
+            .context("public launcher has no parent directory")?
+    };
+    let tombstone =
+        tombstone_dir.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
+    retry_transient_io(|| std::fs::rename(path, &tombstone)).with_context(|| {
+        format!(
+            "failed to move the running public launcher {} aside for deferred deletion",
+            path.display()
+        )
+    })?;
+    if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone, wait_for_pid) {
+        retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
             format!(
-                "failed to move the running public launcher {} outside purge root {}",
-                path.display(),
-                root.display()
+                "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
+                path.display()
             )
         })?;
-        // Do not apply a POSIX delete disposition to the evacuated live image.
-        // Windows can make a delete-pending executable temporarily invisible,
-        // causing the disposition path to report success without starting the
-        // post-exit cleanup that is still required. The raw cmd.exe helper is
-        // deterministic here: the tombstone exists before it starts, it waits
-        // for this process to release the image, and then it deletes the exact
-        // file with bounded retries.
-        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone, wait_for_pid) {
-            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
-                format!(
-                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
-                    path.display()
-                )
-            })?;
-            return Err(helper_error);
-        }
-        if path.exists() {
-            bail!(
-                "public launcher remained visible after evacuation: {}",
-                path.display()
-            );
-        }
-        return Ok(());
+        return Err(helper_error);
     }
-
-    if let Err(disposition_error) = mark_windows_launcher_for_posix_deletion(path) {
-        let parent = path
-            .parent()
-            .context("public launcher has no parent directory")?;
-        let tombstone = parent.join(format!(".byo-uninstall-{:016x}.exe", rand::random::<u64>()));
-        std::fs::rename(path, &tombstone).with_context(|| {
-            format!(
-                "failed to mark public launcher {} for POSIX deletion ({disposition_error}) and failed to rename it for deferred deletion",
-                path.display()
-            )
-        })?;
-        if let Err(helper_error) = start_windows_launcher_cleanup(&tombstone, wait_for_pid) {
-            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
-                format!(
-                    "Windows cleanup helper failed ({helper_error:#}) and the public launcher could not be restored to {}",
-                    path.display()
-                )
-            })?;
-            return Err(helper_error);
-        }
-        if path.exists() {
-            bail!(
-                "public launcher remained visible after deferred deletion: {}",
-                path.display()
-            );
-        }
-        return Ok(());
+    if path.exists() {
+        bail!(
+            "public launcher remained visible after deferred deletion: {}",
+            path.display()
+        );
     }
     Ok(())
 }
