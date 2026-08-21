@@ -98,6 +98,10 @@ detail without adding operator-facing flags or caveats.
   never reached reliable post-exit deletion. The helper now uses PowerShell's
   process object with a bounded `WaitForExit`, followed by `-LiteralPath`
   deletion retries; no target path is interpolated into shell code.
+- Native CI run 32449154544 passed both the regular-file helper test and the
+  copied live-executable lifecycle in roughly three seconds. Its only Windows
+  failure was the older placeholder evacuation assertion's two-second helper
+  startup allowance; that bounded observation window is now ten seconds.
 
 ## Pending verification
 

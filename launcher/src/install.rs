@@ -1004,7 +1004,7 @@ mod tests {
             if std::fs::read_dir(&container).unwrap().next().is_none() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
         assert!(std::fs::read_dir(&container).unwrap().next().is_none());
         std::fs::remove_dir(container).unwrap();
