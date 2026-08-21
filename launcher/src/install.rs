@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn windows_cleanup_helper_executes_compound_command() {
         let container = std::env::temp_dir().join(format!(
-            "byo-cleanup-helper-test-{:032x}",
+            "byo cleanup helper test {:032x}",
             rand::random::<u128>()
         ));
         std::fs::create_dir_all(&container).unwrap();

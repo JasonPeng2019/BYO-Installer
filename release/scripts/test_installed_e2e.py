@@ -267,7 +267,12 @@ def main() -> int:
             invoke([str(native_byo), "uninstall", "--global"], env=native_env)
             wait_until_absent(native_local / "BYO")
             for tombstone in native_local.glob(".byo-uninstall-*.exe"):
-                wait_until_absent(tombstone)
+                # Windows can keep the just-exited executable open while
+                # Defender or another scanner finishes inspecting it. The
+                # product helper retries for roughly two minutes, so verify
+                # that bounded guarantee instead of applying the generic
+                # ten-second directory-removal deadline to the live image.
+                wait_until_absent(tombstone, timeout=130.0)
         else:
             install_command = [
                 str(ROOT / "install.sh"),

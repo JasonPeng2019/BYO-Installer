@@ -40,7 +40,9 @@ that prevents a fast reinstall from being erased by delayed cleanup.
 
 - Extend the installed Windows acceptance flow to require the native
   `%LOCALAPPDATA%\BYO` root and its launcher tombstone to disappear after
-  `uninstall --global`.
+  `uninstall --global`. Give the live-image tombstone the same bounded
+  two-minute retry window as the product helper so transient Defender or
+  antivirus handles do not create a false failure.
 - Add Windows launcher tests for the evacuation-path selection and visible-path
   removal.
 - Run Rust format, Clippy, and tests, then rerun the four-target native matrix.
@@ -70,6 +72,12 @@ detail without adding operator-facing flags or caveats.
   quoting prevented the compound `cmd.exe /C` cleanup loop from executing.
   The helper now uses the Windows raw-argument API and has a direct Windows
   regression test.
+- Native CI run 32441388047 passed that direct helper regression, including the
+  raw compound command, but the installed E2E still applied its generic
+  ten-second absence deadline to a helper designed to tolerate executable
+  scanner locks for roughly two minutes. The installed assertion now exercises
+  the product's actual bounded retry contract, and the direct helper regression
+  uses a path containing spaces like the failed native install.
 
 ## Pending verification
 
