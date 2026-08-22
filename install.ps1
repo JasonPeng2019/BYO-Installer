@@ -149,10 +149,21 @@ try {
         if ($Sha256 -notmatch '^[0-9a-fA-F]{64}$') {
             throw "The SHA-256 digest is invalid."
         }
-        $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+        # Detect the true OS architecture from the environment rather than
+        # RuntimeInformation.OSArchitecture: a 32-bit PowerShell process (WOW64)
+        # on 64-bit Windows reports the process architecture there, which
+        # surfaced as a spurious "Unsupported Windows architecture".
+        # PROCESSOR_ARCHITEW6432 holds the real OS architecture only under WOW64;
+        # otherwise PROCESSOR_ARCHITECTURE already is the OS architecture.
+        $osArchitecture = $env:PROCESSOR_ARCHITEW6432
+        if (-not $osArchitecture) { $osArchitecture = $env:PROCESSOR_ARCHITECTURE }
+        $architecture = switch ($osArchitecture) {
+            "AMD64" { "x86_64" }
+            "ARM64" { "aarch64" }
             "X64" { "x86_64" }
-            "Arm64" { "aarch64" }
-            default { throw "Unsupported Windows architecture." }
+            default {
+                throw "BYO ships 64-bit Windows builds only (x64 or ARM64); 32-bit Windows is not supported. Detected architecture '$osArchitecture' (PROCESSOR_ARCHITECTURE=$($env:PROCESSOR_ARCHITECTURE); PROCESSOR_ARCHITEW6432=$($env:PROCESSOR_ARCHITEW6432))."
+            }
         }
         $archiveName = "byo-$Version-windows-$architecture.zip"
         $archiveUrl = "$($BaseUrl.TrimEnd('/'))/$archiveName"
