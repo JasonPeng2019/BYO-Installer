@@ -668,9 +668,24 @@ def main() -> int:
             registered_projects, receipt_paths, strict=True
         ):
             if not output_names_path(global_receipt.stdout, receipt_path):
+                roots = []
+                for line in global_receipt.stdout.splitlines():
+                    candidate = line.strip()
+                    marker = candidate.rfind("firmware-")
+                    if marker != -1 and not any(
+                        sep in candidate[marker:] for sep in ("\\", "/")
+                    ):
+                        roots.append(candidate)
+                report = "\n".join(
+                    f"  cand={ascii(root)} cmp={ascii(comparable_diagnostic_path(root))}"
+                    for root in dict.fromkeys(roots)
+                )
                 raise AcceptanceFailure(
-                    "global uninstall receipt omitted a project integration: "
-                    f"{receipt_path}\nstdout:\n{global_receipt.stdout}"
+                    "global uninstall receipt omitted a project integration:\n"
+                    f"  expected     ={ascii(str(receipt_path))}\n"
+                    f"  expected_cmp ={ascii(comparable_diagnostic_path(receipt_path))}\n"
+                    f"  registered   ={ascii(str(registered_project))}\n"
+                    f"{report}"
                 )
             if (registered_project / ".agent-workspace/manifest.json").exists():
                 raise AcceptanceFailure(
