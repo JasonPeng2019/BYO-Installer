@@ -112,19 +112,22 @@ detail without adding operator-facing flags or caveats.
   under a different 8.3 spelling. The remaining receipt assertion now uses the
   shared filesystem-identity comparison as well.
 
-- Native CI runs 32456547358 and 32532649977 still failed the installed E2E,
-  but on the global-uninstall receipt's project-integration check for the
-  Unicode project `firmware-µ-测试`, not launcher self-removal (which run
-  32449345078 already proved). The launcher's registered canonical path and the
-  test's `os.path.realpath` expectation name the same NTFS directory through
-  case-fold-equivalent Mu codepoints — MICRO SIGN U+00B5 and GREEK SMALL LETTER
-  MU U+03BC, which both uppercase to U+039C. `comparable_diagnostic_path` used
-  `os.path.normcase` (a `str.lower()`), which does not unify them; it now
-  case-folds after normcase so the receipt identity check honors Windows'
-  case-insensitive path equivalence. The reproduced comparison was verified
-  locally to fail before and pass after the change.
+- Native CI runs 32456547358, 32532649977, and 32538775371 still failed the
+  installed E2E, but on the global-uninstall receipt's project-integration
+  check for the Unicode project `firmware-µ-测试`, not launcher self-removal
+  (which run 32449345078 already proved). An `ascii()`-escaped diagnostic
+  (run 32545759153) showed the divergence was not Unicode normalization at all:
+  the receipt line decoded to `firmware-\xc2\xb5-\xe6\xb5‹\xe8\xaf•`,
+  the exact mojibake of the UTF-8 bytes of `firmware-µ-测试` read as Windows
+  code page 1252. The launcher emits UTF-8 on every platform, but the test's
+  `subprocess` capture used `text=True` without an explicit encoding, so on the
+  hosted Windows runner it decoded launcher output with the locale codepage.
+  The receipt path was correct; the acceptance harness corrupted it before
+  comparison. `invoke()` and the MCP `Popen` now decode with
+  `encoding="utf-8"`. Reproduced locally: the cp1252 decode yields the exact CI
+  mojibake and fails the path-identity check, while the UTF-8 decode matches.
 
 ## Pending verification
 
 - The complete native release matrix and final 0.1.3 artifact checks with the
-  case-folded receipt comparison.
+  UTF-8-decoded acceptance harness.
