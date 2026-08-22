@@ -4,6 +4,7 @@
 /AgentWorkspace.incorrect-backup/
 
 # Generated release output
+/build/
 /release/build/
 /release/dist/
 /release/symbols/
