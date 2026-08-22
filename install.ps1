@@ -4,7 +4,8 @@ param(
     [string]$BaseUrl,
     [string]$Sha256,
     [string]$InstallDir,
-    [switch]$ModifyPath
+    [switch]$ModifyPath,
+    [switch]$AllowUnsigned
 )
 
 $ErrorActionPreference = "Stop"
@@ -164,7 +165,15 @@ try {
             throw "Downloaded archive SHA-256 mismatch."
         }
         $Bundle = $archive
-        $verifyDownloadedSignatures = $true
+        # Unsigned preview: the pinned -Sha256 already fixes the exact archive
+        # bytes out of band, so -AllowUnsigned skips the Authenticode check a
+        # signed channel would otherwise enforce.
+        if ($AllowUnsigned) {
+            Write-Host "Skipping Authenticode verification (-AllowUnsigned); the pinned SHA-256 fixes the exact archive."
+        }
+        else {
+            $verifyDownloadedSignatures = $true
+        }
     }
 
     if (Test-Path -LiteralPath $Bundle -PathType Leaf) {

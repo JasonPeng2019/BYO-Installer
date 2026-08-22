@@ -4,7 +4,7 @@ set -eu
 usage() {
   echo "usage:" >&2
   echo "  ./install.sh --bundle <byo-archive-or-extracted-bundle> [--install-dir <absolute-path>] [--modify-path]" >&2
-  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--install-dir <absolute-path>] [--modify-path]" >&2
+  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--allow-unsigned] [--install-dir <absolute-path>] [--modify-path]" >&2
   exit 2
 }
 
@@ -15,6 +15,7 @@ expected_sha=
 public_key=
 install_dir=
 modify_path=
+allow_unsigned=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --bundle) [ "$#" -ge 2 ] || usage; bundle=$2; shift 2 ;;
@@ -24,6 +25,7 @@ while [ "$#" -gt 0 ]; do
     --public-key) [ "$#" -ge 2 ] || usage; public_key=$2; shift 2 ;;
     --install-dir) [ "$#" -ge 2 ] || usage; install_dir=$2; shift 2 ;;
     --modify-path) modify_path=1; shift ;;
+    --allow-unsigned) allow_unsigned=1; shift ;;
     *) usage ;;
   esac
 done
@@ -176,20 +178,27 @@ if [ -z "$bundle" ]; then
     exit 23
   }
 
-  if [ "$product_platform" = "linux" ]; then
-    [ -n "$public_key" ] && [ -f "$public_key" ] || {
-      echo "Linux network installation requires --public-key for the detached Ed25519 signature." >&2
-      exit 23
-    }
-    signature="$temporary/$archive_name.sig"
-    curl --fail --location --proto '=https' --tlsv1.2 --output "$signature" "$archive_url.sig"
-    openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -sigfile "$signature" -in "$archive" >/dev/null || {
-      echo "Downloaded archive signature verification failed." >&2
-      exit 23
-    }
+  if [ -n "$allow_unsigned" ]; then
+    # Unsigned preview: the SHA-256 pinned on the command line already fixes the
+    # exact bytes out of band, so skip the code-signature checks that a signed
+    # channel would otherwise enforce (macOS codesign/spctl, Linux Ed25519 .sig).
+    echo "Skipping code-signature verification (--allow-unsigned); the pinned SHA-256 fixes the exact archive." >&2
+  else
+    if [ "$product_platform" = "linux" ]; then
+      [ -n "$public_key" ] && [ -f "$public_key" ] || {
+        echo "Linux network installation requires --public-key for the detached Ed25519 signature (or --allow-unsigned for an unsigned preview)." >&2
+        exit 23
+      }
+      signature="$temporary/$archive_name.sig"
+      curl --fail --location --proto '=https' --tlsv1.2 --output "$signature" "$archive_url.sig"
+      openssl pkeyutl -verify -rawin -pubin -inkey "$public_key" -sigfile "$signature" -in "$archive" >/dev/null || {
+        echo "Downloaded archive signature verification failed." >&2
+        exit 23
+      }
+    fi
+    verify_downloaded_platform_signature=1
   fi
   bundle=$archive
-  verify_downloaded_platform_signature=1
 fi
 
 if [ -f "$bundle" ]; then
