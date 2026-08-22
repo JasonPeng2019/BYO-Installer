@@ -86,9 +86,10 @@ byo codex firmware
 The dry run is optional. `byo init` creates the project capsule, registers the
 project, configures both clients to launch the MCP server through
 `byo mcp serve`, and runs the project health check. It also projects one thin
-native Claude skill loader per mode-authorized workflow into `.claude/skills`.
-Claude can discover or invoke those skills normally; each loader fetches the
-verified private body from the installed workspace pack only when selected.
+native skill loader for each model-invocable mode-authorized workflow into both
+`.codex/skills` and `.claude/skills`. Each client can discover or invoke those
+skills normally; the loader fetches the verified private body from the installed
+workspace pack only when selected. Manual-only skills remain private.
 Restart an already-open client after initialization. To launch Claude instead,
 run `byo claude firmware`.
 

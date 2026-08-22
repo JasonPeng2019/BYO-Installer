@@ -688,7 +688,11 @@ fn restore_backup(
     Ok(())
 }
 
-fn render_claude_skill_loader(skill_id: &str, skill: &CompiledSkill) -> String {
+/// Render the public, metadata-only entry point for a private workflow skill.
+///
+/// Codex and Claude consume the same native `SKILL.md` contract. The complete
+/// workflow stays in the verified workspace pack until the client loads it.
+fn render_skill_loader(skill_id: &str, skill: &CompiledSkill) -> String {
     let description = skill
         .description
         .split_whitespace()
@@ -698,6 +702,10 @@ fn render_claude_skill_loader(skill_id: &str, skill: &CompiledSkill) -> String {
         "---\nname: {skill_id}\ndescription: >-\n  {description}\ndisable-model-invocation: {}\nuser-invocable: {}\nallowed-tools: Bash(byo workflow guidance {skill_id}:*)\n---\n\nLoad the verified private BYO workflow guidance for this skill:\n\n!`byo workflow guidance {skill_id}`\n",
         skill.disable_model_invocation, skill.user_invocable
     )
+}
+
+fn is_model_invocable(skill: &CompiledSkill) -> bool {
+    !skill.disable_model_invocation
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
@@ -795,21 +803,24 @@ Available specialist identifiers: {}.\n",
         "---\nname: byo-firmware\ndescription: Use the BYO firmware MCP workflow.\n---\n\n{}\n",
         bootstrap.trim()
     );
-    let claude_skill_loaders = mode_policy
-        .skills
-        .iter()
-        .map(|skill_id| {
-            let entry = workflow_catalog
-                .skills
-                .get(skill_id)
-                .with_context(|| format!("compiled skill metadata is missing: {skill_id}"))?;
-            let metadata = entry.metadata(skill_id);
-            Ok((
+    // Only skills the workspace explicitly permits the model to invoke are
+    // advertised as native skills. Manual-only skills remain available through
+    // `byo workflow guidance <skill>` after an explicit user request, but their
+    // names and descriptions are not injected into either client's catalog.
+    let mut visible_skill_loaders = BTreeMap::new();
+    for skill_id in &mode_policy.skills {
+        let entry = workflow_catalog
+            .skills
+            .get(skill_id)
+            .with_context(|| format!("compiled skill metadata is missing: {skill_id}"))?;
+        let metadata = entry.metadata(skill_id);
+        if is_model_invocable(&metadata) {
+            visible_skill_loaders.insert(
                 skill_id.clone(),
-                render_claude_skill_loader(skill_id, &metadata),
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
+                render_skill_loader(skill_id, &metadata),
+            );
+        }
+    }
     let active_mode = serde_json::to_string_pretty(&serde_json::json!({
         "schema": 1,
         "mode": mode,
@@ -858,9 +869,14 @@ Available specialist identifiers: {}.\n",
         "CLAUDE.md".to_string(),
     ];
     targets.extend(
-        claude_skill_loaders
+        visible_skill_loaders
             .keys()
-            .map(|skill_id| format!(".claude/skills/{skill_id}/SKILL.md")),
+            .flat_map(|skill_id| {
+                [
+                    format!(".codex/skills/{skill_id}/SKILL.md"),
+                    format!(".claude/skills/{skill_id}/SKILL.md"),
+                ]
+            }),
     );
     let desired_managed_paths: BTreeSet<String> = [
         ".codex/skills/byo-firmware/SKILL.md".to_string(),
@@ -869,9 +885,14 @@ Available specialist identifiers: {}.\n",
     ]
     .into_iter()
     .chain(
-        claude_skill_loaders
+        visible_skill_loaders
             .keys()
-            .map(|skill_id| format!(".claude/skills/{skill_id}/SKILL.md")),
+            .flat_map(|skill_id| {
+                [
+                    format!(".codex/skills/{skill_id}/SKILL.md"),
+                    format!(".claude/skills/{skill_id}/SKILL.md"),
+                ]
+            }),
     )
     .collect();
     let obsolete_managed_paths: Vec<String> = existing_projection
@@ -904,9 +925,14 @@ Available specialist identifiers: {}.\n",
     ]
     .into_iter()
     .chain(
-        claude_skill_loaders
+        visible_skill_loaders
             .keys()
-            .map(|skill_id| format!(".claude/skills/{skill_id}")),
+            .flat_map(|skill_id| {
+                [
+                    format!(".codex/skills/{skill_id}"),
+                    format!(".claude/skills/{skill_id}"),
+                ]
+            }),
     )
     .collect();
     for directory in &directory_targets {
@@ -992,7 +1018,11 @@ Available specialist identifiers: {}.\n",
             &project.join(".claude/skills/byo-firmware/SKILL.md"),
             &skill,
         )?;
-        for (skill_id, loader) in &claude_skill_loaders {
+        for (skill_id, loader) in &visible_skill_loaders {
+            atomic_text(
+                &project.join(format!(".codex/skills/{skill_id}/SKILL.md")),
+                loader,
+            )?;
             atomic_text(
                 &project.join(format!(".claude/skills/{skill_id}/SKILL.md")),
                 loader,
@@ -1024,11 +1054,20 @@ Available specialist identifiers: {}.\n",
             },
         ];
         managed_files.extend(
-            claude_skill_loaders
+            visible_skill_loaders
                 .iter()
-                .map(|(skill_id, loader)| ManagedFile {
-                    path: format!(".claude/skills/{skill_id}/SKILL.md"),
-                    sha256: sha256_bytes(loader.as_bytes()),
+                .flat_map(|(skill_id, loader)| {
+                    let sha256 = sha256_bytes(loader.as_bytes());
+                    [
+                        ManagedFile {
+                            path: format!(".codex/skills/{skill_id}/SKILL.md"),
+                            sha256: sha256.clone(),
+                        },
+                        ManagedFile {
+                            path: format!(".claude/skills/{skill_id}/SKILL.md"),
+                            sha256,
+                        },
+                    ]
                 }),
         );
         managed_files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -1642,9 +1681,10 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        managed_block, register_project, remove_claude_mcp, remove_claude_mcp_approval,
-        remove_hook_configuration, render_claude_mcp, render_claude_skill_loader,
-        render_codex_config, render_hook_configuration, uninstall_project, CapsuleManifest,
+        is_model_invocable, managed_block, register_project, remove_claude_mcp,
+        remove_claude_mcp_approval, remove_hook_configuration, render_claude_mcp,
+        render_codex_config, render_hook_configuration, render_skill_loader, uninstall_project,
+        CapsuleManifest,
     };
 
     fn uninstall_fixture() -> (PathBuf, crate::paths::ProductPaths, PathBuf) {
@@ -1799,21 +1839,24 @@ mod tests {
     }
 
     #[test]
-    fn claude_skill_loader_is_native_and_keeps_private_body_out_of_project() {
-        let loader = render_claude_skill_loader(
-            "mcp-help",
-            &crate::pack::CompiledSkill {
-                resource: "skills-src/firmware/mcp-help/SKILL.md".to_string(),
-                description: "Help select the correct MCP tool.".to_string(),
-                disable_model_invocation: false,
-                user_invocable: true,
-            },
-        );
+    fn native_skill_loader_exposes_metadata_without_private_body() {
+        let skill = crate::pack::CompiledSkill {
+            resource: "skills-src/firmware/mcp-help/SKILL.md".to_string(),
+            description: "Help select the correct MCP tool.".to_string(),
+            disable_model_invocation: false,
+            user_invocable: true,
+        };
+        let loader = render_skill_loader("mcp-help", &skill);
         assert!(loader.contains("name: mcp-help"));
         assert!(loader.contains("description: >-"));
         assert!(loader.contains("disable-model-invocation: false"));
         assert!(loader.contains("!`byo workflow guidance mcp-help`"));
         assert!(!loader.contains("skills-src/firmware"));
+        assert!(is_model_invocable(&skill));
+        assert!(!is_model_invocable(&crate::pack::CompiledSkill {
+            disable_model_invocation: true,
+            ..skill
+        }));
     }
 
     #[test]

@@ -94,7 +94,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
-        run: python release/scripts/build_release.py --version "$VERSION"
+        run: uv run --project "Firmware MCP New" python release/scripts/build_release.py --version "$VERSION"
 
       - name: Check target and archive contract
         shell: bash
@@ -203,7 +203,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          "$BYO_BUILD_PYTHON" release/scripts/build_release.py --version "$VERSION"
+          uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/build_release.py --version "$VERSION"
 
       - name: Check target and archive contract
         shell: bash

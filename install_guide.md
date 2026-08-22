@@ -568,10 +568,11 @@ The default capsule should be no larger than necessary:
 
 The presence of user-owned task files does not expose proprietary product implementation.
 
-Each Claude loader carries the packed skill's discovery description and invocation controls, but
-not its private body. On selection it dynamically loads verified content through
-`byo workflow guidance <skill-id>`. The MCP `initialization_handshake` remains a runtime safety
-handshake; it is not responsible for registering Claude filesystem skills.
+Each Codex and Claude loader carries a model-invocable packed skill's discovery description and
+invocation controls, but not its private body. On selection it dynamically loads verified content
+through `byo workflow guidance <skill-id>`. Skills with `disable-model-invocation: true` are not
+projected into either client catalog. The MCP `initialization_handshake` remains a runtime safety
+handshake; it is not responsible for registering filesystem skills.
 
 ### 10.5 Capsule manifest
 

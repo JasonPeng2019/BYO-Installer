@@ -788,7 +788,7 @@ def main() -> int:
                 "--output-filename=byo-mcp-sidecar",
                 "--include-package=pyocd_debug_mcp",
                 "--include-data-files=src/pyocd_debug_mcp/probe_families.json=pyocd_debug_mcp/probe_families.json",
-                "src/pyocd_debug_mcp/sidecar.py",
+                "src/pyocd_debug_mcp/server.py",
             ],
             cwd=mcp,
             env={

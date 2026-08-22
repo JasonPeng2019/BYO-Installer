@@ -394,19 +394,28 @@ def main() -> int:
             raise AcceptanceFailure("init changed an unrelated Claude MCP server")
         if claude_mcp.get("mcpServers", {}).get("byo", {}).get("command") != "byo":
             raise AcceptanceFailure("init did not configure the Claude BYO MCP server")
-        for skill_id in ("mcp-help", "verify", "board-setup"):
-            loader = project / f".claude/skills/{skill_id}/SKILL.md"
+        for client in (".codex", ".claude"):
+            loader = project / client / "skills/mcp-help/SKILL.md"
             if not loader.is_file():
                 raise AcceptanceFailure(
-                    f"init did not project native Claude skill {skill_id}"
+                    f"init did not project the model-invocable mcp-help skill for {client}"
                 )
             loader_text = loader.read_text(encoding="utf-8")
             if (
-                f"name: {skill_id}" not in loader_text
-                or f"!`byo workflow guidance {skill_id}`" not in loader_text
+                "name: mcp-help" not in loader_text
+                or "disable-model-invocation: false" not in loader_text
+                or "user-invocable: true" not in loader_text
+                or "!`byo workflow guidance mcp-help`" not in loader_text
             ):
                 raise AcceptanceFailure(
-                    f"Claude skill loader {skill_id} does not load private guidance"
+                    f"{client} mcp-help loader does not expose verified skill metadata"
+                )
+            manual_only_loader = (
+                project / client / "skills/implement-firmware-large/SKILL.md"
+            )
+            if manual_only_loader.exists():
+                raise AcceptanceFailure(
+                    f"init exposed manual-only implement-firmware-large to {client}"
                 )
         if "Preserve this text." not in (project / "AGENTS.md").read_text(
             encoding="utf-8"
