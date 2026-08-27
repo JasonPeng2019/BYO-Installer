@@ -150,7 +150,7 @@ jobs:
           P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
         run: |
-          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$P12_BASE64" | base64 -D > "$RUNNER_TEMP/developer-id.p12"
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/byo-signing.keychain-db"
           security set-keychain-settings -lut 21600 "$RUNNER_TEMP/byo-signing.keychain-db"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/byo-signing.keychain-db"
