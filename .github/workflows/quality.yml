@@ -17,6 +17,20 @@ jobs:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Read locked AgentWorkspace commit
+        id: agent-source
+        shell: bash
+        run: |
+          echo "commit=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked AgentWorkspace for release script tests
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.agent-source.outputs.commit }}
+          path: AgentWorkspace
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
