@@ -815,10 +815,8 @@ Available specialist identifiers: {}.\n",
             .with_context(|| format!("compiled skill metadata is missing: {skill_id}"))?;
         let metadata = entry.metadata(skill_id);
         if is_model_invocable(&metadata) {
-            visible_skill_loaders.insert(
-                skill_id.clone(),
-                render_skill_loader(skill_id, &metadata),
-            );
+            visible_skill_loaders
+                .insert(skill_id.clone(), render_skill_loader(skill_id, &metadata));
         }
     }
     let active_mode = serde_json::to_string_pretty(&serde_json::json!({
@@ -868,32 +866,24 @@ Available specialist identifiers: {}.\n",
         "AGENTS.md".to_string(),
         "CLAUDE.md".to_string(),
     ];
-    targets.extend(
-        visible_skill_loaders
-            .keys()
-            .flat_map(|skill_id| {
-                [
-                    format!(".codex/skills/{skill_id}/SKILL.md"),
-                    format!(".claude/skills/{skill_id}/SKILL.md"),
-                ]
-            }),
-    );
+    targets.extend(visible_skill_loaders.keys().flat_map(|skill_id| {
+        [
+            format!(".codex/skills/{skill_id}/SKILL.md"),
+            format!(".claude/skills/{skill_id}/SKILL.md"),
+        ]
+    }));
     let desired_managed_paths: BTreeSet<String> = [
         ".codex/skills/byo-firmware/SKILL.md".to_string(),
         ".claude/skills/byo-firmware/SKILL.md".to_string(),
         ".generated/byo/active-mode.json".to_string(),
     ]
     .into_iter()
-    .chain(
-        visible_skill_loaders
-            .keys()
-            .flat_map(|skill_id| {
-                [
-                    format!(".codex/skills/{skill_id}/SKILL.md"),
-                    format!(".claude/skills/{skill_id}/SKILL.md"),
-                ]
-            }),
-    )
+    .chain(visible_skill_loaders.keys().flat_map(|skill_id| {
+        [
+            format!(".codex/skills/{skill_id}/SKILL.md"),
+            format!(".claude/skills/{skill_id}/SKILL.md"),
+        ]
+    }))
     .collect();
     let obsolete_managed_paths: Vec<String> = existing_projection
         .as_ref()
@@ -924,16 +914,12 @@ Available specialist identifiers: {}.\n",
         ".claude/skills/byo-firmware".to_string(),
     ]
     .into_iter()
-    .chain(
-        visible_skill_loaders
-            .keys()
-            .flat_map(|skill_id| {
-                [
-                    format!(".codex/skills/{skill_id}"),
-                    format!(".claude/skills/{skill_id}"),
-                ]
-            }),
-    )
+    .chain(visible_skill_loaders.keys().flat_map(|skill_id| {
+        [
+            format!(".codex/skills/{skill_id}"),
+            format!(".claude/skills/{skill_id}"),
+        ]
+    }))
     .collect();
     for directory in &directory_targets {
         safe_project_path(project, directory)?;
@@ -1053,23 +1039,19 @@ Available specialist identifiers: {}.\n",
                 sha256: sha256_bytes(skill.as_bytes()),
             },
         ];
-        managed_files.extend(
-            visible_skill_loaders
-                .iter()
-                .flat_map(|(skill_id, loader)| {
-                    let sha256 = sha256_bytes(loader.as_bytes());
-                    [
-                        ManagedFile {
-                            path: format!(".codex/skills/{skill_id}/SKILL.md"),
-                            sha256: sha256.clone(),
-                        },
-                        ManagedFile {
-                            path: format!(".claude/skills/{skill_id}/SKILL.md"),
-                            sha256,
-                        },
-                    ]
-                }),
-        );
+        managed_files.extend(visible_skill_loaders.iter().flat_map(|(skill_id, loader)| {
+            let sha256 = sha256_bytes(loader.as_bytes());
+            [
+                ManagedFile {
+                    path: format!(".codex/skills/{skill_id}/SKILL.md"),
+                    sha256: sha256.clone(),
+                },
+                ManagedFile {
+                    path: format!(".claude/skills/{skill_id}/SKILL.md"),
+                    sha256,
+                },
+            ]
+        }));
         managed_files.sort_by(|left, right| left.path.cmp(&right.path));
         let inventory_bytes = serde_json::to_vec(&managed_files)?;
         let projection = ProjectionManifest {

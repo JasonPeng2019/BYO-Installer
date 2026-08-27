@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import struct
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import verify_build_output as vbo
 
@@ -33,9 +33,11 @@ def test_personal_home_and_username_are_flagged() -> None:
         }
     )
     needles = vbo.build_leak_needles(
-        home=Path("/Users/benjaminhuh"),
+        # Keep the simulated macOS path POSIX-formatted when this test runs on
+        # Windows; pathlib.Path would convert it to a backslash path there.
+        home=PurePosixPath("/Users/benjaminhuh"),
         user="benjaminhuh",
-        checkout_root=Path(
+        checkout_root=PurePosixPath(
             "/Users/benjaminhuh/Documents/GitHub/Embedded CLI/InstallerWork"
         ),
         extra=[],
@@ -109,7 +111,7 @@ def test_utf16le_windows_path_is_flagged() -> None:
     leak = "/Users/benjaminhuh".encode("utf-16-le")
     bundle = _bundle({"byo.exe": b"MZ\x90\x00" + leak + b"\x00\x00"})
     needles = vbo.build_leak_needles(
-        home=Path("/Users/benjaminhuh"),
+        home=PurePosixPath("/Users/benjaminhuh"),
         user="benjaminhuh",
         checkout_root=None,
         extra=[],
@@ -121,7 +123,7 @@ def test_utf16le_windows_path_is_flagged() -> None:
 def test_allow_suppresses_a_verified_false_positive() -> None:
     bundle = _bundle({"byo": b"local dev /Users/benjaminhuh/.cargo/registry/x.rs"})
     needles = vbo.build_leak_needles(
-        home=Path("/Users/benjaminhuh"),
+        home=PurePosixPath("/Users/benjaminhuh"),
         user="benjaminhuh",
         checkout_root=None,
         extra=[],

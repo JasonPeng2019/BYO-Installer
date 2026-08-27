@@ -6,7 +6,7 @@ project. End users do not need Python, Rust, `uv`, a source checkout, or
 administrator access.
 
 The current public build is the unsigned
-[`v0.1.3-preview`](https://github.com/buh07/BYO-Releases/releases/tag/v0.1.3-preview).
+[`0.1.5 preview`](https://github.com/JasonPeng2019/BYO-Installer/releases/tag/0.1.5).
 It supports macOS 12+ on Apple silicon and Intel, Windows 10 22H2/11 on x86-64,
 and Linux x86-64 with glibc 2.28+.
 
@@ -19,23 +19,23 @@ and performs an offline bundle installation.
 ### macOS — Apple silicon
 
 ```sh
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-macos-aarch64.zip
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-macos-aarch64.sha256
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/install.sh
-shasum -a 256 -c byo-0.1.3-macos-aarch64.sha256
-xattr -d com.apple.quarantine ./byo-0.1.3-macos-aarch64.zip 2>/dev/null || true
-sh ./install.sh --bundle ./byo-0.1.3-macos-aarch64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-aarch64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-aarch64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
+shasum -a 256 -c byo-0.1.5-macos-aarch64.sha256
+xattr -d com.apple.quarantine ./byo-0.1.5-macos-aarch64.zip 2>/dev/null || true
+sh ./install.sh --bundle ./byo-0.1.5-macos-aarch64.zip
 ```
 
 ### macOS — Intel
 
 ```sh
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-macos-x86_64.zip
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-macos-x86_64.sha256
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/install.sh
-shasum -a 256 -c byo-0.1.3-macos-x86_64.sha256
-xattr -d com.apple.quarantine ./byo-0.1.3-macos-x86_64.zip 2>/dev/null || true
-sh ./install.sh --bundle ./byo-0.1.3-macos-x86_64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-x86_64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-x86_64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
+shasum -a 256 -c byo-0.1.5-macos-x86_64.sha256
+xattr -d com.apple.quarantine ./byo-0.1.5-macos-x86_64.zip 2>/dev/null || true
+sh ./install.sh --bundle ./byo-0.1.5-macos-x86_64.zip
 ```
 
 ### Windows — x86-64
@@ -43,23 +43,23 @@ sh ./install.sh --bundle ./byo-0.1.3-macos-x86_64.zip
 Run in PowerShell:
 
 ```powershell
-Invoke-WebRequest https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-windows-x86_64.zip -OutFile .\byo-0.1.3-windows-x86_64.zip
-Invoke-WebRequest https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-windows-x86_64.sha256 -OutFile .\byo-0.1.3-windows-x86_64.sha256
-Invoke-WebRequest https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/install.ps1 -OutFile .\install.ps1
-$expected = ((Get-Content .\byo-0.1.3-windows-x86_64.sha256 -Raw).Trim() -split '\s+')[0]
-$actual = (Get-FileHash .\byo-0.1.3-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-windows-x86_64.zip -OutFile .\byo-0.1.5-windows-x86_64.zip
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-windows-x86_64.sha256 -OutFile .\byo-0.1.5-windows-x86_64.sha256
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.ps1 -OutFile .\install.ps1
+$expected = ((Get-Content .\byo-0.1.5-windows-x86_64.sha256 -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash .\byo-0.1.5-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected.ToLowerInvariant()) { throw "BYO archive SHA-256 mismatch" }
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Bundle .\byo-0.1.3-windows-x86_64.zip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Bundle .\byo-0.1.5-windows-x86_64.zip
 ```
 
 ### Linux — x86-64, glibc 2.28+
 
 ```sh
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-linux-x86_64.tar.gz
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/byo-0.1.3-linux-x86_64.sha256
-curl -fLO https://github.com/buh07/BYO-Releases/releases/download/v0.1.3-preview/install.sh
-sha256sum -c byo-0.1.3-linux-x86_64.sha256
-sh ./install.sh --bundle ./byo-0.1.3-linux-x86_64.tar.gz
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-linux-x86_64.tar.gz
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-linux-x86_64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
+sha256sum -c byo-0.1.5-linux-x86_64.sha256
+sh ./install.sh --bundle ./byo-0.1.5-linux-x86_64.tar.gz
 ```
 
 The checksum command must report `OK`. These preview bundles are not signed or
