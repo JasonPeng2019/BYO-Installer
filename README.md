@@ -66,10 +66,10 @@ The checksum command must report `OK`. These preview bundles are not signed or
 notarized, so use the offline `--bundle` / `-Bundle` path shown above. Signed
 network installation and automatic updates are not available yet.
 
-Installation does not edit `PATH` by default. Add `--modify-path` to the final
-macOS/Linux command or `-ModifyPath` to the Windows command to opt in, then open
-a new terminal. Otherwise invoke the launcher at `$HOME/.local/bin/byo` on
-macOS/Linux or `$env:LOCALAPPDATA\BYO\bin\byo.exe` on Windows.
+Installation adds BYO to `PATH` automatically. On macOS/Linux, open a new
+terminal after installation. On Windows, the installer refreshes the Windows
+environment and makes `byo` available immediately when the installer is run
+inline; restart other terminal apps that were already open.
 
 ## Initialize a project
 

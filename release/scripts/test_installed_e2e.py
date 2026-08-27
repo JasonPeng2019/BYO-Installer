@@ -288,16 +288,20 @@ def main() -> int:
                 raise AcceptanceFailure(
                     "PowerShell is unavailable for Windows install testing"
                 )
+            install_script = str(ROOT / "install.ps1").replace("'", "''")
+            bootstrap_bundle = str(bootstrap_archive).replace("'", "''")
             install_command = [
                 powershell,
                 "-NoProfile",
                 "-NonInteractive",
                 "-ExecutionPolicy",
                 "Bypass",
-                "-File",
-                str(ROOT / "install.ps1"),
-                "-Bundle",
-                str(bootstrap_archive),
+                "-Command",
+                (
+                    f"& {{ & '{install_script}' -Bundle '{bootstrap_bundle}'; "
+                    "if ($null -eq (Get-Command byo -ErrorAction SilentlyContinue)) "
+                    "{ throw 'BYO was not available on PATH after installation.' } }"
+                ),
             ]
             native_env = {**env}
             native_env.pop("BYO_HOME", None)

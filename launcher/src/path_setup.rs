@@ -1,10 +1,10 @@
-//! Opt-in PATH setup for the BYO bin directory, recorded so that uninstall can
+//! PATH setup for the BYO bin directory, recorded so that uninstall can
 //! reverse exactly — and only — what BYO itself added.
 //!
-//! Default installs never touch a shell profile or the Windows user PATH; this
-//! runs solely under `byo init --modify-path`. Every edit is written to a record
-//! in the state directory, and `revert_recorded_edits` undoes precisely those
-//! records, so uninstall never guesses at unrelated PATH entries.
+//! The bootstrap installers run this during every normal installation. Every
+//! edit is written to a record in the state directory, and
+//! `revert_recorded_edits` undoes precisely those records, so uninstall never
+//! guesses at unrelated PATH entries.
 
 use std::path::{Path, PathBuf};
 
@@ -134,7 +134,7 @@ fn remove_block(contents: &str) -> Option<String> {
 
 // ---- Public operations -----------------------------------------------------
 
-/// Put the BYO bin directory on PATH (opt-in), recording the edit for reversal.
+/// Put the BYO bin directory on PATH, recording the edit for reversal.
 pub fn add_bin_to_path(paths: &ProductPaths) -> Result<PathSetupOutcome> {
     let bin = paths
         .bin
@@ -177,6 +177,10 @@ pub fn add_bin_to_path(paths: &ProductPaths) -> Result<PathSetupOutcome> {
     {
         let current = windows_user_path()?;
         if windows_path_contains(&current, &bin) {
+            // A previous BYO version wrote the registry value without notifying
+            // the shell. Repeat the bounded notification even when the value is
+            // already present so re-running the installer repairs that state.
+            windows_notify_environment_change();
             return Ok(PathSetupOutcome::AlreadyPresent);
         }
         let updated = if current.is_empty() {
@@ -292,7 +296,36 @@ fn windows_set_user_path(value: &str) -> Result<()> {
     if !status.success() {
         anyhow::bail!("reg add for the user PATH failed");
     }
+    windows_notify_environment_change();
     Ok(())
+}
+
+/// Tell Windows shells that the user environment changed. Existing processes
+/// retain their own environment block, but Explorer and subsequently launched
+/// terminals can rebuild PATH after this broadcast. The notification is best
+/// effort: the registry update is already durable, and a hung application must
+/// never turn a successful install or uninstall into a failure.
+#[cfg(windows)]
+fn windows_notify_environment_change() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
+    };
+
+    let environment: Vec<u16> = "Environment\0".encode_utf16().collect();
+    let mut result = 0usize;
+    // SAFETY: `environment` is NUL-terminated and remains alive for the
+    // synchronous call. The Windows API does not retain the pointer.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            environment.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            5_000,
+            &mut result,
+        );
+    }
 }
 
 #[cfg(windows)]

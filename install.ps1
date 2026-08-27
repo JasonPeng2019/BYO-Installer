@@ -4,6 +4,8 @@ param(
     [string]$BaseUrl,
     [string]$Sha256,
     [string]$InstallDir,
+    # Kept only so older copied commands remain valid. PATH setup is now
+    # automatic for every install.
     [switch]$ModifyPath,
     [switch]$AllowUnsigned
 )
@@ -244,19 +246,22 @@ try {
             [System.IO.Path]::GetFullPath($InstallDir)
         )
     }
-    if ($ModifyPath) {
-        $installArguments += "--modify-path"
-    }
+    $installArguments += "--modify-path"
     & $launcher @installArguments
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
-    if ($ModifyPath) {
-        Write-Host "BYO installed and added to PATH. Open a new terminal, then run 'byo'."
+    $installRoot = if ($InstallDir) {
+        [System.IO.Path]::GetFullPath($InstallDir)
     }
     else {
-        Write-Host "BYO installed. Add the bin path reported by 'byo paths' to PATH if needed (or re-run install with -ModifyPath)."
+        Join-Path $env:LOCALAPPDATA "BYO"
     }
+    $byoBin = Join-Path $installRoot "bin"
+    if (-not (($env:Path -split ';') -contains $byoBin)) {
+        $env:Path = "$byoBin;$env:Path"
+    }
+    Write-Host "BYO installed and added to PATH. Run 'byo' now; restart other terminal apps that were already open."
 }
 finally {
     if ($temporary -and (Test-Path -LiteralPath $temporary)) {

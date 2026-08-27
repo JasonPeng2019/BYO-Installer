@@ -3,8 +3,8 @@ set -eu
 
 usage() {
   echo "usage:" >&2
-  echo "  ./install.sh --bundle <byo-archive-or-extracted-bundle> [--install-dir <absolute-path>] [--modify-path]" >&2
-  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--allow-unsigned] [--install-dir <absolute-path>] [--modify-path]" >&2
+  echo "  ./install.sh --bundle <byo-archive-or-extracted-bundle> [--install-dir <absolute-path>]" >&2
+  echo "  ./install.sh --version <exact> --base-url <https-url> --sha256 <hex> [--public-key <ed25519-public.pem>] [--allow-unsigned] [--install-dir <absolute-path>]" >&2
   exit 2
 }
 
@@ -14,7 +14,6 @@ base_url=
 expected_sha=
 public_key=
 install_dir=
-modify_path=
 allow_unsigned=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -24,7 +23,9 @@ while [ "$#" -gt 0 ]; do
     --sha256) [ "$#" -ge 2 ] || usage; expected_sha=$2; shift 2 ;;
     --public-key) [ "$#" -ge 2 ] || usage; public_key=$2; shift 2 ;;
     --install-dir) [ "$#" -ge 2 ] || usage; install_dir=$2; shift 2 ;;
-    --modify-path) modify_path=1; shift ;;
+    # Kept only so older copied commands remain valid. PATH setup is now
+    # automatic for every install.
+    --modify-path) shift ;;
     --allow-unsigned) allow_unsigned=1; shift ;;
     *) usage ;;
   esac
@@ -240,16 +241,12 @@ if [ "$verify_downloaded_platform_signature" -eq 1 ] && [ "$product_platform" = 
 fi
 
 if [ -n "$install_dir" ]; then
-  "$launcher" install-runtime --bundle "$bundle" --install-dir "$install_dir" ${modify_path:+--modify-path}
+  "$launcher" install-runtime --bundle "$bundle" --install-dir "$install_dir" --modify-path
 else
-  "$launcher" install-runtime --bundle "$bundle" ${modify_path:+--modify-path}
+  "$launcher" install-runtime --bundle "$bundle" --modify-path
 fi
 status=$?
 if [ "$status" -eq 0 ]; then
-  if [ -n "$modify_path" ]; then
-    echo "BYO installed and added to PATH. Open a new shell, then run 'byo'."
-  else
-    echo "BYO installed. If 'byo' is not found in a new shell, add the bin path reported by 'byo paths' to PATH (or re-run install with --modify-path)."
-  fi
+  echo "BYO installed and added to PATH. Open a new shell, then run 'byo'."
 fi
 exit "$status"
