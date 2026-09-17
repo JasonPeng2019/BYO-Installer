@@ -918,7 +918,9 @@ mod tests {
         let tombstone = container.join(".byo-uninstall-test.exe");
         std::fs::write(&tombstone, b"placeholder").unwrap();
         start_windows_launcher_cleanup(&tombstone, None).unwrap();
-        for _ in 0..100 {
+        // The detached helper owns a 120-second retry window because Defender
+        // or a process-image release can legitimately outlive this test.
+        for _ in 0..1300 {
             if !tombstone.exists() {
                 break;
             }
@@ -1000,7 +1002,9 @@ mod tests {
         remove_public_launcher(&launcher, Some(&root), None).unwrap();
         assert!(!launcher.exists());
         std::fs::remove_dir_all(&root).unwrap();
-        for _ in 0..100 {
+        // This evacuation's detached helper has the same 120-second retry
+        // window as the direct tombstone cleanup above.
+        for _ in 0..1300 {
             if std::fs::read_dir(&container).unwrap().next().is_none() {
                 break;
             }
