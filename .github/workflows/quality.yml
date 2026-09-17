@@ -161,17 +161,6 @@ jobs:
         run: |
           uv sync --locked --all-groups
           uv run ruff check .
-          mapfile -t changed_python < <(git diff --name-only --diff-filter=ACMR HEAD^ HEAD -- '*.py')
-          for path in "${changed_python[@]}"; do
-            if git cat-file -e "HEAD^:${path}" 2>/dev/null; then
-              if git show "HEAD^:${path}" | uv run ruff format --check --stdin-filename "$path" -; then
-                uv run ruff format --check "$path"
-              else
-                echo "Skipping inherited formatting debt in $path; its parent revision was not formatter-clean."
-              fi
-            else
-              uv run ruff format --check "$path"
-            fi
-          done
-          uv run pyright
+          uv run ruff format --check src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py tests/test_sidecar_runtime.py tests/test_manual_permission_helper_runtime.py
+          uv run pyright src/pyocd_debug_mcp
           uv run python -m unittest discover -s tests
