@@ -163,4 +163,9 @@ jobs:
           uv run ruff check .
           uv run ruff format --check src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py tests/test_sidecar_runtime.py tests/test_manual_permission_helper_runtime.py
           uv run pyright src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py
-          uv run python -m unittest tests.test_sidecar_runtime tests.test_manual_permission_helper_runtime tests.test_swd_process_isolation
+          uv run python -m unittest tests.test_sidecar_runtime tests.test_manual_permission_helper_runtime
+
+      - name: Run Windows SWD isolation contract
+        if: runner.os == 'Windows'
+        working-directory: Firmware MCP New
+        run: uv run python -m unittest tests.test_swd_process_isolation
