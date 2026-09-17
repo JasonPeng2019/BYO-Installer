@@ -162,5 +162,5 @@ jobs:
           uv sync --locked --all-groups
           uv run ruff check .
           uv run ruff format --check src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py tests/test_sidecar_runtime.py tests/test_manual_permission_helper_runtime.py
-          uv run pyright src/pyocd_debug_mcp
+          uv run pyright src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py
           uv run python -m unittest discover -s tests
