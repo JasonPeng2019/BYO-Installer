@@ -568,11 +568,18 @@ The default capsule should be no larger than necessary:
 
 The presence of user-owned task files does not expose proprietary product implementation.
 
-Each Codex and Claude loader carries a model-invocable packed skill's discovery description and
-invocation controls, but not its private body. On selection it dynamically loads verified content
-through `byo workflow guidance <skill-id>`. Skills with `disable-model-invocation: true` are not
-projected into either client catalog. The MCP `initialization_handshake` remains a runtime safety
-handshake; it is not responsible for registering filesystem skills.
+Each Codex and Claude loader carries a user-invocable, mode-authorized packed skill's discovery
+description and invocation controls, but not its private body. On selection it dynamically loads
+verified content through `byo workflow guidance <skill-id>`. A loader with
+`disable-model-invocation: true` retains that flag and `user-invocable: true`: a human can invoke it
+explicitly, while a model cannot select it implicitly. The MCP `initialization_handshake` remains a
+runtime safety handshake; it is not responsible for registering filesystem skills.
+
+Codex records the same implicit-invocation decision in each projected skill's
+`agents/openai.yaml`; Claude reads the `SKILL.md` invocation flags directly. Before making a backup
+or modifying a project, initialization refuses a user-owned file at any desired BYO loader or Codex
+policy path. Rename or remove the conflicting file and retry; unrelated neighboring skill files are
+preserved.
 
 ### 10.5 Capsule manifest
 

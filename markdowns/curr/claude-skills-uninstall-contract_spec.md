@@ -1,10 +1,10 @@
-# Proposal: Claude Skill Projection and Uninstall Contract
+# Proposal: Codex and Claude Skill Projection and Uninstall Contract
 
 Status: Proposed for implementation and review on 2026-08-20.
 
 ## Goal and roadmap anchor
 
-Make the installed BYO launcher expose the private Agent Workspace workflows as native Claude Code project skills, and replace the overlapping uninstall flags with the three user-facing modes authorized for the current installer:
+Make the installed BYO launcher expose the private Agent Workspace workflows as native Codex and Claude Code project skills, and replace the overlapping uninstall flags with the three user-facing modes authorized for the current installer:
 
 1. `byo uninstall` removes the current project's BYO integration while retaining project-owned BYO working data.
 2. `byo uninstall --purge` removes the current project's integration and every project-local file or directory created exclusively for BYO.
@@ -15,7 +15,8 @@ This advances the installer roadmap's private-runtime, explicit-lifecycle, rever
 ## Scope
 
 - Preserve useful Agent Workspace skill metadata in the compiled private workspace pack.
-- Materialize thin, mode-authorized `.claude/skills/<skill-id>/SKILL.md` loaders during `byo init` so Claude Code can discover, describe, auto-select, and explicitly invoke each skill.
+- Materialize thin loaders for each mode-authorized, user-invocable `.codex/skills/<skill-id>/SKILL.md` and `.claude/skills/<skill-id>/SKILL.md` skill during `byo init` so both clients can discover and explicitly invoke each skill.
+- Materialize `.codex/skills/<skill-id>/agents/openai.yaml` from compiled invocation metadata: manual skills set `allow_implicit_invocation: false`, while model-invocable skills set it to `true`; Claude uses the `SKILL.md` invocation flags.
 - Keep full private skill bodies in the signed/verified workspace pack and load them on demand through `byo workflow guidance <skill-id>`.
 - Implement the three uninstall modes above, including optional `--project <path>` for the two project-scoped modes.
 - Remove stale Claude MCP approvals and empty BYO-created configuration shells during project cleanup.
@@ -35,25 +36,25 @@ This advances the installer roadmap's private-runtime, explicit-lifecycle, rever
 
 - The user's explicit 2026-08-20 command contract supersedes the installer guide's earlier `--purge-data` plus `--yes` design.
 - The existing in-progress global-uninstall work is retained and extended: global uninstall will purge registered projects rather than refusing while integrations remain.
-- The Firmware-CLI build plan does not constrain launcher-only lifecycle or Claude projection behavior.
+- The Firmware-CLI build plan does not constrain launcher-only lifecycle or Codex/Claude projection behavior.
 - Existing project files and unrelated dirty-worktree changes remain authoritative and must not be overwritten or broadly removed.
 - Destructive cleanup is limited to canonical, allowlisted BYO roots and exact BYO-owned entries in shared files. Symlinks are never followed for recursive deletion.
 
 ## Design
 
-### Compiled skills and Claude projection
+### Compiled skills and Codex/Claude projection
 
-The workspace compiler will parse selected frontmatter from each mode-authorized `SKILL.md` and emit a catalog entry containing its private resource path, description, and invocation controls. The launcher will use this catalog to create one thin Claude skill per authorized ID. Each loader contains:
+The workspace compiler will parse selected frontmatter from each mode-authorized `SKILL.md` and emit a catalog entry containing its private resource path, description, and invocation controls. The launcher will use this catalog to create one thin skill per user-invocable authorized ID in both clients. Each `SKILL.md` loader contains:
 
 - a stable skill name and source description;
 - Claude invocation metadata;
 - dynamic context that executes `byo workflow guidance <skill-id>` at invocation time.
 
-The current `byo-firmware` bootstrap remains available for compatibility and MCP safety guidance. The project manifest hashes every loader, so modified projections still fail closed instead of being overwritten silently.
+Codex also receives `agents/openai.yaml`, whose `policy.allow_implicit_invocation` is derived from the catalog's `disable_model_invocation` value. The current `byo-firmware` bootstrap remains available for compatibility and MCP safety guidance. The project manifest hashes every loader and Codex policy file, so modified projections still fail closed instead of being overwritten silently.
 
 ### Projection ownership
 
-The projection manifest will record which managed files and known directories did not exist before initialization and were therefore created by BYO. New initialization and update operations will retain this ownership data across projections. Older manifests receive conservative cleanup: exact BYO files and entries may be removed, while only demonstrably empty known configuration shells/directories are pruned.
+The projection manifest will record which managed files and known directories did not exist before initialization and were therefore created by BYO. New initialization and update operations will retain this ownership data across projections. Before backup or mutation, initialization refuses any desired BYO loader or Codex policy path that already exists without matching manifest ownership; users must rename or remove that conflict before retrying. Older manifests receive conservative cleanup: exact BYO files and entries may be removed, while only demonstrably empty known configuration shells/directories are pruned.
 
 ### Project uninstall
 
@@ -75,7 +76,7 @@ This task changes no board facts, firmware profiles, firmware artifacts, detecto
 
 ## Documentation plan
 
-- Keep `InstallerWork/README.md` concise and update installation, initialization, native Claude skills, and the three uninstall forms.
+- Keep `InstallerWork/README.md` concise and update installation, initialization, native Codex and Claude skills, and the three uninstall forms.
 - Update `InstallerWork/install_guide.md` so its CLI contract, lifecycle, cleanup, and acceptance requirements match implementation.
 - Update the outer `PLAN.md` status/contract references that describe the installer lifecycle.
 - Keep runtime help text and receipts aligned with the same terminology.
@@ -93,14 +94,14 @@ This task changes no board facts, firmware profiles, firmware artifacts, detecto
 ### Agent-verifiable
 
 - Workspace compiler tests cover metadata parsing, deterministic catalog output, and invalid frontmatter.
-- Rust unit/integration tests cover native Claude loader creation and hashing, CLI flag conflicts, stale registry deduplication, Claude MCP approval removal, ordinary uninstall preservation, project purge, global multi-project purge, and unrelated-content preservation.
+- Rust unit/integration tests cover native Codex and Claude loader creation, Codex invocation-policy rendering and hashing, unmanaged-loader collision refusal, CLI flag conflicts, stale registry deduplication, Claude MCP approval removal, ordinary uninstall preservation, project purge, global multi-project purge, and unrelated-content preservation.
 - Installed end-to-end tests exercise all three command forms and validate receipts and filesystem results.
 - Run Python tests, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
 - Inspect the generated help and projection files from a temporary packaged workspace.
 
 ### Human/operator-verifiable
 
-- In a real Claude Code session, confirm `/skills` lists the authorized BYO skill names and an MCP-related prompt auto-selects the appropriate loader.
+- In real Codex and Claude Code sessions, confirm their skill lists show the authorized BYO skill names, an MCP-related prompt can auto-select a model-invocable loader, and an explicit human invocation can load a manual-only loader without implicit selection.
 - Confirm the first BYO MCP operation still follows the initialization handshake guidance.
 - On macOS and Windows, install into disposable projects and visually confirm the three cleanup scopes.
 
@@ -110,7 +111,8 @@ None. This change does not affect probes, targets, flashing, reset, memory acces
 
 ## Acceptance criteria
 
-- A freshly initialized Claude project has one valid native loader for every mode-authorized packed skill, with useful descriptions and no plaintext private body.
+- A freshly initialized Codex and Claude project has one valid native loader for every user-invocable mode-authorized packed skill, with useful descriptions and no plaintext private body; manual loaders preserve their invocation controls, including Codex `allow_implicit_invocation: false`.
+- A user-owned desired loader or Codex policy file is refused before backup or mutation, remains unchanged, and does not affect neighboring skill files; a manifest-owned BYO file remains updateable.
 - `byo workflow guidance <skill-id>` remains the source of the full verified workflow content.
 - `byo uninstall` succeeds only for a project integration, removes all integration hooks/configuration, removes stale Claude BYO approvals, and preserves retained working data.
 - `byo uninstall --purge` removes all dedicated BYO-created project data while preserving unrelated project and agent configuration.

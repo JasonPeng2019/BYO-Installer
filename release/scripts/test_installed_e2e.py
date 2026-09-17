@@ -414,13 +414,46 @@ def main() -> int:
                 raise AcceptanceFailure(
                     f"{client} mcp-help loader does not expose verified skill metadata"
                 )
-            manual_only_loader = (
+            if client == ".codex":
+                model_policy = project / client / "skills/mcp-help/agents/openai.yaml"
+                if not model_policy.is_file() or (
+                    "allow_implicit_invocation: true"
+                    not in model_policy.read_text(encoding="utf-8")
+                ):
+                    raise AcceptanceFailure(
+                        "Codex mcp-help policy does not allow intended implicit invocation"
+                    )
+            manual_loader = (
                 project / client / "skills/implement-firmware-large/SKILL.md"
             )
-            if manual_only_loader.exists():
+            if not manual_loader.is_file():
                 raise AcceptanceFailure(
-                    f"init exposed manual-only implement-firmware-large to {client}"
+                    f"init did not project the user-invocable manual skill for {client}"
                 )
+            manual_loader_text = manual_loader.read_text(encoding="utf-8")
+            if (
+                "name: implement-firmware-large" not in manual_loader_text
+                or "disable-model-invocation: true" not in manual_loader_text
+                or "user-invocable: true" not in manual_loader_text
+                or "!`byo workflow guidance implement-firmware-large`"
+                not in manual_loader_text
+            ):
+                raise AcceptanceFailure(
+                    f"{client} implement-firmware-large loader does not retain manual invocation metadata"
+                )
+            if client == ".codex":
+                manual_policy = (
+                    project
+                    / client
+                    / "skills/implement-firmware-large/agents/openai.yaml"
+                )
+                if not manual_policy.is_file() or (
+                    "allow_implicit_invocation: false"
+                    not in manual_policy.read_text(encoding="utf-8")
+                ):
+                    raise AcceptanceFailure(
+                        "Codex implement-firmware-large policy permits implicit invocation"
+                    )
         if "Preserve this text." not in (project / "AGENTS.md").read_text(
             encoding="utf-8"
         ):

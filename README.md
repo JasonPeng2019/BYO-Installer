@@ -6,7 +6,7 @@ project. End users do not need Python, Rust, `uv`, a source checkout, or
 administrator access.
 
 The current public build is the unsigned
-[`0.1.5 preview`](https://github.com/JasonPeng2019/BYO-Installer/releases/tag/0.1.5).
+[`0.1.7 preview`](https://github.com/JasonPeng2019/BYO-Installer/releases/tag/0.1.7).
 It supports macOS 12+ on Apple silicon and Intel, Windows 10 22H2/11 on x86-64,
 and Linux x86-64 with glibc 2.28+.
 
@@ -19,23 +19,23 @@ and performs an offline bundle installation.
 ### macOS — Apple silicon
 
 ```sh
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-aarch64.zip
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-aarch64.sha256
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
-shasum -a 256 -c byo-0.1.5-macos-aarch64.sha256
-xattr -d com.apple.quarantine ./byo-0.1.5-macos-aarch64.zip 2>/dev/null || true
-sh ./install.sh --bundle ./byo-0.1.5-macos-aarch64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-macos-aarch64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-macos-aarch64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/install.sh
+shasum -a 256 -c byo-0.1.7-macos-aarch64.sha256
+xattr -d com.apple.quarantine ./byo-0.1.7-macos-aarch64.zip 2>/dev/null || true
+sh ./install.sh --bundle ./byo-0.1.7-macos-aarch64.zip
 ```
 
 ### macOS — Intel
 
 ```sh
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-x86_64.zip
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-macos-x86_64.sha256
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
-shasum -a 256 -c byo-0.1.5-macos-x86_64.sha256
-xattr -d com.apple.quarantine ./byo-0.1.5-macos-x86_64.zip 2>/dev/null || true
-sh ./install.sh --bundle ./byo-0.1.5-macos-x86_64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-macos-x86_64.zip
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-macos-x86_64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/install.sh
+shasum -a 256 -c byo-0.1.7-macos-x86_64.sha256
+xattr -d com.apple.quarantine ./byo-0.1.7-macos-x86_64.zip 2>/dev/null || true
+sh ./install.sh --bundle ./byo-0.1.7-macos-x86_64.zip
 ```
 
 ### Windows — x86-64
@@ -43,23 +43,23 @@ sh ./install.sh --bundle ./byo-0.1.5-macos-x86_64.zip
 Run in PowerShell:
 
 ```powershell
-Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-windows-x86_64.zip -OutFile .\byo-0.1.5-windows-x86_64.zip
-Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-windows-x86_64.sha256 -OutFile .\byo-0.1.5-windows-x86_64.sha256
-Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.ps1 -OutFile .\install.ps1
-$expected = ((Get-Content .\byo-0.1.5-windows-x86_64.sha256 -Raw).Trim() -split '\s+')[0]
-$actual = (Get-FileHash .\byo-0.1.5-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-windows-x86_64.zip -OutFile .\byo-0.1.7-windows-x86_64.zip
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-windows-x86_64.sha256 -OutFile .\byo-0.1.7-windows-x86_64.sha256
+Invoke-WebRequest https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/install.ps1 -OutFile .\install.ps1
+$expected = ((Get-Content .\byo-0.1.7-windows-x86_64.sha256 -Raw).Trim() -split '\s+')[0]
+$actual = (Get-FileHash .\byo-0.1.7-windows-x86_64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected.ToLowerInvariant()) { throw "BYO archive SHA-256 mismatch" }
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Bundle .\byo-0.1.5-windows-x86_64.zip
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Bundle .\byo-0.1.7-windows-x86_64.zip
 ```
 
 ### Linux — x86-64, glibc 2.28+
 
 ```sh
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-linux-x86_64.tar.gz
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/byo-0.1.5-linux-x86_64.sha256
-curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.5/install.sh
-sha256sum -c byo-0.1.5-linux-x86_64.sha256
-sh ./install.sh --bundle ./byo-0.1.5-linux-x86_64.tar.gz
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-linux-x86_64.tar.gz
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/byo-0.1.7-linux-x86_64.sha256
+curl -fLO https://github.com/JasonPeng2019/BYO-Installer/releases/download/0.1.7/install.sh
+sha256sum -c byo-0.1.7-linux-x86_64.sha256
+sh ./install.sh --bundle ./byo-0.1.7-linux-x86_64.tar.gz
 ```
 
 The checksum command must report `OK`. These preview bundles are not signed or
@@ -86,10 +86,15 @@ byo codex firmware
 The dry run is optional. `byo init` creates the project capsule, registers the
 project, configures both clients to launch the MCP server through
 `byo mcp serve`, and runs the project health check. It also projects one thin
-native skill loader for each model-invocable mode-authorized workflow into both
-`.codex/skills` and `.claude/skills`. Each client can discover or invoke those
-skills normally; the loader fetches the verified private body from the installed
-workspace pack only when selected. Manual-only skills remain private.
+native skill loader for each user-invocable mode-authorized workflow into both
+`.codex/skills` and `.claude/skills`. The loader fetches the verified private
+body from the installed workspace pack only when selected. A manual-only loader
+retains `disable-model-invocation: true` and `user-invocable: true`, making it
+available for explicit human invocation but not implicit model selection.
+Codex receives the equivalent `agents/openai.yaml` policy; Claude uses the
+loader frontmatter. If a user-owned skill already occupies a BYO loader path,
+initialization refuses the collision without changing it; rename or remove that
+skill before retrying.
 Restart an already-open client after initialization. To launch Claude instead,
 run `byo claude firmware`.
 

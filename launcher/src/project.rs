@@ -96,6 +96,12 @@ struct TextReplacement {
 }
 
 #[derive(Debug)]
+struct ProjectedSkill {
+    loader: String,
+    codex_policy: String,
+}
+
+#[derive(Debug)]
 pub(crate) struct ProjectUninstallPlan {
     project: PathBuf,
     project_id: String,
@@ -704,8 +710,71 @@ fn render_skill_loader(skill_id: &str, skill: &CompiledSkill) -> String {
     )
 }
 
-fn is_model_invocable(skill: &CompiledSkill) -> bool {
-    !skill.disable_model_invocation
+fn render_codex_skill_policy(skill: &CompiledSkill) -> String {
+    format!(
+        "policy:\n  allow_implicit_invocation: {}\n",
+        !skill.disable_model_invocation
+    )
+}
+
+fn is_user_invocable(skill: &CompiledSkill) -> bool {
+    skill.user_invocable
+}
+
+fn reject_unmanaged_loader_collisions(
+    project: &Path,
+    existing_projection: Option<&ProjectionManifest>,
+    desired_loader_paths: &[String],
+) -> Result<()> {
+    let managed_paths: BTreeSet<&str> = existing_projection
+        .into_iter()
+        .flat_map(|projection| projection.managed_files.iter())
+        .map(|managed| managed.path.as_str())
+        .collect();
+    for relative in desired_loader_paths {
+        let target = safe_project_path(project, relative)?;
+        if target.exists() && !managed_paths.contains(relative.as_str()) {
+            bail!(
+                "user-owned native skill loader conflicts with BYO projection: {relative}; rename or remove it before retrying"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn remove_obsolete_managed_files(
+    project: &Path,
+    obsolete_managed_paths: &[String],
+    created_dirs: &BTreeSet<String>,
+) -> Result<()> {
+    let mut parent_dirs = BTreeSet::new();
+    for relative in obsolete_managed_paths {
+        let target = safe_project_path(project, relative)?;
+        if target.is_file() {
+            std::fs::remove_file(&target)?;
+        }
+        let relative_path = Path::new(relative);
+        if let Some(parent) = relative_path.parent() {
+            parent_dirs.insert(parent.to_string_lossy().replace('\\', "/"));
+            if parent.file_name().is_some_and(|name| name == "agents") {
+                if let Some(skill_dir) = parent.parent() {
+                    parent_dirs.insert(skill_dir.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut parent_dirs: Vec<_> = parent_dirs.into_iter().collect();
+    parent_dirs.sort_by_key(|relative| std::cmp::Reverse(Path::new(relative).components().count()));
+    for relative in parent_dirs {
+        if !created_dirs.contains(&relative) {
+            continue;
+        }
+        let target = safe_project_path(project, &relative)?;
+        if target.is_dir() && std::fs::read_dir(&target)?.next().is_none() {
+            std::fs::remove_dir(target)?;
+        }
+    }
+    Ok(())
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
@@ -803,22 +872,44 @@ Available specialist identifiers: {}.\n",
         "---\nname: byo-firmware\ndescription: Use the BYO firmware MCP workflow.\n---\n\n{}\n",
         bootstrap.trim()
     );
-    // Only skills the workspace explicitly permits the model to invoke are
-    // advertised as native skills. Manual-only skills remain available through
-    // `byo workflow guidance <skill>` after an explicit user request, but their
-    // names and descriptions are not injected into either client's catalog.
-    let mut visible_skill_loaders = BTreeMap::new();
+    // Each mode-authorized skill that a user may invoke receives a native loader.
+    // Manual-only loaders retain their invocation controls, so clients can expose
+    // them for explicit use without allowing implicit model selection.
+    let mut projected_skill_loaders = BTreeMap::new();
     for skill_id in &mode_policy.skills {
         let entry = workflow_catalog
             .skills
             .get(skill_id)
             .with_context(|| format!("compiled skill metadata is missing: {skill_id}"))?;
         let metadata = entry.metadata(skill_id);
-        if is_model_invocable(&metadata) {
-            visible_skill_loaders
-                .insert(skill_id.clone(), render_skill_loader(skill_id, &metadata));
+        if is_user_invocable(&metadata) {
+            projected_skill_loaders.insert(
+                skill_id.clone(),
+                ProjectedSkill {
+                    loader: render_skill_loader(skill_id, &metadata),
+                    codex_policy: render_codex_skill_policy(&metadata),
+                },
+            );
         }
     }
+    let desired_loader_paths: Vec<String> = [
+        ".codex/skills/byo-firmware/SKILL.md".to_string(),
+        ".claude/skills/byo-firmware/SKILL.md".to_string(),
+    ]
+    .into_iter()
+    .chain(projected_skill_loaders.keys().flat_map(|skill_id| {
+        [
+            format!(".codex/skills/{skill_id}/SKILL.md"),
+            format!(".codex/skills/{skill_id}/agents/openai.yaml"),
+            format!(".claude/skills/{skill_id}/SKILL.md"),
+        ]
+    }))
+    .collect();
+    reject_unmanaged_loader_collisions(
+        project,
+        existing_projection.as_ref(),
+        &desired_loader_paths,
+    )?;
     let active_mode = serde_json::to_string_pretty(&serde_json::json!({
         "schema": 1,
         "mode": mode,
@@ -857,8 +948,6 @@ Available specialist identifiers: {}.\n",
         ".agent-workspace/manifest.json".to_string(),
         ".generated/byo/active-mode.json".to_string(),
         ".generated/byo/projection-manifest.json".to_string(),
-        ".codex/skills/byo-firmware/SKILL.md".to_string(),
-        ".claude/skills/byo-firmware/SKILL.md".to_string(),
         ".codex/config.toml".to_string(),
         ".codex/hooks.json".to_string(),
         ".claude/settings.json".to_string(),
@@ -866,25 +955,11 @@ Available specialist identifiers: {}.\n",
         "AGENTS.md".to_string(),
         "CLAUDE.md".to_string(),
     ];
-    targets.extend(visible_skill_loaders.keys().flat_map(|skill_id| {
-        [
-            format!(".codex/skills/{skill_id}/SKILL.md"),
-            format!(".claude/skills/{skill_id}/SKILL.md"),
-        ]
-    }));
-    let desired_managed_paths: BTreeSet<String> = [
-        ".codex/skills/byo-firmware/SKILL.md".to_string(),
-        ".claude/skills/byo-firmware/SKILL.md".to_string(),
-        ".generated/byo/active-mode.json".to_string(),
-    ]
-    .into_iter()
-    .chain(visible_skill_loaders.keys().flat_map(|skill_id| {
-        [
-            format!(".codex/skills/{skill_id}/SKILL.md"),
-            format!(".claude/skills/{skill_id}/SKILL.md"),
-        ]
-    }))
-    .collect();
+    targets.extend(desired_loader_paths.iter().cloned());
+    let desired_managed_paths: BTreeSet<String> = [".generated/byo/active-mode.json".to_string()]
+        .into_iter()
+        .chain(desired_loader_paths.iter().cloned())
+        .collect();
     let obsolete_managed_paths: Vec<String> = existing_projection
         .as_ref()
         .map(|projection| {
@@ -914,9 +989,10 @@ Available specialist identifiers: {}.\n",
         ".claude/skills/byo-firmware".to_string(),
     ]
     .into_iter()
-    .chain(visible_skill_loaders.keys().flat_map(|skill_id| {
+    .chain(projected_skill_loaders.keys().flat_map(|skill_id| {
         [
             format!(".codex/skills/{skill_id}"),
+            format!(".codex/skills/{skill_id}/agents"),
             format!(".claude/skills/{skill_id}"),
         ]
     }))
@@ -982,17 +1058,7 @@ Available specialist identifiers: {}.\n",
                 copy_directory(&legacy_specs, &project.join(".agent-workspace/specs"))?;
             }
         }
-        for relative in &obsolete_managed_paths {
-            let target = safe_project_path(project, relative)?;
-            if target.is_file() {
-                std::fs::remove_file(&target)?;
-            }
-            if let Some(parent) = target.parent() {
-                if parent.is_dir() && std::fs::read_dir(parent)?.next().is_none() {
-                    std::fs::remove_dir(parent)?;
-                }
-            }
-        }
+        remove_obsolete_managed_files(project, &obsolete_managed_paths, &created_dirs)?;
         if !project.join(".agent-workspace/PLAN.md").exists() {
             crate::manifest::atomic_write(&project.join(".agent-workspace/PLAN.md"), &plan)?;
         }
@@ -1004,14 +1070,18 @@ Available specialist identifiers: {}.\n",
             &project.join(".claude/skills/byo-firmware/SKILL.md"),
             &skill,
         )?;
-        for (skill_id, loader) in &visible_skill_loaders {
+        for (skill_id, projected_skill) in &projected_skill_loaders {
             atomic_text(
                 &project.join(format!(".codex/skills/{skill_id}/SKILL.md")),
-                loader,
+                &projected_skill.loader,
+            )?;
+            atomic_text(
+                &project.join(format!(".codex/skills/{skill_id}/agents/openai.yaml")),
+                &projected_skill.codex_policy,
             )?;
             atomic_text(
                 &project.join(format!(".claude/skills/{skill_id}/SKILL.md")),
-                loader,
+                &projected_skill.loader,
             )?;
         }
         atomic_text(
@@ -1039,19 +1109,26 @@ Available specialist identifiers: {}.\n",
                 sha256: sha256_bytes(skill.as_bytes()),
             },
         ];
-        managed_files.extend(visible_skill_loaders.iter().flat_map(|(skill_id, loader)| {
-            let sha256 = sha256_bytes(loader.as_bytes());
-            [
-                ManagedFile {
-                    path: format!(".codex/skills/{skill_id}/SKILL.md"),
-                    sha256: sha256.clone(),
-                },
-                ManagedFile {
-                    path: format!(".claude/skills/{skill_id}/SKILL.md"),
-                    sha256,
-                },
-            ]
-        }));
+        managed_files.extend(projected_skill_loaders.iter().flat_map(
+            |(skill_id, projected_skill)| {
+                let loader_sha256 = sha256_bytes(projected_skill.loader.as_bytes());
+                let codex_policy_sha256 = sha256_bytes(projected_skill.codex_policy.as_bytes());
+                [
+                    ManagedFile {
+                        path: format!(".codex/skills/{skill_id}/SKILL.md"),
+                        sha256: loader_sha256.clone(),
+                    },
+                    ManagedFile {
+                        path: format!(".codex/skills/{skill_id}/agents/openai.yaml"),
+                        sha256: codex_policy_sha256,
+                    },
+                    ManagedFile {
+                        path: format!(".claude/skills/{skill_id}/SKILL.md"),
+                        sha256: loader_sha256,
+                    },
+                ]
+            },
+        ));
         managed_files.sort_by(|left, right| left.path.cmp(&right.path));
         let inventory_bytes = serde_json::to_vec(&managed_files)?;
         let projection = ProjectionManifest {
@@ -1374,6 +1451,35 @@ fn plan_project_uninstall(
         })
         .cloned()
         .collect();
+    let managed_codex_policy_dirs: BTreeSet<String> = projection
+        .managed_files
+        .iter()
+        .filter_map(|managed| {
+            let relative = Path::new(&managed.path);
+            let components: Vec<_> = relative.components().collect();
+            if components.len() == 5
+                && matches!(
+                    components.as_slice(),
+                    [
+                        std::path::Component::Normal(root),
+                        std::path::Component::Normal(skills),
+                        std::path::Component::Normal(_),
+                        std::path::Component::Normal(agents),
+                        std::path::Component::Normal(file)
+                    ] if *root == ".codex"
+                        && *skills == "skills"
+                        && *agents == "agents"
+                        && *file == "openai.yaml"
+                )
+            {
+                relative
+                    .parent()
+                    .map(|parent| parent.to_string_lossy().replace('\\', "/"))
+            } else {
+                None
+            }
+        })
+        .collect();
     let known_cleanup_dirs: BTreeSet<String> = [
         ".generated/byo",
         ".generated",
@@ -1389,15 +1495,13 @@ fn plan_project_uninstall(
     .into_iter()
     .map(str::to_string)
     .chain(managed_skill_dirs.iter().cloned())
+    .chain(managed_codex_policy_dirs.iter().cloned())
     .collect();
     let created_dirs: BTreeSet<_> = projection.created_dirs.iter().cloned().collect();
     let cleanup_dirs = known_cleanup_dirs
         .into_iter()
         .filter(|relative| {
-            projection.schema < 3
-                || projection.legacy_cleanup
-                || created_dirs.contains(relative)
-                || managed_skill_dirs.contains(relative)
+            projection.schema < 3 || projection.legacy_cleanup || created_dirs.contains(relative)
         })
         .map(|relative| safe_project_path(project, &relative))
         .collect::<Result<Vec<_>>>()?;
@@ -1663,10 +1767,11 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        is_model_invocable, managed_block, register_project, remove_claude_mcp,
-        remove_claude_mcp_approval, remove_hook_configuration, render_claude_mcp,
-        render_codex_config, render_hook_configuration, render_skill_loader, uninstall_project,
-        CapsuleManifest,
+        is_user_invocable, managed_block, register_project, reject_unmanaged_loader_collisions,
+        remove_claude_mcp, remove_claude_mcp_approval, remove_hook_configuration,
+        remove_obsolete_managed_files, render_claude_mcp, render_codex_config,
+        render_codex_skill_policy, render_hook_configuration, render_skill_loader,
+        uninstall_project, CapsuleManifest, ManagedFile, ProjectionManifest,
     };
 
     fn uninstall_fixture() -> (PathBuf, crate::paths::ProductPaths, PathBuf) {
@@ -1681,6 +1786,7 @@ mod tests {
             ".agent-backups/backup",
             ".firm",
             ".generated/byo",
+            ".codex/skills/verify/agents",
             ".claude/skills/verify",
         ] {
             std::fs::create_dir_all(project.join(relative)).unwrap();
@@ -1693,6 +1799,13 @@ mod tests {
         std::fs::write(project.join("customer.txt"), b"customer\n").unwrap();
         let loader = b"managed loader\n";
         std::fs::write(project.join(".claude/skills/verify/SKILL.md"), loader).unwrap();
+        std::fs::write(project.join(".codex/skills/verify/SKILL.md"), loader).unwrap();
+        let policy = b"policy:\n  allow_implicit_invocation: true\n";
+        std::fs::write(
+            project.join(".codex/skills/verify/agents/openai.yaml"),
+            policy,
+        )
+        .unwrap();
         std::fs::write(
             project.join("AGENTS.md"),
             managed_block("BYO bootstrap") + "\n",
@@ -1725,6 +1838,12 @@ mod tests {
                 "managed_files": [{
                     "path": ".claude/skills/verify/SKILL.md",
                     "sha256": crate::manifest::sha256_bytes(loader)
+                }, {
+                    "path": ".codex/skills/verify/SKILL.md",
+                    "sha256": crate::manifest::sha256_bytes(loader)
+                }, {
+                    "path": ".codex/skills/verify/agents/openai.yaml",
+                    "sha256": crate::manifest::sha256_bytes(policy)
                 }],
                 "agents_block_sha256": "unused",
                 "codex_server_sha256": "unused",
@@ -1734,6 +1853,10 @@ mod tests {
                     ".agent-workspace",
                     ".generated",
                     ".generated/byo",
+                    ".codex",
+                    ".codex/skills",
+                    ".codex/skills/verify",
+                    ".codex/skills/verify/agents",
                     ".claude",
                     ".claude/skills",
                     ".claude/skills/verify"
@@ -1821,7 +1944,7 @@ mod tests {
     }
 
     #[test]
-    fn native_skill_loader_exposes_metadata_without_private_body() {
+    fn native_skill_loader_projects_user_invocable_manual_skills_without_private_body() {
         let skill = crate::pack::CompiledSkill {
             resource: "skills-src/firmware/mcp-help/SKILL.md".to_string(),
             description: "Help select the correct MCP tool.".to_string(),
@@ -1832,13 +1955,98 @@ mod tests {
         assert!(loader.contains("name: mcp-help"));
         assert!(loader.contains("description: >-"));
         assert!(loader.contains("disable-model-invocation: false"));
+        assert!(loader.contains("user-invocable: true"));
         assert!(loader.contains("!`byo workflow guidance mcp-help`"));
         assert!(!loader.contains("skills-src/firmware"));
-        assert!(is_model_invocable(&skill));
-        assert!(!is_model_invocable(&crate::pack::CompiledSkill {
+        assert!(is_user_invocable(&skill));
+        let manual_skill = crate::pack::CompiledSkill {
             disable_model_invocation: true,
+            ..skill.clone()
+        };
+        let manual_loader = render_skill_loader("implement-firmware-large", &manual_skill);
+        assert!(manual_loader.contains("disable-model-invocation: true"));
+        assert!(manual_loader.contains("user-invocable: true"));
+        assert!(is_user_invocable(&manual_skill));
+        assert!(!is_user_invocable(&crate::pack::CompiledSkill {
+            user_invocable: false,
             ..skill
         }));
+    }
+
+    #[test]
+    fn codex_skill_policy_preserves_implicit_invocation_metadata() {
+        let model_invocable = crate::pack::CompiledSkill {
+            resource: "skills-src/firmware/mcp-help/SKILL.md".to_string(),
+            description: "Help select the correct MCP tool.".to_string(),
+            disable_model_invocation: false,
+            user_invocable: true,
+        };
+        assert_eq!(
+            render_codex_skill_policy(&model_invocable),
+            "policy:\n  allow_implicit_invocation: true\n"
+        );
+        assert_eq!(
+            render_codex_skill_policy(&crate::pack::CompiledSkill {
+                disable_model_invocation: true,
+                ..model_invocable
+            }),
+            "policy:\n  allow_implicit_invocation: false\n"
+        );
+    }
+
+    #[test]
+    fn rejects_unmanaged_loader_collisions_before_mutation() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-project-loader-collision-{:032x}",
+            rand::random::<u128>()
+        ));
+        let loader_paths = [
+            ".codex/skills/implement-firmware-large/SKILL.md",
+            ".codex/skills/implement-firmware-large/agents/openai.yaml",
+            ".claude/skills/implement-firmware-large/SKILL.md",
+        ];
+        let neighboring_file = root.join(".codex/skills/implement-firmware-large/notes.md");
+        std::fs::create_dir_all(neighboring_file.parent().unwrap()).unwrap();
+        std::fs::write(&neighboring_file, b"preserve neighbor\n").unwrap();
+
+        for relative in loader_paths {
+            let target = root.join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(&target, b"user-owned loader\n").unwrap();
+            let error = reject_unmanaged_loader_collisions(&root, None, &[relative.to_string()])
+                .expect_err("user-owned loader collision should be refused");
+            assert!(error.to_string().contains(relative));
+            assert_eq!(std::fs::read(&target).unwrap(), b"user-owned loader\n");
+            assert!(!root.join(".agent-backups").exists());
+            std::fs::remove_file(target).unwrap();
+        }
+
+        let managed_path = loader_paths[0].to_string();
+        let managed_target = root.join(&managed_path);
+        std::fs::write(&managed_target, b"managed loader\n").unwrap();
+        let projection = ProjectionManifest {
+            schema: 3,
+            managed_files: vec![ManagedFile {
+                path: managed_path.clone(),
+                sha256: crate::manifest::sha256_bytes(b"managed loader\n"),
+            }],
+            agents_block_sha256: String::new(),
+            codex_server_sha256: String::new(),
+            codex_hooks_sha256: String::new(),
+            claude_block_sha256: None,
+            claude_server_sha256: None,
+            claude_hooks_sha256: None,
+            created_files: Vec::new(),
+            created_dirs: Vec::new(),
+            legacy_cleanup: false,
+        };
+        reject_unmanaged_loader_collisions(&root, Some(&projection), &[managed_path])
+            .expect("existing BYO-managed loader should be available during update");
+        assert_eq!(
+            std::fs::read(&neighboring_file).unwrap(),
+            b"preserve neighbor\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1862,6 +2070,8 @@ mod tests {
         let (root, paths, project) = uninstall_fixture();
         let outcome = uninstall_project(&project, &paths, false).unwrap();
         assert!(!project.join(".claude/skills/verify").exists());
+        assert!(!project.join(".codex/skills/verify/agents").exists());
+        assert!(!project.join(".codex/skills/verify").exists());
         assert!(!project.join("AGENTS.md").exists());
         assert!(project.join(".agent-workspace/PLAN.md").is_file());
         assert!(project.join(".agent-backups/backup/user").is_file());
@@ -1880,6 +2090,35 @@ mod tests {
             serde_json::from_slice(&std::fs::read(paths.state.join("projects.json")).unwrap())
                 .unwrap();
         assert!(registry.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn obsolete_loader_cleanup_prunes_owned_nested_codex_policy_dirs() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-project-obsolete-loader-{:032x}",
+            rand::random::<u128>()
+        ));
+        let skill_dir = ".codex/skills/obsolete";
+        let policy_dir = ".codex/skills/obsolete/agents";
+        let loader = ".codex/skills/obsolete/SKILL.md";
+        let policy = ".codex/skills/obsolete/agents/openai.yaml";
+        std::fs::create_dir_all(root.join(policy_dir)).unwrap();
+        std::fs::write(root.join(loader), b"managed loader\n").unwrap();
+        std::fs::write(root.join(policy), b"policy\n").unwrap();
+        let neighboring_dir = root.join(".codex/skills/user-authored");
+        std::fs::create_dir_all(&neighboring_dir).unwrap();
+
+        remove_obsolete_managed_files(
+            &root,
+            &[loader.to_string(), policy.to_string()],
+            &std::collections::BTreeSet::from([skill_dir.to_string(), policy_dir.to_string()]),
+        )
+        .expect("owned nested policy directories should be removed when empty");
+
+        assert!(!root.join(policy_dir).exists());
+        assert!(!root.join(skill_dir).exists());
+        assert!(neighboring_dir.is_dir());
         std::fs::remove_dir_all(root).unwrap();
     }
 
