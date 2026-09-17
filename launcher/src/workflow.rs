@@ -19,6 +19,14 @@ const TASK_STUB_MARKER: &str = "Auto-created local workspace stub";
 const MAX_WORKFLOW_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES: u64 = 256 * 1024;
 
+#[derive(Debug, PartialEq, Eq)]
+struct ManualPermissionRequest {
+    action: String,
+    board_id: String,
+    policy_digest: String,
+    binding_digest: Option<String>,
+}
+
 fn valid_resource_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -112,6 +120,56 @@ fn positional_arguments(
         }
     }
     Ok(values)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn parse_manual_permission_arguments(arguments: &[String]) -> Result<ManualPermissionRequest> {
+    let arguments = arguments
+        .strip_prefix(&["--".to_string()])
+        .unwrap_or(arguments);
+    let action = argument_value(arguments, "--action")?.context("--action is required")?;
+    let board_id = argument_value(arguments, "--board-id")?.context("--board-id is required")?;
+    let policy_digest =
+        argument_value(arguments, "--policy-digest")?.context("--policy-digest is required")?;
+    let binding_digest = argument_value(arguments, "--binding-digest")?;
+    let positional = positional_arguments(
+        arguments,
+        &[
+            "--action",
+            "--board-id",
+            "--policy-digest",
+            "--binding-digest",
+        ],
+        &[],
+    )?;
+    if !positional.is_empty()
+        || !matches!(action.as_str(), "downgrade" | "mass-erase")
+        || board_id.trim().is_empty()
+        || board_id.len() > 512
+        || board_id.contains('\0')
+        || !valid_sha256(&policy_digest)
+    {
+        bail!(
+            "usage: byo workflow tool manual-permission --project <project> -- --action <downgrade|mass-erase> --board-id <id> --policy-digest <sha256> [--binding-digest <sha256>]"
+        );
+    }
+    match (action.as_str(), binding_digest.as_deref()) {
+        ("downgrade", None) => {}
+        ("mass-erase", Some(binding)) if valid_sha256(binding) => {}
+        _ => bail!("manual-permission bindings do not match the requested action"),
+    }
+    Ok(ManualPermissionRequest {
+        action,
+        board_id,
+        policy_digest,
+        binding_digest,
+    })
 }
 
 fn bounded_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
@@ -682,6 +740,53 @@ fn tool_record_review(project: &Path, arguments: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+fn tool_manual_permission(
+    project: &Path,
+    paths: &ProductPaths,
+    arguments: &[String],
+) -> Result<i32> {
+    let request = parse_manual_permission_arguments(arguments)?;
+    let runtime = crate::project::active_runtime(paths)?;
+    let sidecar = crate::install::sidecar_path(&runtime.root);
+    let mut command = Command::new(&sidecar);
+    command
+        .arg("manual-permission")
+        .arg("--project-root")
+        .arg(project)
+        .arg("--runtime-root")
+        .arg(&runtime.root)
+        .arg("--launcher-version")
+        .arg(env!("CARGO_PKG_VERSION"))
+        .arg("--workflow-protocol")
+        .arg(runtime.release.workflow_protocol.to_string())
+        .arg("--action")
+        .arg(&request.action)
+        .arg("--board-id")
+        .arg(&request.board_id)
+        .arg("--policy-digest")
+        .arg(&request.policy_digest)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if let Some(binding_digest) = request.binding_digest {
+        command.arg("--binding-digest").arg(binding_digest);
+    }
+    crate::apply_sidecar_environment(&mut command);
+    let status = command.status().with_context(|| {
+        format!(
+            "failed to launch sidecar manual-permission helper {}",
+            sidecar.display()
+        )
+    })?;
+    Ok(if status.success() {
+        0
+    } else {
+        status
+            .code()
+            .unwrap_or(crate::error::ExitCategory::SidecarLaunch as i32)
+    })
+}
+
 pub fn run_tool(
     project: &Path,
     name: &str,
@@ -697,6 +802,7 @@ pub fn run_tool(
         "risk-status" => tool_risk_status(project, paths, arguments),
         "query" => tool_query(project, arguments),
         "verify" => tool_verify(project, paths, arguments),
+        "manual-permission" => tool_manual_permission(project, paths, arguments),
         _ => bail!("unknown compiled workflow tool: {name}"),
     }
 }
@@ -943,5 +1049,59 @@ mod tests {
         assert!(valid_resource_id("verify-firmware-hil"));
         assert!(!valid_resource_id("../secret"));
         assert!(!valid_resource_id("Uppercase"));
+    }
+
+    #[test]
+    fn manual_permission_arguments_are_closed_and_action_bound() {
+        let request = parse_manual_permission_arguments(&[
+            "--action".to_string(),
+            "mass-erase".to_string(),
+            "--board-id".to_string(),
+            "board-1".to_string(),
+            "--policy-digest".to_string(),
+            "a".repeat(64),
+            "--binding-digest".to_string(),
+            "b".repeat(64),
+        ])
+        .expect("valid manual-permission request");
+        let expected_binding = "b".repeat(64);
+        assert_eq!(request.action, "mass-erase");
+        assert_eq!(request.board_id, "board-1");
+        assert_eq!(request.policy_digest, "a".repeat(64));
+        assert_eq!(
+            request.binding_digest.as_deref(),
+            Some(expected_binding.as_str())
+        );
+
+        assert!(parse_manual_permission_arguments(&[
+            "--action".to_string(),
+            "downgrade".to_string(),
+            "--board-id".to_string(),
+            "board-1".to_string(),
+            "--policy-digest".to_string(),
+            "a".repeat(64),
+            "--binding-digest".to_string(),
+            "b".repeat(64),
+        ])
+        .is_err());
+        assert!(parse_manual_permission_arguments(&[
+            "--action".to_string(),
+            "downgrade".to_string(),
+            "--board-id".to_string(),
+            "board-1".to_string(),
+            "--policy-digest".to_string(),
+            "not-a-digest".to_string(),
+        ])
+        .is_err());
+        assert!(parse_manual_permission_arguments(&[
+            "--action".to_string(),
+            "downgrade".to_string(),
+            "--board-id".to_string(),
+            "board-1".to_string(),
+            "--policy-digest".to_string(),
+            "a".repeat(64),
+            "unexpected".to_string(),
+        ])
+        .is_err());
     }
 }

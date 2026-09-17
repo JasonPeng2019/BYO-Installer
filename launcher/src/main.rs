@@ -307,7 +307,7 @@ fn init_health_summary(project: &std::path::Path, paths: &ProductPaths) -> Resul
     })
 }
 
-fn apply_sidecar_environment(command: &mut ProcessCommand) {
+pub(crate) fn apply_sidecar_environment(command: &mut ProcessCommand) {
     command.env_clear();
     for name in SIDECAR_ENVIRONMENT {
         if let Some(value) = env::var_os(name) {
@@ -405,6 +405,16 @@ fn run_helper(command: InternalCommand, paths: &ProductPaths) -> Result<i32> {
     } else {
         ExitCategory::SidecarLaunch as i32
     })
+}
+
+fn workflow_tool_project_argument<'a>(
+    name: &str,
+    project: Option<&'a std::path::Path>,
+) -> Result<Option<&'a std::path::Path>> {
+    if name == "manual-permission" && project.is_none() {
+        bail!("manual-permission requires an explicit --project <project> argument");
+    }
+    Ok(project)
 }
 
 fn run() -> Result<i32> {
@@ -604,8 +614,12 @@ fn run() -> Result<i32> {
                 )?;
             }
             WorkflowCommand::Tool(arguments) => {
+                let selected_project = categorize(
+                    workflow_tool_project_argument(&arguments.name, arguments.project.as_deref()),
+                    ExitCategory::ProjectRoot,
+                )?;
                 let project = categorize(
-                    project::canonical_project(arguments.project.as_deref(), &paths),
+                    project::canonical_project(selected_project, &paths),
                     ExitCategory::ProjectRoot,
                 )?;
                 return categorize(
@@ -872,7 +886,9 @@ fn main() -> ExitCode {
 mod tests {
     use std::path::Path;
 
-    use super::{client_arguments, AgentClient, SIDECAR_ENVIRONMENT};
+    use super::{
+        client_arguments, workflow_tool_project_argument, AgentClient, SIDECAR_ENVIRONMENT,
+    };
     use crate::pack::{
         CompiledCodex, CompiledMode, CompiledStructure, CompiledVerify, CompiledWorkflow,
     };
@@ -889,6 +905,20 @@ mod tests {
         ] {
             assert!(SIDECAR_ENVIRONMENT.contains(&required));
         }
+    }
+
+    #[test]
+    fn manual_permission_workflow_tool_requires_an_explicit_project() {
+        let project = Path::new("C:/work/project");
+        assert!(workflow_tool_project_argument("manual-permission", None).is_err());
+        assert_eq!(
+            workflow_tool_project_argument("manual-permission", Some(project)).unwrap(),
+            Some(project)
+        );
+        assert_eq!(
+            workflow_tool_project_argument("verify", None).unwrap(),
+            None
+        );
     }
 
     fn mode(name: &str, full_access: bool) -> CompiledMode {

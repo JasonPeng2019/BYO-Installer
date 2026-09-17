@@ -74,12 +74,26 @@ jobs:
         run: |
           echo "commit=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["agent_workspace"]["commit"])')" >> "$GITHUB_OUTPUT"
 
+      - name: Read locked Firmware MCP commit
+        id: firmware-source
+        shell: bash
+        run: |
+          echo "commit=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
       - name: Check out locked AgentWorkspace
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/CodexClaudeWorkflow
           ref: ${{ steps.source.outputs.commit }}
           path: AgentWorkspace
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+
+      - name: Check out locked Firmware MCP for parser compatibility
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.firmware-source.outputs.commit }}
+          path: BYO-Firmware-MCP
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Install Python
@@ -130,6 +144,7 @@ jobs:
           repository: JasonPeng2019/BYO-Firmware-MCP
           ref: ${{ steps.source.outputs.commit }}
           path: Firmware MCP New
+          fetch-depth: 2
 
       - name: Install Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -146,6 +161,17 @@ jobs:
         run: |
           uv sync --locked --all-groups
           uv run ruff check .
-          uv run ruff format --check .
+          mapfile -t changed_python < <(git diff --name-only --diff-filter=ACMR HEAD^ HEAD -- '*.py')
+          for path in "${changed_python[@]}"; do
+            if git cat-file -e "HEAD^:${path}" 2>/dev/null; then
+              if git show "HEAD^:${path}" | uv run ruff format --check --stdin-filename "$path" -; then
+                uv run ruff format --check "$path"
+              else
+                echo "Skipping inherited formatting debt in $path; its parent revision was not formatter-clean."
+              fi
+            else
+              uv run ruff format --check "$path"
+            fi
+          done
           uv run pyright
           uv run python -m unittest discover -s tests

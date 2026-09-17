@@ -8,7 +8,7 @@ firmware source, so the break is visible at review and caught in CI rather than
 on a customer's machine.
 
 - **Status:** Accepted / in force for installer `0.1.x`.
-- **Last updated:** 2026-08-20.
+- **Last updated:** 2026-09-17.
 - **Authoritative version numbers:** the constants in
   `Firmware MCP New/src/pyocd_debug_mcp/sidecar.py`
   (`SIDECAR_PROTOCOL`, `WORKER_PROTOCOL`, `WORKFLOW_PROTOCOL`, `CAPSULE_SCHEMA`,
@@ -61,8 +61,22 @@ Runs without hardware and prints a single JSON object to stdout (§4).
 `pack-repair` are hidden (`argparse.SUPPRESS`). Helpers require the runtime
 context (`--project-root`, `--runtime-root`, `--launcher-version`,
 `--workflow-protocol`) plus a trailing `REMAINDER`. `provider-worker` accepts the
-same context optionally. These are spawned by the sidecar itself, not by an
-operator.
+same context optionally for source self-tests and requires it when compiled.
+Provider workers and the three helpers are spawned by the sidecar itself, not by
+an operator.
+
+### 2.4 `manual-permission` (internal, hidden)
+
+```
+manual-permission --project-root <dir> --runtime-root <dir> --launcher-version <str> --workflow-protocol <int> --action <downgrade|mass-erase> --board-id <id> --policy-digest <sha256> [--binding-digest <sha256>]
+```
+
+Only `byo workflow tool manual-permission --project <dir> -- ...` may launch
+this command. The launcher validates the selected project and forwards the
+current action bindings; the sidecar validates its contract and applies the
+current-epoch manual record/claim protocol. It writes exactly one JSON object to
+stdout and returns nonzero for a refusal. The sidecar binary itself remains a
+private implementation detail, not a human-facing command.
 
 ## 3. Runtime behaviour clauses
 
@@ -70,20 +84,25 @@ operator.
    passed `--project-root` / `--runtime-root`. The sidecar must **not** take a
    root from the current working directory, a current-directory `.env`, or a
    `BYO_MCP_ARTIFACT_ROOT`-style environment variable. Reintroducing any of
-   those is a breaking change to `sidecar_protocol`.
+   those is a breaking change to `sidecar_protocol`. Before importing the
+   current server implementation, the sidecar changes cwd to the validated
+   runtime directory so its development `.env` loader cannot see an operator
+   project directory.
 2. **Runtime-dir resource resolution.** The runtime contract and bundled data
    are read from `runtime_root` (e.g. `runtime_root/release-manifest.json` via
    `_load_runtime_contract`), never relative to cwd.
 3. **Declared data files.** Data the sidecar reads at runtime (e.g.
    `probe_families.json`) must be declared to Nuitka so the standalone build
    bundles it; it must resolve as a package resource, not a source-tree path.
-4. **Protocol-clean stdout.** stdout carries only MCP / worker framing. All
+4. **Protocol-clean stdout.** stdout carries only MCP / worker framing, except
+   `manual-permission`, which carries exactly its single JSON result. All other
    diagnostics go to stderr. A stray print to stdout is a contract violation.
 5. **Worker spawn = the compiled multicall binary.** In a packaged build
    (`_is_compiled()` true — `sys.frozen`, `__compiled__`, or
    `BYO_SIDECAR_COMPILED=1`) provider workers are spawned as
-   `argv0 provider-worker` (the compiled multicall binary resolved without
-   trusting `PATH`). Only in a source checkout may it fall back to
+   `argv0 provider-worker --project-root ... --runtime-root ...` (the compiled
+   multicall binary resolved without trusting `PATH`, with inherited roots
+   replaced by explicit context). Only in a source checkout may it fall back to
    `sys.executable -m pyocd_debug_mcp.sidecar provider-worker`.
 6. **Filtered environment.** The launcher passes only an allowlisted environment
    (`SIDECAR_ENVIRONMENT` in `main.rs`); the sidecar must not depend on

@@ -12,8 +12,18 @@ import compile_workspace as compiler
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _workspace_source() -> Path:
+    checked_out = ROOT / "AgentWorkspace"
+    if checked_out.is_dir():
+        return checked_out
+    local_workspace = ROOT.parent / ".agent-workspace"
+    if local_workspace.is_dir():
+        return local_workspace
+    raise AssertionError("AgentWorkspace source checkout is unavailable")
+
+
 def test_real_workspace_catalog_contains_native_skill_metadata() -> None:
-    catalog = json.loads(compiler._compile_modes(ROOT / "AgentWorkspace"))
+    catalog = json.loads(compiler._compile_modes(_workspace_source()))
     assert catalog["schema"] == 2
     assert catalog["workflow_protocol"] == 1
     verify = catalog["skills"]["verify"]
@@ -58,6 +68,21 @@ def test_skill_metadata_folds_description_and_validates_identity() -> None:
             assert "identity mismatch" in str(error)
         else:
             raise AssertionError("skill identity mismatch was accepted")
+
+
+def test_manual_permission_developer_helper_reference_is_rejected() -> None:
+    source = (
+        b"Run .agent-workspace/bin/manual-permission with the exact server bindings.\n"
+    )
+
+    try:
+        compiler._compile_runtime_references(
+            "skills-src/firmware/downgrade/SKILL.md", source
+        )
+    except compiler.CompileError as error:
+        assert "developer-only commands" in str(error)
+    else:
+        raise AssertionError("manual-permission developer helper was accepted")
 
 
 def main() -> int:

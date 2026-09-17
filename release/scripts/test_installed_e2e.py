@@ -454,6 +454,32 @@ def main() -> int:
                     raise AcceptanceFailure(
                         "Codex implement-firmware-large policy permits implicit invocation"
                     )
+            permission_loader = project / client / "skills/downgrade/SKILL.md"
+            if not permission_loader.is_file():
+                raise AcceptanceFailure(
+                    f"init did not project the downgrade manual skill for {client}"
+                )
+            permission_loader_text = permission_loader.read_text(encoding="utf-8")
+            if (
+                "name: downgrade" not in permission_loader_text
+                or "disable-model-invocation: true" not in permission_loader_text
+                or "user-invocable: true" not in permission_loader_text
+                or "!`byo workflow guidance downgrade`" not in permission_loader_text
+            ):
+                raise AcceptanceFailure(
+                    f"{client} downgrade loader does not retain manual invocation metadata"
+                )
+            if client == ".codex":
+                permission_policy = (
+                    project / client / "skills/downgrade/agents/openai.yaml"
+                )
+                if not permission_policy.is_file() or (
+                    "allow_implicit_invocation: false"
+                    not in permission_policy.read_text(encoding="utf-8")
+                ):
+                    raise AcceptanceFailure(
+                        "Codex downgrade policy permits implicit invocation"
+                    )
         if "Preserve this text." not in (project / "AGENTS.md").read_text(
             encoding="utf-8"
         ):
@@ -563,6 +589,37 @@ def main() -> int:
 
         mcp = start_initialized_mcp(byo, project, env, expected_version)
         try:
+            manual_command = [
+                str(byo),
+                "workflow",
+                "tool",
+                "manual-permission",
+                "--project",
+                str(project),
+                "--",
+                "--action",
+                "downgrade",
+                "--board-id",
+                "acceptance-board",
+                "--policy-digest",
+                "a" * 64,
+            ]
+            manual = invoke(manual_command, env=env)
+            if (
+                len(manual.stdout.splitlines()) != 1
+                or json.loads(manual.stdout).get("status") != "manual_grant_unlocked"
+            ):
+                raise AcceptanceFailure(
+                    "installed manual-permission route did not return one unlock result"
+                )
+            repeated = invoke(manual_command, env=env, expected=1)
+            if (
+                len(repeated.stdout.splitlines()) != 1
+                or json.loads(repeated.stdout).get("code") != "manual/already-reserved"
+            ):
+                raise AcceptanceFailure(
+                    "installed manual-permission route did not return one refusal result"
+                )
             leases = list((home / "state" / "leases").glob("*.json"))
             if len(leases) != 1:
                 raise AcceptanceFailure(
