@@ -12,14 +12,23 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class AcceptanceFailure(RuntimeError):
     pass
+
+
+@dataclass
+class InitializedMcp:
+    """A running MCP server and its file-backed diagnostic capture."""
+
+    process: subprocess.Popen[str]
+    diagnostics: TextIO
 
 
 def invoke(
@@ -80,14 +89,20 @@ def start_initialized_mcp(
     project: Path,
     env: dict[str, str],
     expected_version: str,
-) -> subprocess.Popen[str]:
+) -> InitializedMcp:
+    # RegistryFastMCP redirects every non-protocol write to stderr so stdout
+    # remains valid JSON-RPC. A PIPE would therefore deadlock startup once the
+    # server fills the OS pipe before this harness gets around to reading it.
+    # Keep diagnostics for a useful failure report, but let the operating system
+    # write them directly to a temporary file instead of applying backpressure.
+    diagnostics = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
     process = subprocess.Popen(
         [str(byo), "mcp", "serve", "--project", str(project)],
         env=env,
         cwd=project,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=diagnostics,
         text=True,
         # Decode the sidecar's UTF-8 JSON-RPC stream explicitly; see invoke().
         encoding="utf-8",
@@ -130,27 +145,36 @@ def start_initialized_mcp(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        diagnostics = process.stderr.read() if process.stderr is not None else ""
+        diagnostics.seek(0)
+        diagnostic_text = diagnostics.read()
+        diagnostics.close()
         raise AcceptanceFailure(
-            f"MCP initialization failed: {exc}\nstderr:\n{diagnostics}"
+            f"MCP initialization failed: {exc}\nstderr:\n{diagnostic_text}"
         ) from exc
-    return process
+    return InitializedMcp(process=process, diagnostics=diagnostics)
 
 
-def stop_mcp(process: subprocess.Popen[str]) -> None:
+def stop_mcp(server: InitializedMcp) -> None:
+    process = server.process
     if process.stdin is not None:
         process.stdin.close()
     try:
-        process.wait(timeout=20)
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        process.wait(timeout=5)
-        raise AcceptanceFailure("MCP server did not stop after protocol EOF") from exc
-    if process.returncode != 0:
-        diagnostics = process.stderr.read() if process.stderr is not None else ""
-        raise AcceptanceFailure(
-            f"MCP server returned {process.returncode} after EOF:\n{diagnostics}"
-        )
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired as exc:
+            process.kill()
+            process.wait(timeout=5)
+            raise AcceptanceFailure(
+                "MCP server did not stop after protocol EOF"
+            ) from exc
+        if process.returncode != 0:
+            server.diagnostics.seek(0)
+            diagnostics = server.diagnostics.read()
+            raise AcceptanceFailure(
+                f"MCP server returned {process.returncode} after EOF:\n{diagnostics}"
+            )
+    finally:
+        server.diagnostics.close()
 
 
 def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:
@@ -159,6 +183,12 @@ def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:
         time.sleep(0.1)
     if path.exists():
         raise AcceptanceFailure(f"uninstall left BYO path behind: {path}")
+
+
+def phase(name: str) -> None:
+    """Write an unbuffered acceptance checkpoint for hosted-run diagnosis."""
+
+    print(f"BYO installed acceptance: {name}", flush=True)
 
 
 def output_names_path(output: str, expected: Path) -> bool:
@@ -281,6 +311,7 @@ def main() -> int:
             # profile variables needed by the compiled sidecar.
             env.pop("HOME", None)
 
+        phase("pre-install validation")
         invoke([str(bundle_launcher), "status"], env=env, expected=20)
         if os.name == "nt":
             powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -332,6 +363,7 @@ def main() -> int:
                 "--bundle",
                 str(bootstrap_archive),
             ]
+        phase("install primary runtime")
         invoke(install_command, env=env, cwd=ROOT)
         byo = home / "bin" / ("byo.exe" if os.name == "nt" else "byo")
         if not byo.is_file():
@@ -348,6 +380,7 @@ def main() -> int:
             raise AcceptanceFailure("installed runtime status was incorrect")
         unsigned_metadata = root / "unsigned-channel.json"
         unsigned_metadata.write_text("{}\n", encoding="utf-8")
+        phase("initialize primary project")
         invoke(
             [
                 str(byo),
@@ -360,6 +393,7 @@ def main() -> int:
             expected=23 if manifest.get("development_unsigned") else 40,
         )
 
+        phase("exercise workflow routes")
         invoke(
             [str(byo), "init", "--project", str(project), "--dry-run"],
             env=env,
@@ -587,6 +621,7 @@ def main() -> int:
         claude_skill.write_bytes(original_claude_skill)
         invoke([str(byo), "doctor", "--project", str(project)], env=env)
 
+        phase("exercise MCP and manual-permission route")
         mcp = start_initialized_mcp(byo, project, env, expected_version)
         try:
             manual_command = [
@@ -647,6 +682,7 @@ def main() -> int:
             env=env,
         )
 
+        phase("verify runtime integrity and project edge cases")
         runtime = home / "data" / "versions" / expected_version
         pack = runtime / "workflow" / "workspace.pack"
         original_pack = pack.read_bytes()
@@ -696,6 +732,7 @@ def main() -> int:
             finally:
                 read_only.chmod(0o755)
 
+        phase("exercise project and global uninstall lifecycle")
         firm_marker = project / ".firm" / "preserve-me"
         firm_marker.parent.mkdir(exist_ok=True)
         firm_marker.write_text("preserved\n", encoding="utf-8")
@@ -796,6 +833,7 @@ def main() -> int:
             raise AcceptanceFailure("product reinstall resurrected purged .firm data")
         invoke([str(byo), "uninstall", "--global"], env=env)
 
+        phase("exercise custom installation location")
         custom_root = root / "custom product location"
         custom_env = {
             key: value for key, value in os.environ.items() if key != "BYO_HOME"
