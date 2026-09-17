@@ -54,6 +54,7 @@ jobs:
           python3 release/scripts/test_compile_workspace.py
           python3 release/scripts/test_verify_build_output.py
           python3 release/scripts/test_build_release.py
+          python3 release/scripts/test_e2e_harness.py
 
       - name: Validate shell bootstrap
         run: sh -n install.sh
