@@ -267,16 +267,10 @@ def _skill_metadata(path: Path, source: Path) -> dict[str, object]:
     }
 
 
-def _compile_modes(source: Path, rules: list[tuple[str, str]] | None = None) -> bytes:
-    if rules is None:
-        rules = _load_policy(
-            Path(__file__).resolve().parents[1] / "policies/workspace-partition.toml"
-        )
+def _compile_modes(source: Path) -> bytes:
     mode_dir = source / "modes"
     raw_modes: dict[str, dict[str, object]] = {}
     for path in sorted(mode_dir.glob("*.toml")):
-        if _classify(path.relative_to(source).as_posix(), rules) != "compile":
-            continue
         try:
             value = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
@@ -323,11 +317,6 @@ def _compile_modes(source: Path, rules: list[tuple[str, str]] | None = None) -> 
 
     available_skills: dict[str, dict[str, object]] = {}
     for skill_path in sorted((source / "skills-src").glob("*/*/SKILL.md")):
-        if (
-            _classify(skill_path.relative_to(source).as_posix(), rules)
-            not in PACKED_CLASSES
-        ):
-            continue
         skill_id = skill_path.parent.name
         if not _valid_identifier(skill_id):
             raise CompileError(f"invalid skill identifier {skill_id!r}")
@@ -367,10 +356,7 @@ def _compile_modes(source: Path, rules: list[tuple[str, str]] | None = None) -> 
             )
         instruction_ids = ["instructions/common.md", f"instructions/{family_name}.md"]
         for resource_id in instruction_ids:
-            if (
-                not (source / resource_id).is_file()
-                or _classify(resource_id, rules) not in PACKED_CLASSES
-            ):
+            if not (source / resource_id).is_file():
                 raise CompileError(f"mode {name!r} references missing {resource_id}")
         compiled_modes.append(
             {
@@ -447,8 +433,6 @@ def _compile_modes(source: Path, rules: list[tuple[str, str]] | None = None) -> 
         )
     agents: dict[str, str] = {}
     for path in sorted((source / "agents").glob("*.md")):
-        if _classify(path.relative_to(source).as_posix(), rules) not in PACKED_CLASSES:
-            continue
         agent_id = path.stem
         if not _valid_identifier(agent_id):
             raise CompileError(f"invalid agent identifier {agent_id!r}")
@@ -501,7 +485,7 @@ def compile_pack(
                 (relative, release_class, payload, zlib.compress(payload, 9), digest)
             )
 
-    compiled_modes = _compile_modes(source, rules)
+    compiled_modes = _compile_modes(source)
     records.append(
         (
             "compiled/workflow.json",

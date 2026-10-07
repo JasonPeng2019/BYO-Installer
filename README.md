@@ -118,10 +118,9 @@ byo init --project /path/to/your/firmware-project
 | `byo repair` | Verify the active runtime and reconstruct its launcher |
 | `byo rollback` | Activate the previous verified runtime |
 
-Available modes are `firmware` and `firmware-full`. The latter requires
-`--allow-full-access` and should be used only in a trusted or isolated
-environment. Projects using an older `software` or `research` mode must select
-`firmware` with `byo mode firmware --project <path>` before using this runtime.
+Available modes are `firmware`, `software`, and `research`, plus `-full`
+variants that require `--allow-full-access`. Use full modes only in a trusted or
+isolated environment.
 
 `byo workspace update` changes one project's managed projection. `byo update`
 changes the shared product runtime and requires a configured signed release
