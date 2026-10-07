@@ -3,20 +3,60 @@ schema = 1
 # Runtime workflow data. These records are compressed and integrity-bound in
 # workspace.pack; they are never projected verbatim into customer projects.
 [[rule]]
-pattern = "modes/*.toml"
+pattern = "modes/firmware*.toml"
 class = "compile"
 
 [[rule]]
-pattern = "skills-src/**"
+pattern = "modes/software*.toml"
+class = "developer-only"
+
+[[rule]]
+pattern = "modes/research*.toml"
+class = "developer-only"
+
+[[rule]]
+pattern = "skills-src/common/**"
 class = "embed"
 
 [[rule]]
-pattern = "instructions/**"
+pattern = "skills-src/firmware/**"
 class = "embed"
 
 [[rule]]
-pattern = "agents/**"
+pattern = "skills-src/software/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "skills-src/research/**"
+class = "developer-only"
+
+[[rule]]
+pattern = "instructions/common.md"
 class = "embed"
+
+[[rule]]
+pattern = "instructions/firmware.md"
+class = "embed"
+
+[[rule]]
+pattern = "instructions/software.md"
+class = "developer-only"
+
+[[rule]]
+pattern = "instructions/research.md"
+class = "developer-only"
+
+[[rule]]
+pattern = "agents/adversarial-critic.md"
+class = "embed"
+
+[[rule]]
+pattern = "agents/verifier.md"
+class = "embed"
+
+[[rule]]
+pattern = "agents/research-claim-critic.md"
+class = "developer-only"
 
 # Initial user-owned artifacts. BYO creates these only when absent.
 [[rule]]

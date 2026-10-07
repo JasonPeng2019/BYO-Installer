@@ -378,6 +378,9 @@ def main() -> int:
             status.get("development_unsigned")
         ) != bool(manifest.get("development_unsigned")):
             raise AcceptanceFailure("installed runtime status was incorrect")
+        modes = json.loads(invoke([str(byo), "modes"], env=env).stdout)["modes"]
+        if [mode["name"] for mode in modes] != ["firmware", "firmware-full"]:
+            raise AcceptanceFailure(f"non-firmware modes were packaged: {modes!r}")
         unsigned_metadata = root / "unsigned-channel.json"
         unsigned_metadata.write_text("{}\n", encoding="utf-8")
         phase("initialize primary project")
@@ -457,36 +460,31 @@ def main() -> int:
                     raise AcceptanceFailure(
                         "Codex mcp-help policy does not allow intended implicit invocation"
                     )
-            manual_loader = (
-                project / client / "skills/implement-firmware-large/SKILL.md"
-            )
+            manual_loader = project / client / "skills/implement-high/SKILL.md"
             if not manual_loader.is_file():
                 raise AcceptanceFailure(
                     f"init did not project the user-invocable manual skill for {client}"
                 )
             manual_loader_text = manual_loader.read_text(encoding="utf-8")
             if (
-                "name: implement-firmware-large" not in manual_loader_text
+                "name: implement-high" not in manual_loader_text
                 or "disable-model-invocation: true" not in manual_loader_text
                 or "user-invocable: true" not in manual_loader_text
-                or "!`byo workflow guidance implement-firmware-large`"
-                not in manual_loader_text
+                or "!`byo workflow guidance implement-high`" not in manual_loader_text
             ):
                 raise AcceptanceFailure(
-                    f"{client} implement-firmware-large loader does not retain manual invocation metadata"
+                    f"{client} implement-high loader does not retain manual invocation metadata"
                 )
             if client == ".codex":
                 manual_policy = (
-                    project
-                    / client
-                    / "skills/implement-firmware-large/agents/openai.yaml"
+                    project / client / "skills/implement-high/agents/openai.yaml"
                 )
                 if not manual_policy.is_file() or (
                     "allow_implicit_invocation: false"
                     not in manual_policy.read_text(encoding="utf-8")
                 ):
                     raise AcceptanceFailure(
-                        "Codex implement-firmware-large policy permits implicit invocation"
+                        "Codex implement-high policy permits implicit invocation"
                     )
             permission_loader = project / client / "skills/downgrade/SKILL.md"
             if not permission_loader.is_file():
@@ -583,22 +581,12 @@ def main() -> int:
             [str(byo), "mode", "firmware", "--project", str(project)],
             env=env,
         )
-        invoke([str(byo), "mode", "research", "--project", str(project)], env=env)
-        invoke(
-            [
-                str(byo),
-                "mode",
-                "research-full",
-                "--allow-full-access",
-                "--project",
-                str(project),
-            ],
-            env=env,
-        )
-        invoke(
-            [str(byo), "mode", "firmware", "--project", str(project)],
-            env=env,
-        )
+        for unsupported in ("software", "research"):
+            invoke(
+                [str(byo), "mode", unsupported, "--project", str(project)],
+                env=env,
+                expected=11,
+            )
 
         managed_skill = project / ".codex/skills/byo-firmware/SKILL.md"
         original_skill = managed_skill.read_bytes()

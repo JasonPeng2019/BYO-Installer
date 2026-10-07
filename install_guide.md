@@ -526,8 +526,8 @@ intended mapping is:
 | `bin/doctor` | `compile` | `byo doctor` |
 | `bin/codex-mode` and launch wrappers | `compile` | `byo mode` and client adapters |
 | `hooks/` and hook runner | `compile` | `byo hook` |
-| `modes/*.toml` | `compile` | Typed policy tables |
-| `skills-src/` | Mostly `compile`/`embed`; one minimal bootstrap may be `public-template` | Workflow pack plus thin client skill |
+| `modes/firmware*.toml` | `compile` | Typed firmware policy tables; these are the only modes in the workspace |
+| `skills-src/common/` and `skills-src/firmware/` | `embed` | Firmware workflow pack plus thin client skills; research and software skill sources have been removed |
 | `templates/` | `embed` or `user-template` | In-memory render or create-if-absent |
 | `.codex/` source policy | `compile` plus minimal `public-template` | Generated `.codex` projection |
 | `.github/` | `developer-only` | None |
@@ -722,11 +722,15 @@ pattern = "hooks/**"
 class = "compile"
 
 [[rule]]
-pattern = "modes/*.toml"
+pattern = "modes/firmware*.toml"
 class = "compile"
 
 [[rule]]
-pattern = "skills-src/**"
+pattern = "skills-src/common/**"
+class = "embed"
+
+[[rule]]
+pattern = "skills-src/firmware/**"
 class = "embed"
 
 [[rule]]
@@ -932,7 +936,7 @@ byo paths
 byo status [--project <path>]
 byo init [--project <path>] [--mode firmware] [--dry-run] [--yes]
 byo doctor [--project <path>] [--json]
-byo mode <firmware|software> [--project <path>]
+byo mode <firmware|firmware-full> [--project <path>]
 byo hook <hook-name> [internal hook arguments]
 byo mcp serve [--project <path>]
 byo workspace update [--project <path>] [--version <version>]

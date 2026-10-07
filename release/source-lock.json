@@ -3,7 +3,7 @@
   "agent_workspace": {
     "repository": "JasonPeng2019/CodexClaudeWorkflow",
     "branch": "InstallerV1",
-    "commit": "719c1e3c5ed172687d3d0072fe271c2ed42d48c6"
+    "commit": "2efb5f653e2e31e796b8cf58290012e0ac6b6f6d"
   },
   "firmware_mcp": {
     "repository": "JasonPeng2019/BYO-Firmware-MCP",
