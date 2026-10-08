@@ -932,7 +932,7 @@ byo paths
 byo status [--project <path>]
 byo init [--project <path>] [--mode firmware] [--dry-run] [--yes]
 byo doctor [--project <path>] [--json]
-byo mode <firmware|software> [--project <path>]
+byo mode <firmware|firmware-full> [--project <path>]
 byo hook <hook-name> [internal hook arguments]
 byo mcp serve [--project <path>]
 byo workspace update [--project <path>] [--version <version>]

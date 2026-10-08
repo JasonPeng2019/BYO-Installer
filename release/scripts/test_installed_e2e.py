@@ -432,7 +432,7 @@ def main() -> int:
             raise AcceptanceFailure("init changed an unrelated Claude MCP server")
         if claude_mcp.get("mcpServers", {}).get("byo", {}).get("command") != "byo":
             raise AcceptanceFailure("init did not configure the Claude BYO MCP server")
-        for client in (".codex", ".claude"):
+        for client in (".agents", ".claude"):
             loader = project / client / "skills/mcp-help/SKILL.md"
             if not loader.is_file():
                 raise AcceptanceFailure(
@@ -441,14 +441,20 @@ def main() -> int:
             loader_text = loader.read_text(encoding="utf-8")
             if (
                 "name: mcp-help" not in loader_text
+                or "description: >-" not in loader_text
                 or "disable-model-invocation: false" not in loader_text
                 or "user-invocable: true" not in loader_text
-                or "!`byo workflow guidance mcp-help`" not in loader_text
+                or (
+                    "Run `byo workflow guidance mcp-help`"
+                    if client == ".agents"
+                    else "!`byo workflow guidance mcp-help`"
+                )
+                not in loader_text
             ):
                 raise AcceptanceFailure(
                     f"{client} mcp-help loader does not expose verified skill metadata"
                 )
-            if client == ".codex":
+            if client == ".agents":
                 model_policy = project / client / "skills/mcp-help/agents/openai.yaml"
                 if not model_policy.is_file() or (
                     "allow_implicit_invocation: true"
@@ -457,36 +463,39 @@ def main() -> int:
                     raise AcceptanceFailure(
                         "Codex mcp-help policy does not allow intended implicit invocation"
                     )
-            manual_loader = (
-                project / client / "skills/implement-firmware-large/SKILL.md"
-            )
+            manual_loader = project / client / "skills/bug-fix-complex/SKILL.md"
             if not manual_loader.is_file():
                 raise AcceptanceFailure(
                     f"init did not project the user-invocable manual skill for {client}"
                 )
             manual_loader_text = manual_loader.read_text(encoding="utf-8")
             if (
-                "name: implement-firmware-large" not in manual_loader_text
+                "name: bug-fix-complex" not in manual_loader_text
+                or "description: >-" not in manual_loader_text
+                or "$bug-fix-complex" not in manual_loader_text
+                or "Do not select or fetch it automatically." not in manual_loader_text
                 or "disable-model-invocation: true" not in manual_loader_text
                 or "user-invocable: true" not in manual_loader_text
-                or "!`byo workflow guidance implement-firmware-large`"
+                or (
+                    "Run `byo workflow guidance bug-fix-complex`"
+                    if client == ".agents"
+                    else "!`byo workflow guidance bug-fix-complex`"
+                )
                 not in manual_loader_text
             ):
                 raise AcceptanceFailure(
-                    f"{client} implement-firmware-large loader does not retain manual invocation metadata"
+                    f"{client} bug-fix-complex loader does not retain manual invocation metadata"
                 )
-            if client == ".codex":
+            if client == ".agents":
                 manual_policy = (
-                    project
-                    / client
-                    / "skills/implement-firmware-large/agents/openai.yaml"
+                    project / client / "skills/bug-fix-complex/agents/openai.yaml"
                 )
                 if not manual_policy.is_file() or (
                     "allow_implicit_invocation: false"
                     not in manual_policy.read_text(encoding="utf-8")
                 ):
                     raise AcceptanceFailure(
-                        "Codex implement-firmware-large policy permits implicit invocation"
+                        "Codex bug-fix-complex policy permits implicit invocation"
                     )
             permission_loader = project / client / "skills/downgrade/SKILL.md"
             if not permission_loader.is_file():
@@ -496,14 +505,23 @@ def main() -> int:
             permission_loader_text = permission_loader.read_text(encoding="utf-8")
             if (
                 "name: downgrade" not in permission_loader_text
+                or "description: >-" not in permission_loader_text
+                or "$downgrade" not in permission_loader_text
+                or "Do not select or fetch it automatically."
+                not in permission_loader_text
                 or "disable-model-invocation: true" not in permission_loader_text
                 or "user-invocable: true" not in permission_loader_text
-                or "!`byo workflow guidance downgrade`" not in permission_loader_text
+                or (
+                    "Run `byo workflow guidance downgrade`"
+                    if client == ".agents"
+                    else "!`byo workflow guidance downgrade`"
+                )
+                not in permission_loader_text
             ):
                 raise AcceptanceFailure(
                     f"{client} downgrade loader does not retain manual invocation metadata"
                 )
-            if client == ".codex":
+            if client == ".agents":
                 permission_policy = (
                     project / client / "skills/downgrade/agents/openai.yaml"
                 )
@@ -583,24 +601,8 @@ def main() -> int:
             [str(byo), "mode", "firmware", "--project", str(project)],
             env=env,
         )
-        invoke([str(byo), "mode", "research", "--project", str(project)], env=env)
-        invoke(
-            [
-                str(byo),
-                "mode",
-                "research-full",
-                "--allow-full-access",
-                "--project",
-                str(project),
-            ],
-            env=env,
-        )
-        invoke(
-            [str(byo), "mode", "firmware", "--project", str(project)],
-            env=env,
-        )
 
-        managed_skill = project / ".codex/skills/byo-firmware/SKILL.md"
+        managed_skill = project / ".agents/skills/byo-firmware/SKILL.md"
         original_skill = managed_skill.read_bytes()
         managed_skill.write_bytes(original_skill + b"\nmodified\n")
         invoke(

@@ -97,8 +97,15 @@ struct TextReplacement {
 
 #[derive(Debug)]
 struct ProjectedSkill {
-    loader: String,
+    codex_loader: String,
+    claude_loader: String,
     codex_policy: String,
+}
+
+#[derive(Clone, Copy)]
+enum SkillClient {
+    Codex,
+    Claude,
 }
 
 #[derive(Debug)]
@@ -696,16 +703,30 @@ fn restore_backup(
 
 /// Render the public, metadata-only entry point for a private workflow skill.
 ///
-/// Codex and Claude consume the same native `SKILL.md` contract. The complete
-/// workflow stays in the verified workspace pack until the client loads it.
-fn render_skill_loader(skill_id: &str, skill: &CompiledSkill) -> String {
-    let description = skill
+/// The complete workflow stays in the verified workspace pack until selected.
+fn render_skill_loader(skill_id: &str, skill: &CompiledSkill, client: SkillClient) -> String {
+    let mut description = skill
         .description
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
+    if skill.disable_model_invocation
+        && !description
+            .to_ascii_lowercase()
+            .contains("do not select or fetch it automatically")
+    {
+        description.push_str(&format!(
+            " Manual-only: use only when the user explicitly invokes ${skill_id}. Do not select or fetch it automatically."
+        ));
+    }
+    let fetch = match client {
+        SkillClient::Codex => format!(
+            "Run `byo workflow guidance {skill_id}` and follow the returned instructions.\n"
+        ),
+        SkillClient::Claude => format!("!`byo workflow guidance {skill_id}`\n"),
+    };
     format!(
-        "---\nname: {skill_id}\ndescription: >-\n  {description}\ndisable-model-invocation: {}\nuser-invocable: {}\nallowed-tools: Bash(byo workflow guidance {skill_id}:*)\n---\n\nLoad the verified private BYO workflow guidance for this skill:\n\n!`byo workflow guidance {skill_id}`\n",
+        "---\nname: {skill_id}\ndescription: >-\n  {description}\ndisable-model-invocation: {}\nuser-invocable: {}\nallowed-tools: Bash(byo workflow guidance {skill_id}:*)\n---\n\nLoad the verified private BYO workflow guidance for this skill:\n\n{fetch}",
         skill.disable_model_invocation, skill.user_invocable
     )
 }
@@ -886,21 +907,22 @@ Available specialist identifiers: {}.\n",
             projected_skill_loaders.insert(
                 skill_id.clone(),
                 ProjectedSkill {
-                    loader: render_skill_loader(skill_id, &metadata),
+                    codex_loader: render_skill_loader(skill_id, &metadata, SkillClient::Codex),
+                    claude_loader: render_skill_loader(skill_id, &metadata, SkillClient::Claude),
                     codex_policy: render_codex_skill_policy(&metadata),
                 },
             );
         }
     }
     let desired_loader_paths: Vec<String> = [
-        ".codex/skills/byo-firmware/SKILL.md".to_string(),
+        ".agents/skills/byo-firmware/SKILL.md".to_string(),
         ".claude/skills/byo-firmware/SKILL.md".to_string(),
     ]
     .into_iter()
     .chain(projected_skill_loaders.keys().flat_map(|skill_id| {
         [
-            format!(".codex/skills/{skill_id}/SKILL.md"),
-            format!(".codex/skills/{skill_id}/agents/openai.yaml"),
+            format!(".agents/skills/{skill_id}/SKILL.md"),
+            format!(".agents/skills/{skill_id}/agents/openai.yaml"),
             format!(".claude/skills/{skill_id}/SKILL.md"),
         ]
     }))
@@ -982,8 +1004,9 @@ Available specialist identifiers: {}.\n",
         ".generated".to_string(),
         ".generated/byo".to_string(),
         ".codex".to_string(),
-        ".codex/skills".to_string(),
-        ".codex/skills/byo-firmware".to_string(),
+        ".agents".to_string(),
+        ".agents/skills".to_string(),
+        ".agents/skills/byo-firmware".to_string(),
         ".claude".to_string(),
         ".claude/skills".to_string(),
         ".claude/skills/byo-firmware".to_string(),
@@ -991,8 +1014,8 @@ Available specialist identifiers: {}.\n",
     .into_iter()
     .chain(projected_skill_loaders.keys().flat_map(|skill_id| {
         [
-            format!(".codex/skills/{skill_id}"),
-            format!(".codex/skills/{skill_id}/agents"),
+            format!(".agents/skills/{skill_id}"),
+            format!(".agents/skills/{skill_id}/agents"),
             format!(".claude/skills/{skill_id}"),
         ]
     }))
@@ -1065,23 +1088,26 @@ Available specialist identifiers: {}.\n",
         if !project.join(".agent-workspace/HANDOFF.md").exists() {
             crate::manifest::atomic_write(&project.join(".agent-workspace/HANDOFF.md"), &handoff)?;
         }
-        atomic_text(&project.join(".codex/skills/byo-firmware/SKILL.md"), &skill)?;
+        atomic_text(
+            &project.join(".agents/skills/byo-firmware/SKILL.md"),
+            &skill,
+        )?;
         atomic_text(
             &project.join(".claude/skills/byo-firmware/SKILL.md"),
             &skill,
         )?;
         for (skill_id, projected_skill) in &projected_skill_loaders {
             atomic_text(
-                &project.join(format!(".codex/skills/{skill_id}/SKILL.md")),
-                &projected_skill.loader,
+                &project.join(format!(".agents/skills/{skill_id}/SKILL.md")),
+                &projected_skill.codex_loader,
             )?;
             atomic_text(
-                &project.join(format!(".codex/skills/{skill_id}/agents/openai.yaml")),
+                &project.join(format!(".agents/skills/{skill_id}/agents/openai.yaml")),
                 &projected_skill.codex_policy,
             )?;
             atomic_text(
                 &project.join(format!(".claude/skills/{skill_id}/SKILL.md")),
-                &projected_skill.loader,
+                &projected_skill.claude_loader,
             )?;
         }
         atomic_text(
@@ -1097,7 +1123,7 @@ Available specialist identifiers: {}.\n",
 
         let mut managed_files = vec![
             ManagedFile {
-                path: ".codex/skills/byo-firmware/SKILL.md".to_string(),
+                path: ".agents/skills/byo-firmware/SKILL.md".to_string(),
                 sha256: sha256_bytes(skill.as_bytes()),
             },
             ManagedFile {
@@ -1111,20 +1137,21 @@ Available specialist identifiers: {}.\n",
         ];
         managed_files.extend(projected_skill_loaders.iter().flat_map(
             |(skill_id, projected_skill)| {
-                let loader_sha256 = sha256_bytes(projected_skill.loader.as_bytes());
+                let codex_loader_sha256 = sha256_bytes(projected_skill.codex_loader.as_bytes());
+                let claude_loader_sha256 = sha256_bytes(projected_skill.claude_loader.as_bytes());
                 let codex_policy_sha256 = sha256_bytes(projected_skill.codex_policy.as_bytes());
                 [
                     ManagedFile {
-                        path: format!(".codex/skills/{skill_id}/SKILL.md"),
-                        sha256: loader_sha256.clone(),
+                        path: format!(".agents/skills/{skill_id}/SKILL.md"),
+                        sha256: codex_loader_sha256,
                     },
                     ManagedFile {
-                        path: format!(".codex/skills/{skill_id}/agents/openai.yaml"),
+                        path: format!(".agents/skills/{skill_id}/agents/openai.yaml"),
                         sha256: codex_policy_sha256,
                     },
                     ManagedFile {
                         path: format!(".claude/skills/{skill_id}/SKILL.md"),
-                        sha256: loader_sha256,
+                        sha256: claude_loader_sha256,
                     },
                 ]
             },
@@ -1413,6 +1440,7 @@ fn plan_project_uninstall(
         ".agent-backups",
         ".firm",
         ".generated/byo",
+        ".agents/skills/byo-firmware",
         ".codex/skills/byo-firmware",
         ".claude/skills/byo-firmware",
     ]
@@ -1430,7 +1458,7 @@ fn plan_project_uninstall(
                     std::path::Component::Normal(skills),
                     std::path::Component::Normal(_),
                     std::path::Component::Normal(file)
-                ] if (*root == ".claude" || *root == ".codex")
+                ] if (*root == ".claude" || *root == ".codex" || *root == ".agents")
                     && *skills == "skills"
                     && *file == "SKILL.md"
             )
@@ -1447,7 +1475,9 @@ fn plan_project_uninstall(
     let managed_skill_dirs: BTreeSet<String> = purge_relative_roots
         .iter()
         .filter(|relative| {
-            relative.starts_with(".claude/skills/") || relative.starts_with(".codex/skills/")
+            relative.starts_with(".claude/skills/")
+                || relative.starts_with(".codex/skills/")
+                || relative.starts_with(".agents/skills/")
         })
         .cloned()
         .collect();
@@ -1466,7 +1496,7 @@ fn plan_project_uninstall(
                         std::path::Component::Normal(_),
                         std::path::Component::Normal(agents),
                         std::path::Component::Normal(file)
-                    ] if *root == ".codex"
+                    ] if (*root == ".codex" || *root == ".agents")
                         && *skills == "skills"
                         && *agents == "agents"
                         && *file == "openai.yaml"
@@ -1483,6 +1513,9 @@ fn plan_project_uninstall(
     let known_cleanup_dirs: BTreeSet<String> = [
         ".generated/byo",
         ".generated",
+        ".agents/skills/byo-firmware",
+        ".agents/skills",
+        ".agents",
         ".codex/skills/byo-firmware",
         ".codex/skills",
         ".codex",
@@ -1771,7 +1804,7 @@ mod tests {
         remove_claude_mcp, remove_claude_mcp_approval, remove_hook_configuration,
         remove_obsolete_managed_files, render_claude_mcp, render_codex_config,
         render_codex_skill_policy, render_hook_configuration, render_skill_loader,
-        uninstall_project, CapsuleManifest, ManagedFile, ProjectionManifest,
+        uninstall_project, CapsuleManifest, ManagedFile, ProjectionManifest, SkillClient,
     };
 
     fn uninstall_fixture() -> (PathBuf, crate::paths::ProductPaths, PathBuf) {
@@ -1786,7 +1819,7 @@ mod tests {
             ".agent-backups/backup",
             ".firm",
             ".generated/byo",
-            ".codex/skills/verify/agents",
+            ".agents/skills/verify/agents",
             ".claude/skills/verify",
         ] {
             std::fs::create_dir_all(project.join(relative)).unwrap();
@@ -1799,10 +1832,10 @@ mod tests {
         std::fs::write(project.join("customer.txt"), b"customer\n").unwrap();
         let loader = b"managed loader\n";
         std::fs::write(project.join(".claude/skills/verify/SKILL.md"), loader).unwrap();
-        std::fs::write(project.join(".codex/skills/verify/SKILL.md"), loader).unwrap();
+        std::fs::write(project.join(".agents/skills/verify/SKILL.md"), loader).unwrap();
         let policy = b"policy:\n  allow_implicit_invocation: true\n";
         std::fs::write(
-            project.join(".codex/skills/verify/agents/openai.yaml"),
+            project.join(".agents/skills/verify/agents/openai.yaml"),
             policy,
         )
         .unwrap();
@@ -1839,10 +1872,10 @@ mod tests {
                     "path": ".claude/skills/verify/SKILL.md",
                     "sha256": crate::manifest::sha256_bytes(loader)
                 }, {
-                    "path": ".codex/skills/verify/SKILL.md",
+                    "path": ".agents/skills/verify/SKILL.md",
                     "sha256": crate::manifest::sha256_bytes(loader)
                 }, {
-                    "path": ".codex/skills/verify/agents/openai.yaml",
+                    "path": ".agents/skills/verify/agents/openai.yaml",
                     "sha256": crate::manifest::sha256_bytes(policy)
                 }],
                 "agents_block_sha256": "unused",
@@ -1854,9 +1887,10 @@ mod tests {
                     ".generated",
                     ".generated/byo",
                     ".codex",
-                    ".codex/skills",
-                    ".codex/skills/verify",
-                    ".codex/skills/verify/agents",
+                    ".agents",
+                    ".agents/skills",
+                    ".agents/skills/verify",
+                    ".agents/skills/verify/agents",
                     ".claude",
                     ".claude/skills",
                     ".claude/skills/verify"
@@ -1944,28 +1978,34 @@ mod tests {
     }
 
     #[test]
-    fn native_skill_loader_projects_user_invocable_manual_skills_without_private_body() {
+    fn native_skill_loader_exposes_metadata_and_fetches_private_body_on_selection() {
         let skill = crate::pack::CompiledSkill {
             resource: "skills-src/firmware/mcp-help/SKILL.md".to_string(),
             description: "Help select the correct MCP tool.".to_string(),
             disable_model_invocation: false,
             user_invocable: true,
         };
-        let loader = render_skill_loader("mcp-help", &skill);
+        let loader = render_skill_loader("mcp-help", &skill, SkillClient::Codex);
         assert!(loader.contains("name: mcp-help"));
-        assert!(loader.contains("description: >-"));
+        assert!(loader.contains("description: >-\n  Help select the correct MCP tool."));
         assert!(loader.contains("disable-model-invocation: false"));
         assert!(loader.contains("user-invocable: true"));
-        assert!(loader.contains("!`byo workflow guidance mcp-help`"));
+        assert!(loader.contains("Run `byo workflow guidance mcp-help`"));
+        assert!(!loader.contains("!`byo workflow guidance"));
+        let claude_loader = render_skill_loader("mcp-help", &skill, SkillClient::Claude);
+        assert!(claude_loader.contains("!`byo workflow guidance mcp-help`"));
         assert!(!loader.contains("skills-src/firmware"));
         assert!(is_user_invocable(&skill));
         let manual_skill = crate::pack::CompiledSkill {
             disable_model_invocation: true,
             ..skill.clone()
         };
-        let manual_loader = render_skill_loader("implement-firmware-large", &manual_skill);
+        let manual_loader =
+            render_skill_loader("bug-fix-complex", &manual_skill, SkillClient::Codex);
         assert!(manual_loader.contains("disable-model-invocation: true"));
         assert!(manual_loader.contains("user-invocable: true"));
+        assert!(manual_loader.contains("$bug-fix-complex"));
+        assert!(manual_loader.contains("Do not select or fetch it automatically."));
         assert!(is_user_invocable(&manual_skill));
         assert!(!is_user_invocable(&crate::pack::CompiledSkill {
             user_invocable: false,
@@ -2001,11 +2041,11 @@ mod tests {
             rand::random::<u128>()
         ));
         let loader_paths = [
-            ".codex/skills/implement-firmware-large/SKILL.md",
-            ".codex/skills/implement-firmware-large/agents/openai.yaml",
-            ".claude/skills/implement-firmware-large/SKILL.md",
+            ".agents/skills/bug-fix-complex/SKILL.md",
+            ".agents/skills/bug-fix-complex/agents/openai.yaml",
+            ".claude/skills/bug-fix-complex/SKILL.md",
         ];
-        let neighboring_file = root.join(".codex/skills/implement-firmware-large/notes.md");
+        let neighboring_file = root.join(".agents/skills/bug-fix-complex/notes.md");
         std::fs::create_dir_all(neighboring_file.parent().unwrap()).unwrap();
         std::fs::write(&neighboring_file, b"preserve neighbor\n").unwrap();
 
@@ -2070,8 +2110,8 @@ mod tests {
         let (root, paths, project) = uninstall_fixture();
         let outcome = uninstall_project(&project, &paths, false).unwrap();
         assert!(!project.join(".claude/skills/verify").exists());
-        assert!(!project.join(".codex/skills/verify/agents").exists());
-        assert!(!project.join(".codex/skills/verify").exists());
+        assert!(!project.join(".agents/skills/verify/agents").exists());
+        assert!(!project.join(".agents/skills/verify").exists());
         assert!(!project.join("AGENTS.md").exists());
         assert!(project.join(".agent-workspace/PLAN.md").is_file());
         assert!(project.join(".agent-backups/backup/user").is_file());

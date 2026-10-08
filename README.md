@@ -87,7 +87,7 @@ The dry run is optional. `byo init` creates the project capsule, registers the
 project, configures both clients to launch the MCP server through
 `byo mcp serve`, and runs the project health check. It also projects one thin
 native skill loader for each user-invocable mode-authorized workflow into both
-`.codex/skills` and `.claude/skills`. The loader fetches the verified private
+`.agents/skills` and `.claude/skills`. The loader fetches the verified private
 body from the installed workspace pack only when selected. A manual-only loader
 retains `disable-model-invocation: true` and `user-invocable: true`, making it
 available for explicit human invocation but not implicit model selection.
@@ -118,9 +118,8 @@ byo init --project /path/to/your/firmware-project
 | `byo repair` | Verify the active runtime and reconstruct its launcher |
 | `byo rollback` | Activate the previous verified runtime |
 
-Available modes are `firmware`, `software`, and `research`, plus `-full`
-variants that require `--allow-full-access`. Use full modes only in a trusted or
-isolated environment.
+Available modes are `firmware` and `firmware-full`. Selecting `firmware-full`
+requires `--allow-full-access`; use it only in a trusted or isolated environment.
 
 `byo workspace update` changes one project's managed projection. `byo update`
 changes the shared product runtime and requires a configured signed release
