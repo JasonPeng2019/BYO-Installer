@@ -90,6 +90,17 @@ jobs:
         shell: bash
         run: cargo test --manifest-path launcher/Cargo.toml --locked 'install::tests::windows_'
 
+      - name: Run Windows analysis packaging negatives
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python release/scripts/test_analysis_tools.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python release/scripts/test_build_release.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python release/scripts/test_verify_build_output.py --windows-only
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build native launcher, sidecar, SBOM, and archive
         shell: bash
         env:

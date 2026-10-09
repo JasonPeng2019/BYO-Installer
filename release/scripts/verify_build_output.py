@@ -9,9 +9,12 @@ import hashlib
 import json
 import re
 import struct
+import sys
 import tarfile
 import zipfile
 from pathlib import Path, PurePosixPath
+
+import analysis_tools
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN_SUFFIXES = {
@@ -115,7 +118,12 @@ def validate_archive_paths(names: list[str], bundle_name: str) -> None:
         seen.add(normalized)
 
 
-def validate_archive(archive: Path, archive_type: str, bundle_name: str) -> None:
+def validate_archive(
+    archive: Path,
+    archive_type: str,
+    bundle_name: str,
+    expected_manifest: dict | None = None,
+) -> None:
     if archive_type == "zip":
         if archive.suffix != ".zip":
             raise RuntimeError("ZIP target did not produce a .zip archive")
@@ -126,6 +134,42 @@ def validate_archive(archive: Path, archive_type: str, bundle_name: str) -> None
                 file_type = (member.external_attr >> 16) & 0o170000
                 if file_type not in {0, 0o040000, 0o100000}:
                     raise RuntimeError("ZIP contains a forbidden non-file entry")
+            manifest_name = f"{bundle_name}/release-manifest.json"
+            manifest = json.loads(handle.read(manifest_name))
+            if manifest.get("platform") == "windows":
+                if expected_manifest is not None and manifest != expected_manifest:
+                    raise RuntimeError("ZIP manifest differs from the assembled bundle")
+                leaves = {
+                    member.filename[len(bundle_name) + 1 :]
+                    for member in members
+                    if not member.is_dir()
+                }
+                expected = {leaf["path"] for leaf in manifest["files"]} | {
+                    "release-manifest.json"
+                }
+                if manifest.get("development_unsigned") is False:
+                    expected.add("release-manifest.sig")
+                if leaves != expected:
+                    raise RuntimeError(
+                        f"ZIP leaves differ from payload inventory: {sorted(leaves ^ expected)}"
+                    )
+                allowed_directories = {bundle_name}
+                for name in expected:
+                    for parent in PurePosixPath(f"{bundle_name}/{name}").parents:
+                        if str(parent) != ".":
+                            allowed_directories.add(str(parent))
+                if any(
+                    m.is_dir() and m.filename.rstrip("/") not in allowed_directories
+                    for m in members
+                ):
+                    raise RuntimeError(
+                        "ZIP contains unknown/misplaced directory entries"
+                    )
+
+                def read_bytes(name):
+                    return handle.read(f"{bundle_name}/{name}")
+
+                validate_windows_payload(manifest, read_bytes)
     elif archive_type == "tar.gz":
         if not archive.name.endswith(".tar.gz"):
             raise RuntimeError("Linux target did not produce a .tar.gz archive")
@@ -136,6 +180,114 @@ def validate_archive(archive: Path, archive_type: str, bundle_name: str) -> None
                 raise RuntimeError("tar archive contains a forbidden non-file entry")
     else:
         raise RuntimeError(f"unsupported archive contract: {archive_type}")
+
+
+def validate_windows_payload(manifest: dict, read_bytes) -> None:
+    """Check actual leaf bytes; upstream resource exceptions are exact and owned."""
+    seen = set()
+    lock = analysis_tools.load_lock()
+    pinned_resources = {
+        f["runtime_path"]
+        for f in lock["programs"]["clangd"]["selected_files"]
+        if f["kind"] == "analysis-resource"
+    }
+    for leaf in manifest["files"]:
+        if (
+            set(leaf) != {"path", "sha256", "size", "kind", "executable"}
+            or type(leaf["size"]) is not int
+            or leaf["size"] < 0
+            or type(leaf["executable"]) is not bool
+            or not re.fullmatch("[0-9a-f]{64}", leaf["sha256"])
+        ):
+            raise RuntimeError("Invalid Windows payload inventory entry")
+        name = analysis_tools.safe_relative(leaf["path"])
+        if name.casefold() in seen or name in {
+            "release-manifest.json",
+            "release-manifest.sig",
+        }:
+            raise RuntimeError(f"Duplicate/circular inventory entry: {name}")
+        seen.add(name.casefold())
+        data = read_bytes(name)
+        if len(data) != leaf["size"] or analysis_tools.sha256(data) != leaf["sha256"]:
+            raise RuntimeError(f"Payload inventory byte mismatch: {name}")
+        path = PurePosixPath(name)
+        forbidden = (
+            path.suffix.lower()
+            in FORBIDDEN_SUFFIXES
+            | {
+                ".cpp",
+                ".cc",
+                ".cxx",
+                ".hpp",
+                ".hxx",
+                ".hh",
+                ".pdb",
+                ".obj",
+                ".o",
+                ".lib",
+                ".a",
+                ".log",
+            }
+            or any(
+                part.lower()
+                in {".firm", ".cache", "__pycache__", "addons", "reports", "cmakefiles"}
+                for part in path.parts
+            )
+            or path.name.lower()
+            in {
+                "cargo.toml",
+                "pyproject.toml",
+                "uv.lock",
+                "cmakecache.txt",
+                "compile_commands.json",
+            }
+        )
+        if forbidden and name not in pinned_resources:
+            raise RuntimeError(
+                f"Windows payload leaked source/development file: {name}"
+            )
+    analysis_tools.validate_analysis(
+        manifest["files"], read_bytes, json.loads(read_bytes("sbom.cdx.json")), lock
+    )
+    analysis_tools.validate_windows_native(
+        manifest["files"],
+        read_bytes,
+        json.loads(read_bytes("sbom.cdx.json")),
+        manifest.get("development_unsigned") is True,
+    )
+    if manifest.get("development_unsigned") is True:
+        program = lock["programs"]["clangd"]
+        executable = next(
+            leaf
+            for leaf in program["selected_files"]
+            if leaf["kind"] == "analysis-executable"
+        )
+        analysis_tools.checked_bytes(read_bytes(program["executable"]), executable)
+
+
+def validate_windows_bundle(bundle: Path, manifest: dict) -> None:
+    expected = {f["path"] for f in manifest["files"]} | {"release-manifest.json"}
+    if manifest.get("development_unsigned") is False:
+        expected.add("release-manifest.sig")
+    actual = set()
+    directories = {
+        str(parent)
+        for name in expected
+        for parent in PurePosixPath(name).parents
+        if str(parent) != "."
+    }
+    for path in bundle.rglob("*"):
+        if path.is_symlink() or path.is_junction():
+            raise RuntimeError(f"Bundle contains a link/reparse entry: {path}")
+        if path.is_file():
+            actual.add(path.relative_to(bundle).as_posix())
+        elif path.is_dir() and path.relative_to(bundle).as_posix() not in directories:
+            raise RuntimeError(f"Bundle contains an unknown directory: {path}")
+    if actual != expected:
+        raise RuntimeError(
+            f"Bundle leaves differ from inventory: {sorted(actual ^ expected)}"
+        )
+    validate_windows_payload(manifest, lambda name: (bundle / name).read_bytes())
 
 
 def _needle_encodings(text: str) -> list[bytes]:
@@ -382,6 +534,59 @@ def shipped_executables(bundle: Path, platform: str) -> list[Path]:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "windows-analysis-archive":
+        parser = argparse.ArgumentParser(
+            description="Additional Windows analysis checks after clean_candidate verifies signatures"
+        )
+        parser.add_argument("--archive", type=Path, required=True)
+        parser.add_argument("--receipt", type=Path, required=True)
+        args = parser.parse_args(sys.argv[2:])
+        with zipfile.ZipFile(args.archive) as archive:
+            manifests = [
+                name
+                for name in archive.namelist()
+                if len(PurePosixPath(name).parts) == 2
+                and PurePosixPath(name).name == "release-manifest.json"
+            ]
+            if len(manifests) != 1:
+                raise RuntimeError("Windows ZIP requires one root release manifest")
+            name = PurePosixPath(manifests[0]).parent.as_posix()
+            data = archive.read(manifests[0])
+            manifest = json.loads(data)
+            if (manifest.get("platform"), manifest.get("architecture")) != (
+                "windows",
+                "x86_64",
+            ):
+                raise RuntimeError("Analysis archive gate requires Windows x86_64")
+            lock = json.loads((ROOT / "release/source-lock.json").read_bytes())
+            for key in ("agent_workspace", "firmware_mcp"):
+                if manifest.get("source", {}).get(key) != {
+                    "repository": lock[key]["repository"],
+                    "commit": lock[key]["commit"],
+                }:
+                    raise RuntimeError(
+                        f"Windows analysis archive {key} source pin mismatch"
+                    )
+            validate_archive(args.archive, "zip", name, manifest)
+            result = analysis_tools.validate_pe_closure(
+                manifest["files"], lambda path: archive.read(f"{name}/{path}")
+            )
+        result.update(
+            archive_sha256=sha256(args.archive),
+            manifest_sha256=analysis_tools.sha256(data),
+            source=manifest["source"],
+        )
+        analysis_tools.write_json(args.receipt, result)
+        print(
+            json.dumps(
+                {
+                    "receipt": str(args.receipt),
+                    "archive_sha256": result["archive_sha256"],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
     parser = argparse.ArgumentParser()
     parser.add_argument("--dist", type=Path, required=True)
     parser.add_argument("--expected-target", required=True)
@@ -463,6 +668,8 @@ def main() -> int:
     ):
         raise RuntimeError("manifest does not contain complete toolchain provenance")
 
+    if platform == "windows":
+        validate_windows_bundle(bundle, manifest)
     forbidden = [
         path.relative_to(bundle).as_posix()
         for path in bundle.rglob("*")
@@ -473,7 +680,7 @@ def main() -> int:
             or path.name in {"Cargo.toml", "pyproject.toml", "uv.lock"}
         )
     ]
-    if forbidden:
+    if forbidden and platform != "windows":
         raise RuntimeError(f"bundle leaked source or development files: {forbidden}")
 
     leak_scan = "skipped"
@@ -513,7 +720,21 @@ def main() -> int:
     if len(archives) != 1:
         raise RuntimeError(f"expected one explicit release archive, found {archives}")
     archive = archives[0]
-    validate_archive(archive, args.archive_type, bundle.name)
+    validate_archive(
+        archive,
+        args.archive_type,
+        bundle.name,
+        manifest if platform == "windows" else None,
+    )
+    pe_receipt = None
+    if platform == "windows":
+        pe_receipt = ROOT / "release/build/analysis-evidence/verified-pe-closure.json"
+        analysis_tools.write_json(
+            pe_receipt,
+            analysis_tools.validate_pe_closure(
+                manifest["files"], lambda name: (bundle / name).read_bytes()
+            ),
+        )
     checksum = (args.dist / f"{bundle.name}.sha256").read_text(encoding="utf-8").strip()
     if checksum != f"{sha256(archive)}  {archive.name}":
         raise RuntimeError("archive checksum receipt does not match the exact artifact")
@@ -553,6 +774,7 @@ def main() -> int:
                 "leak_scan": leak_scan,
                 "strip_check": "clean",
                 "target": args.expected_target,
+                **({"pe_closure_receipt": str(pe_receipt)} if pe_receipt else {}),
             },
             sort_keys=True,
         )
