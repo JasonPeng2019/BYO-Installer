@@ -1,4 +1,6 @@
 mod cli;
+#[cfg(windows)]
+mod code_analysis;
 mod error;
 mod install;
 mod lease;

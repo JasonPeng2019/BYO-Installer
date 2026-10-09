@@ -95,6 +95,8 @@ fn portable_relative_path(path: &Path) -> Result<String> {
 }
 
 fn set_runtime_permissions(runtime: &Path, manifest: &ReleaseManifest) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = (runtime, manifest);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

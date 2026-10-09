@@ -437,10 +437,15 @@ fn extract_zip(payload: &[u8], destination: &Path) -> Result<()> {
         let mut entry = archive
             .by_index(index)
             .context("update ZIP entry is invalid or encrypted")?;
+        // Validate the original ZIP name before Windows path reconstruction
+        // changes its separators or removes a drive prefix.
+        #[cfg(windows)]
+        safe_archive_path(Path::new(entry.name()))?;
         let path = entry
             .enclosed_name()
             .context("update ZIP entry contains an unsafe path")?
             .to_path_buf();
+        #[cfg(not(windows))]
         safe_archive_path(&path)?;
         let normalized = path.to_string_lossy().to_ascii_lowercase();
         if !normalized_paths.insert(normalized) {
@@ -812,6 +817,33 @@ mod tests {
                 .join(format!("byo-link-zip-test-{:032x}", rand::random::<u128>()));
             assert!(extract_archive(&payload, &root, ArchiveType::Zip).is_err());
             let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
+    #[test]
+    fn rejects_raw_backslashes_in_zip_entry_names() {
+        for name in [r"bundle\byo", r"..\escape", r"C:\escape"] {
+            let mut payload = Vec::new();
+            {
+                let mut writer = zip::ZipWriter::new(Cursor::new(&mut payload));
+                writer
+                    .start_file(name, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(b"payload").unwrap();
+                writer.finish().unwrap();
+            }
+            let mut archive = zip::ZipArchive::new(Cursor::new(&payload)).unwrap();
+            assert_eq!(archive.by_index(0).unwrap().name_raw(), name.as_bytes());
+            let root = std::env::temp_dir().join(format!(
+                "byo-backslash-zip-test-{:032x}",
+                rand::random::<u128>()
+            ));
+            assert!(
+                extract_archive(&payload, &root, ArchiveType::Zip).is_err(),
+                "raw ZIP name must be rejected: {name}"
+            );
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+            std::fs::remove_dir_all(root).unwrap();
         }
     }
 
