@@ -746,13 +746,34 @@ def input_gate(args, evidence: Evidence, lab: Path) -> dict:
         verify_file(path, item)
         verify_file(below(args.bundle, item["runtime_path"]), item, product=True)
         protected[str(path)] = file_record(path)
+    # Ship clangd, its license and resource headers. Upstream compiler-rt
+    # libraries and sanitizer ignorelists are link inputs for compiled programs,
+    # not clangd runtime dependencies (clangd.exe imports only system DLLs).
+    clangd_payload = {
+        relative
+        for relative in clang["files"]
+        if relative in ("bin/clangd.exe", "LICENSE.TXT")
+        or relative.startswith("lib/clang/23/include/")
+    }
     for relative, item in clang["files"].items():
         path = below(args.clangd_root, relative)
         verify_file(path, item)
-        verify_file(
-            below(args.bundle, f"analysis/clangd/{relative}"), item, product=True
-        )
+        if relative in clangd_payload:
+            verify_file(
+                below(args.bundle, f"analysis/clangd/{relative}"), item, product=True
+            )
         protected[str(path)] = file_record(path)
+    clangd_bundle = args.bundle / "analysis/clangd"
+    shipped_clangd = {
+        path.relative_to(clangd_bundle).as_posix()
+        for path in clangd_bundle.rglob("*")
+        if not path.is_dir()
+    }
+    if shipped_clangd != clangd_payload:
+        raise Red(
+            "clangd payload differs from upstream executable, license and headers: "
+            f"{sorted(shipped_clangd ^ clangd_payload)[:5]}"
+        )
     arm_inventory = (
         ROOT / "launcher/tests/fixtures/cppcheck-acceptance/arm-originals.json"
     )
