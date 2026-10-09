@@ -8,6 +8,8 @@ Run directly (stdlib only, no pytest):
 
 from __future__ import annotations
 
+from contextlib import chdir, redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import SkipTest
 from unittest.mock import patch
@@ -15,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import json
 
@@ -23,6 +26,120 @@ from test_analysis_tools import fixture, pe
 import analysis_tools
 
 SEP = "\x1f"
+
+
+def check_windows_output_destination(output_kind: str) -> None:
+    if os.name != "nt":
+        raise SkipTest("native Windows builder output paths")
+    with tempfile.TemporaryDirectory(prefix="byo-output-") as temporary:
+        root = Path(temporary).resolve()
+        checkout = root / "installer"
+        checkout.mkdir()
+        caller = root / "caller with spaces \u00e9"
+        caller.mkdir()
+        build = root / "build"
+        dist = build / "nuitka/sidecar.dist"
+        dist.mkdir(parents=True)
+        (dist / "byo-mcp-sidecar.exe").write_bytes(b"sidecar fixture")
+        (build / "workspace.pack").write_bytes(b"workspace fixture")
+        (build / "nuitka-compilation-report.xml").write_text("<report/>", "utf-8")
+        cargo = root / "cargo"
+        (cargo / "release").mkdir(parents=True)
+        (cargo / "release/byo.exe").write_bytes(pe())
+        inputs = root / "inputs"
+        inputs.mkdir()
+        output_args = {
+            "relative": ["--output", "release/dist"],
+            "absolute": ["--output", str(root / "absolute output \u00e9")],
+            "default": [],
+        }[output_kind]
+        expected_output = {
+            "relative": caller / "release/dist",
+            "absolute": root / "absolute output \u00e9",
+            "default": checkout / "release/dist",
+        }[output_kind]
+        expected_bundle = expected_output / "byo-0.1.8-windows-x86_64"
+        self_tests = []
+
+        def run_fixture(argv, **kwargs):
+            if "self-test" not in argv:
+                return
+            self_tests.append(argv)
+            # Exercise the sidecar's absolute-root contract at the run seam;
+            # compilers, analyzers and the real compiled sidecar stay untouched.
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import argparse, pathlib; p = argparse.ArgumentParser(); "
+                    "p.add_argument('command'); p.add_argument('--runtime-root'); "
+                    "p.add_argument('--launcher-version'); a = p.parse_args(); "
+                    "p.error('runtime root must be an absolute path') "
+                    "if not pathlib.Path(a.runtime_root).is_absolute() else None",
+                    *argv[1:],
+                ],
+                cwd=checkout,
+                check=True,
+                timeout=10,
+            )
+            runtime_root = Path(argv[argv.index("--runtime-root") + 1])
+            assert runtime_root == expected_bundle, argv
+            assert Path(argv[0]).is_absolute(), argv
+            assert Path(argv[0]).samefile(runtime_root / "sidecar/byo-mcp-sidecar.exe")
+            assert kwargs["env"]["BYO_SIDECAR_COMPILED"] == "1"
+
+        def write_fixture_sbom(bundle, *_args):
+            (bundle / "sbom.cdx.json").write_text("{}", "utf-8")
+
+        with (
+            chdir(caller),
+            redirect_stdout(StringIO()),
+            patch.object(br, "ROOT", checkout),
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "build_release.py",
+                    "--build-dir",
+                    str(build),
+                    "--analysis-input-dir",
+                    str(inputs),
+                    "--reuse-sidecar",
+                    *output_args,
+                ],
+            ),
+            patch.dict(os.environ, {"CARGO_TARGET_DIR": str(cargo)}),
+            patch.object(br, "release_version", return_value="0.1.8"),
+            patch.object(br, "source_provenance", return_value={}),
+            patch.object(br, "validate_windows_build_python", return_value={}),
+            patch.object(br, "export_clean_workspace"),
+            patch.object(br, "run", side_effect=run_fixture),
+            patch.object(br, "collect_private_symbols", return_value=root / "symbols"),
+            patch.object(br, "write_sbom", side_effect=write_fixture_sbom),
+            patch.object(br, "toolchain_provenance", return_value={}),
+            patch.object(analysis_tools, "stage_windows", return_value=None),
+            patch.object(analysis_tools, "stage_windows_native"),
+        ):
+            assert br.main() == 0
+        assert len(self_tests) == 1, self_tests
+        assert (expected_bundle / "release-manifest.json").is_file()
+        archive = expected_output / f"{expected_bundle.name}.zip"
+        assert archive.is_file()
+        assert (expected_output / f"{expected_bundle.name}.sha256").read_text() == (
+            f"{br.digest(archive)}  {archive.name}\n"
+        )
+
+
+def test_windows_relative_output_uses_absolute_runtime_root() -> None:
+    check_windows_output_destination("relative")
+
+
+def test_windows_absolute_output_uses_absolute_runtime_root() -> None:
+    check_windows_output_destination("absolute")
+
+
+def test_windows_default_output_uses_absolute_runtime_root() -> None:
+    check_windows_output_destination("default")
 
 
 def test_remap_adds_cargo_and_checkout_placeholders() -> None:
