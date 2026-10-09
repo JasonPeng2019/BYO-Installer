@@ -309,8 +309,11 @@ def stage_windows(
         for leaf in lock["programs"]["cppcheck"]["selected_files"]:
             target = bundle / leaf["runtime_path"]
             target.parent.mkdir(parents=True, exist_ok=True)
+            upstream = leaf["upstream_path"]
+            if not upstream.startswith(prefix):
+                raise RuntimeError("Selected Cppcheck data escaped its pinned archive")
             target.write_bytes(
-                checked_bytes((source_dir / leaf["upstream_path"]).read_bytes(), leaf)
+                checked_bytes((source_dir / upstream[len(prefix) :]).read_bytes(), leaf)
             )
     with zipfile.ZipFile(archives["clangd"]) as archive:
         names = archive.namelist()
