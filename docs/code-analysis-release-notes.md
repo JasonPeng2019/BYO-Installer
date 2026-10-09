@@ -1,9 +1,10 @@
 # Windows code analysis: pending release
 
 These notes describe the accepted configuration and the Windows x86_64 packaging
-work in progress. The pinned inputs have been verified; a release archive has not
-yet been built or accepted. Required installed Windows tests, PE import closure,
-quality checks, independent testing and read-only review remain incomplete.
+work in progress. A locally built unsigned archive is a packaging candidate;
+acceptance requires checks against its exact final bytes and integrated source.
+Required installed Windows tests, clean-host validation, independent testing
+and read-only review remain incomplete.
 Other platforms are unverified for this change. Existing published releases are
 unchanged.
 
@@ -121,10 +122,12 @@ The portable input selection and proposed build argv are in
 built from `a436ca35ed1887bee789765122b65ed2d7a7e045`; its source archive SHA-256 is
 `68ed9efb7aad635b7f4c121662689b2377d1d745dc9e76227566516a9617f343`, observed from
 the official codeload archive, without an independently published checksum.
-The MSVC patch preserves the supplied hunk content with CRLF normalized to LF
-so it applies to the pinned LF upstream source. The lock records both hashes
-and applies it with `git -c core.autocrlf=false` to preserve the accepted patched
-source bytes. The UTF-8 manifest is preserved verbatim. The declared
+The MSVC patch normalizes CRLF to LF and trims blank context lines from the
+supplied hunk so its checked-in bytes pass whitespace checks. Applying it to the
+pinned upstream source produces the same accepted `compileroptions.cmake`
+SHA-256. The lock records the verified patch hash and applies it with
+`git -c core.autocrlf=false`; both patch assets use Git `-text` attributes.
+The UTF-8 manifest is preserved verbatim. The declared
 recipe uses Visual Studio 17 2022/x64 Release, static `MultiThreaded`, empty
 `FILESDIR`, no core/shared DLL, GUI, tests, Boost or matchcompiler, and an embedded
 UTF-8 active-code-page manifest. Actual compiler, linker, SDK and CMake versions
@@ -137,6 +140,14 @@ MSVC `/experimental:deterministic` plus `/pathmap` to replace that root with
 `C:/cppcheck-src`. An actual MSVC object check verified the mapping; a full
 Cppcheck rebuild and final-byte/archive leak check remain required. These build
 options do not change the measured legacy translation-unit path-length limit.
+
+The first rebuilt archive passed the compiled 0.1.8 sidecar self-test, but the
+final leak gate still found the temporary build/home path in Cppcheck's CodeView
+PDB record. The linker recipe also uses
+[`/PDBALTPATH:cppcheck.pdb`](https://learn.microsoft.com/en-us/cpp/build/reference/pdbaltpath-use-alternate-pdb-path)
+to embed a stable filename while preserving the actual private PDB location.
+That failed archive and its gate exits remain evidence; a corrected archive must
+repeat the same leak checks without allowances.
 
 The clangd 23.1.0 Windows archive SHA-256 is
 `23412a240756a162e7b98a282f36aa2a23a88db5ce16a0cbc4fef7253768c810`, matching the
@@ -184,9 +195,13 @@ The Windows builder checks both imported source identity/version and installed
 metadata version from the build interpreter, so pointing `PYTHONPATH` at the
 accepted source while retaining older installed metadata is insufficient. Use
 an isolated, preprovisioned matching environment without modifying the accepted
-checkouts or another development environment. The observed supplied environment
+checkouts or another development environment. The prior supplied environment
 had 0.1.7 metadata and failed the native sidecar's retained self-test against
-0.1.8 source; that standalone output is not an accepted product sidecar.
+0.1.8 source; that standalone output is not an accepted product sidecar. The
+continuation uses an isolated CPython 3.12.13 Windows x64 environment provisioned
+offline from the accepted server lock's build group, with Nuitka 2.8.9 and
+matching 0.1.8 distribution metadata. The builder still checks that identity and
+runs the compiled sidecar self-test; provisioning alone does not establish a pass.
 
 ```powershell
 $env:CARGO_NET_OFFLINE = 'true'

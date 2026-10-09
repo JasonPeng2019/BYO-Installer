@@ -2745,7 +2745,7 @@
           "-DDISABLE_DMAKE=ON",
           "-DFILESDIR:STRING=",
           "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
-          "-DCMAKE_EXE_LINKER_FLAGS=/MANIFEST:EMBED /MANIFESTINPUT:{utf8_manifest}",
+          "-DCMAKE_EXE_LINKER_FLAGS=/MANIFEST:EMBED /MANIFESTINPUT:{utf8_manifest} /PDBALTPATH:cppcheck.pdb",
           "-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /W3 /GR /EHsc /experimental:deterministic /pathmap:{source_dir}=C:/cppcheck-src"
         ],
         "output": "bin/Release/cppcheck.exe",
@@ -2757,11 +2757,11 @@
           "apply",
           "{patch}"
         ],
-        "patch_sha256": "a8545a5a5b676ddb5f81cc606bea0a92172aaad3885b60a4615b5344d58a0662",
-        "patch_transformation": "Only CRLF to LF normalization of the supplied patch; hunk content unchanged.",
+        "patch_sha256": "5039f4e000f7aa762108e24ecce1be666866efb605a59e09bd295cd6667fc129",
+        "patch_transformation": "CRLF normalized to LF; context trimmed to the seven nonblank lines around the two removals. Applied compileroptions.cmake bytes remain identical to the accepted recipe.",
         "patched_compileroptions_sha256": "b5850d92d7ab7967d48fc1452f80023f185efc587bca608c2778c6d713927409",
         "required_toolchain": "Visual Studio 17 2022 x64, MSVC C/C++ compiler, linker, Windows SDK, CMake; record actual versions at build time",
-        "source_path_remap": "MSVC /experimental:deterministic and /pathmap remove private source roots from __FILE__; this is build-byte privacy, not long source-path support.",
+        "source_path_remap": "MSVC /experimental:deterministic and /pathmap remove private source roots from __FILE__; /PDBALTPATH:cppcheck.pdb records only the stable PDB filename in CodeView. This is build-byte privacy, not long source-path support.",
         "supplied_patch_sha256": "374be31817729a1c60bb100975d9342f7041d4bdbbaf64957cfc3bff5f1064d5",
         "upstream_compileroptions_sha256": "22430081275ca8b447c5c9aaec6c7c5b2a6038ccabb63e681c9aaccf72adbbf0",
         "utf8_manifest": "release/patches/cppcheck-utf8.manifest",
