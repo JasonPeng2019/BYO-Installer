@@ -321,6 +321,12 @@ pub(super) fn run_owned(
             format!("Cannot confirm owned {phase} cleanup: {}", error.message),
         ));
     }
+    if phase_limit.is_some_and(|limit| phase_start.elapsed() > limit) {
+        return Err(Problem::execution(
+            "timeout",
+            format!("Cppcheck {phase} deadline expired during output retention or cleanup."),
+        ));
+    }
     budget.remaining()?;
     execution
 }
@@ -328,6 +334,43 @@ pub(super) fn run_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn version_phase_cap_is_inside_the_existing_request_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-ri-probe-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        fs::create_dir(&root).unwrap();
+        let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let argv = vec![
+            shell.display().to_string(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            "Start-Sleep -Seconds 60".into(),
+        ];
+        let mut budget = Budget::new();
+        budget.configure(4.0).unwrap();
+        let mut events = Vec::new();
+        assert_eq!(
+            run_owned(
+                &argv,
+                &root,
+                &budget,
+                &root,
+                "version",
+                &mut events,
+                Some(Duration::from_millis(250))
+            )
+            .unwrap_err()
+            .code,
+            "analysis/timeout"
+        );
+        assert_eq!(events.last().unwrap()["cleanup"], "confirmed");
+        assert!(budget.started.elapsed() < Duration::from_secs(1));
+        assert!(budget.remaining().unwrap() > Duration::from_secs(3));
+        write_json(&root.join("owned-processes.json"), &events).unwrap();
+    }
     #[test]
     fn deadline_terminates_owned_child_and_descendant_by_creation_identity() {
         let root = std::env::temp_dir().join(format!(

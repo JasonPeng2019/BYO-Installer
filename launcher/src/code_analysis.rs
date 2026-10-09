@@ -426,6 +426,7 @@ fn probe(
     directory: &Path,
     events: &mut Vec<Value>,
 ) -> Result<String> {
+    let probe_started = Instant::now();
     let argv = vec![program.executable.display().to_string(), "--version".into()];
     let code = process::run_owned(
         &argv,
@@ -446,6 +447,12 @@ fn probe(
                 .iter()
                 .all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()))
     });
+    if probe_started.elapsed() > Duration::from_secs(5) {
+        return Err(Problem::execution(
+            "timeout",
+            "Cppcheck version probe exceeded its five-second budget.",
+        ));
+    }
     if code != 0
         || version.is_none()
         || !read(&directory.join("version.stderr.log"), budget)?.is_empty()
