@@ -1,0 +1,74 @@
+{
+  "schema": "cppcheck-acceptance-fixtures/v1",
+  "base_commit": "f1f19752757debfd13b9aabcc78f6352a9f93c0e",
+  "source": {
+    "path": "launcher/tests/cppcheck_acceptance.rs",
+    "sha256": "0b4e7d794ca5deba05592def9891598003f46c7a4edb3091296dc88990e8394f"
+  },
+  "files": {
+    ".gitattributes": {
+      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da",
+      "size": 8
+    },
+    "arm-originals.json": {
+      "sha256": "ab3a5ea27dd222b753def82b36066c1e803c8eec76d0b2947f2d61e893ed6291",
+      "size": 2228
+    },
+    "fake_tool.rs": {
+      "sha256": "1b4d437272cf16ebce8eb4e5bcc56843cb56404309dade20dfb3e12b0141dc71",
+      "size": 13319
+    },
+    "README.md": {
+      "sha256": "438572512be8eec297f325898986767015619afc0218268eca79128f17cc910c",
+      "size": 6691
+    },
+    "real/clean.c": {
+      "sha256": "271872141a84b3ea969b7a8c3ddd3070624eff328a2a9ca3b099015b5a25a7bd",
+      "size": 58
+    },
+    "real/config/ilp32.xml": {
+      "sha256": "8a3909a1545440cf2f2a5b2e6b5865b224c5ce4fad296b8d75d326f8cedfb7b2",
+      "size": 317
+    },
+    "real/config/int16.xml": {
+      "sha256": "b0de15f67b4e0a4edcd30d080f3f11e7c6771b56aa51659902052bf23b3a321a",
+      "size": 317
+    },
+    "real/gated_null.c": {
+      "sha256": "1118730fa3f715d57e1f9617c85f3b5158862e93cbd9d9fd711196528a086b79",
+      "size": 131
+    },
+    "real/inc/entry_local.h": {
+      "sha256": "d82389bf1f3de728d82f3ab8baa1729328a8814df9d240a9a43c8c3ec61400f9",
+      "size": 24
+    },
+    "real/null_deref.c": {
+      "sha256": "56405d1a30d2d02ac6db74313ccd606a420a860c0332d35f381ae88af483cfac",
+      "size": 63
+    },
+    "real/platform_shift.c": {
+      "sha256": "269774f8efbe757a5b3829742045f1a234945151184549e4b1037b890e9ba34f",
+      "size": 42
+    },
+    "real/style_unread.c": {
+      "sha256": "64ec5a00f046e8d886890befb3c9f5d76a5c88985e2714275c9a264165f70000",
+      "size": 69
+    },
+    "real/syntax_broken.c": {
+      "sha256": "b122633774302e08d73666c939dddd9c5513195e7a4f57c8e2daec463bd8b817",
+      "size": 39
+    },
+    "real/uses_entry_header.c": {
+      "sha256": "df7fa19781d693295e3bf2077aeba94a1b07572571c86206a16a55f72bef289a",
+      "size": 107
+    },
+    "real/uses_generated.c": {
+      "sha256": "6a1bf6cae3dcf5b7ad5947ddc9bcae3f86920f37b112d7f1aa2f4fa2cfa90d14",
+      "size": 89
+    },
+    "real/uses_system.c": {
+      "sha256": "0a1182fbb912d883bab0e4cf72d48c5436e5f02a04efdbae76d842c0cfb2ae99",
+      "size": 70
+    }
+  }
+}
