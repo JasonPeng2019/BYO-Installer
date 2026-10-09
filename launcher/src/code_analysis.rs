@@ -375,7 +375,13 @@ fn glob_matches(pattern: &[u8], value: &[u8]) -> bool {
 fn validate_suppressions(data: &[u8], budget: &Budget) -> Result<()> {
     // Match the pinned native ID grammar. Do not trim leading whitespace or BOM:
     // those invalid rules must be rejected by Cppcheck, never silently repaired.
-    for (index, line) in data.split(|c| *c == b'\r' || *c == b'\n').enumerate() {
+    // CRLF is one physical line ending; remaining CRs are lone line endings.
+    let lines = data.split(|c| *c == b'\n').flat_map(|line| {
+        line.strip_suffix(b"\r")
+            .unwrap_or(line)
+            .split(|c| *c == b'\r')
+    });
+    for (index, line) in lines.enumerate() {
         budget.remaining()?;
         let comment = line
             .iter()
@@ -887,6 +893,67 @@ mod owner_tests {
             "unreadVariable",
         ] {
             assert!(validate_suppressions(rule.as_bytes(), &Budget::new()).is_ok());
+        }
+    }
+
+    #[test]
+    fn suppressions_report_physical_lines_and_structured_coverage_reasons() {
+        for (data, number, rule) in [
+            (
+                b"nullPointer\r\nmissingInclude\r\n".as_slice(),
+                2,
+                "missingInclude",
+            ),
+            (b"nullPointer\nmissingInclude\n", 2, "missingInclude"),
+            (b"nullPointer\rmissingInclude\r", 2, "missingInclude"),
+            (b"nullPointer\r\nmissingInclude", 2, "missingInclude"),
+            (b"\r\n\r\nmissingInclude", 3, "missingInclude"),
+            (b"nullPointer\r\r\nmissingInclude", 3, "missingInclude"),
+            (b"nullPointer\n\rmissingInclude", 3, "missingInclude"),
+            (
+                b"# comment\r\n// comment\r\nunreadVariable\rmissingInclude\n",
+                4,
+                "missingInclude",
+            ),
+            (
+                b"\xef\xbb\xbfmissingInclude\r\nmissingInclude",
+                2,
+                "missingInclude",
+            ),
+            (
+                b"# comment\r\n\r\nmissingInclude:vendor.h:2 # reason\r\n",
+                3,
+                "missingInclude:vendor.h:2",
+            ),
+            (
+                b"nullPointer\r\nmissingInclude // reason\r\n",
+                2,
+                "missingInclude",
+            ),
+        ] {
+            let error = validate_suppressions(data, &Budget::new()).unwrap_err();
+            let expected = format!("cppcheck.suppressions_file line {number} can hide coverage diagnostics [\"missingInclude\"]: {rule}");
+            assert_eq!(error.code, "analysis/config-invalid");
+            assert_eq!(error.status, "blocked");
+            assert_eq!(error.message, expected, "{data:?}");
+            assert_eq!(error.details, json!({"coverage_reasons": [expected]}));
+        }
+    }
+
+    #[test]
+    fn suppressions_preserve_comments_bom_and_invalid_prefixes() {
+        for data in [
+            b"# missingInclude\r\n// missingInclude\rnullPointer:src/a.c:4\n".as_slice(),
+            b"\xef\xbb\xbfmissingInclude\r\nnullPointer",
+            b" missingInclude\r\n\tmissingInclude\rnullPointer",
+            b"nullPointer # missingInclude\r\nunreadVariable // missingInclude\r\n",
+            b"\r\n\n\r",
+            b"",
+        ] {
+            assert!(
+                validate_suppressions(data, &Budget::new()).is_ok(),
+                "{data:?}"
+            );
         }
     }
 
