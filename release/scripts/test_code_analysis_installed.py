@@ -193,6 +193,15 @@ def is_reparse(path: Path) -> bool:
     return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
 
 
+def reported_path(value: str) -> Path:
+    """Resolve a product-reported Windows path, including the extended form."""
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return Path(value).resolve()
+
+
 def below(root: Path, relative: str) -> Path:
     p = PurePosixPath(relative)
     if (
@@ -220,26 +229,10 @@ def verify_file(path: Path, record: dict, *, product: bool = False) -> None:
 class WindowsProcesses:
     """Independent native process observations; no image-name termination."""
 
-    class Entry(ctypes.Structure):
-        _fields_ = [
-            ("size", wintypes.DWORD),
-            ("usage", wintypes.DWORD),
-            ("pid", wintypes.DWORD),
-            ("heap", ctypes.c_size_t),
-            ("module", wintypes.DWORD),
-            ("threads", wintypes.DWORD),
-            ("parent", wintypes.DWORD),
-            ("priority", wintypes.LONG),
-            ("flags", wintypes.DWORD),
-            ("name", wintypes.WCHAR * 260),
-        ]
-
     def __init__(self):
         self.k = ctypes.WinDLL("kernel32", use_last_error=True)
-        for name in ("OpenProcess", "CreateToolhelp32Snapshot"):
-            getattr(self.k, name).restype = wintypes.HANDLE
+        self.k.OpenProcess.restype = wintypes.HANDLE
         self.k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        self.k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
         self.k.CloseHandle.argtypes = [wintypes.HANDLE]
         self.k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
             ctypes.POINTER(wintypes.FILETIME)
@@ -252,8 +245,22 @@ class WindowsProcesses:
         ]
         self.k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         self.k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        self.k.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(self.Entry)]
-        self.k.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(self.Entry)]
+        self.k.GetSystemTimePreciseAsFileTime.argtypes = [
+            ctypes.POINTER(wintypes.FILETIME)
+        ]
+        self.nt = ctypes.WinDLL("ntdll")
+        self.nt.NtQuerySystemInformation.argtypes = [
+            wintypes.ULONG,
+            ctypes.c_void_p,
+            wintypes.ULONG,
+            ctypes.POINTER(wintypes.ULONG),
+        ]
+        self.buffer = ctypes.create_string_buffer(1 << 21)
+
+    def now(self) -> int:
+        current = wintypes.FILETIME()
+        self.k.GetSystemTimePreciseAsFileTime(ctypes.byref(current))
+        return (current.dwHighDateTime << 32) | current.dwLowDateTime
 
     def identity(self, pid: int) -> dict | None:
         handle = self.k.OpenProcess(0x1000 | 0x100000, False, pid)
@@ -280,20 +287,32 @@ class WindowsProcesses:
             self.k.CloseHandle(handle)
 
     def snapshot(self) -> dict:
-        handle = self.k.CreateToolhelp32Snapshot(2, 0)
-        if handle == ctypes.c_void_p(-1).value:
-            raise Setup("Windows Toolhelp process snapshot failed")
+        # One atomic SystemProcessInformation copy. A Python Toolhelp walk over
+        # hundreds of host processes outlasts a short analyzer. x64 entry
+        # offsets: next entry 0x00, PID 0x50, parent PID 0x58.
+        size = wintypes.ULONG()
+        while True:
+            status = self.nt.NtQuerySystemInformation(
+                5, self.buffer, len(self.buffer), ctypes.byref(size)
+            )
+            if status & 0xFFFFFFFF != 0xC0000004:
+                break
+            self.buffer = ctypes.create_string_buffer(
+                max(size.value, 2 * len(self.buffer))
+            )
+        if status:
+            raise Setup(f"Windows process snapshot failed: {status & 0xFFFFFFFF:#x}")
+        view = memoryview(self.buffer).cast("B")
         entries = {}
-        try:
-            entry = self.Entry()
-            entry.size = ctypes.sizeof(entry)
-            ok = self.k.Process32FirstW(handle, ctypes.byref(entry))
-            while ok:
-                entries[int(entry.pid)] = int(entry.parent)
-                ok = self.k.Process32NextW(handle, ctypes.byref(entry))
-        finally:
-            self.k.CloseHandle(handle)
-        return entries
+        offset = 0
+        while True:
+            pid = int.from_bytes(view[offset + 0x50 : offset + 0x58], "little")
+            parent = int.from_bytes(view[offset + 0x58 : offset + 0x60], "little")
+            entries[pid] = parent
+            step = int.from_bytes(view[offset : offset + 4], "little")
+            if not step:
+                return entries
+            offset += step
 
     def alive(self, identity: dict) -> bool:
         current = self.identity(identity["pid"])
@@ -336,6 +355,7 @@ class Owned:
         self.thread.start()
 
     def sample_once(self) -> None:
+        started = self.native.now()
         parents = self.native.snapshot()
         # Breadth-first capture permits launcher -> sidecar -> clangd in one sample.
         for _ in range(8):
@@ -350,11 +370,13 @@ class Owned:
                     and child["creation_filetime"] >= live[parent]["creation_filetime"]
                 ):
                     # Snapshot and identity acquisition are separate system
-                    # calls. Recheck the relationship and parent's creation so
-                    # PID reuse between them cannot establish false ownership.
-                    if self.native.snapshot().get(
-                        pid
-                    ) != parent or not self.native.alive(live[parent]):
+                    # calls. A PID reused after the snapshot belongs to a
+                    # process created after it started, so reject those and
+                    # recheck the parent without a second costly snapshot:
+                    # one cycle must fit inside a ~0.1 s analyzer lifetime.
+                    if child["creation_filetime"] >= started or not self.native.alive(
+                        live[parent]
+                    ):
                         continue
                     key = (pid, child["creation_filetime"])
                     if key not in self.records:
@@ -369,7 +391,7 @@ class Owned:
 
     def sample(self) -> None:
         try:
-            while not self.stop.wait(0.05):
+            while not self.stop.wait(0.005):
                 self.sample_once()
         except Exception as exc:
             self.error = repr(exc)
@@ -955,6 +977,8 @@ def copy_arm(args, lab: Path, name: str, evidence: Evidence) -> Path:
     (project / ".clangd").write_text(
         "# User-owned configuration, preserve exactly.\n", encoding="utf-8"
     )
+    # Firmware mode requires a project-owned .clang-format; init never creates it.
+    (project / ".clang-format").write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
     (project / "customer.txt").write_text("unrelated user file µ\n", encoding="utf-8")
     write_json(evidence.root / f"{name}-relocated-inputs.json", tree_record(project))
     return project
@@ -1053,7 +1077,7 @@ def report_once(
             f"{name}: real analyzer exit differs from {process_exit}",
         )
         require(
-            Path(result["executable"]).resolve()
+            reported_path(result["executable"])
             == (runtime / "analysis/cppcheck/cppcheck.exe").resolve(),
             f"{name}: runner did not execute installed Cppcheck",
         )
@@ -1068,7 +1092,7 @@ def report_once(
             f"{name}: selected database digest not recorded",
         )
         require(
-            Path(result["platform_file"]).resolve()
+            reported_path(result["platform_file"])
             == (project / "config/arm32.xml").resolve(),
             f"{name}: explicit ARM ABI platform not used",
         )
@@ -1130,7 +1154,7 @@ def report_once(
                     for r in observed
                     if r["pid"] == event["pid"]
                     and Path(r["image"]).resolve()
-                    == Path(result["executable"]).resolve()
+                    == reported_path(result["executable"])
                 ]
                 identities.extend(matches)
         require(
@@ -1450,7 +1474,7 @@ class Mcp:
                 value.get("backend") == "clangd", f"{name} did not use semantic backend"
             )
             require(
-                Path(value["project_root"]).resolve() == self.project.resolve(),
+                reported_path(value["project_root"]) == self.project.resolve(),
                 "MCP analysis used runtime cwd as project",
             )
             require(
@@ -1600,7 +1624,7 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
         "installed MCP clangd fell back to PATH",
     )
     require(
-        Path(data["executable"]).resolve()
+        reported_path(data["executable"])
         == (runtime / "analysis/clangd/bin/clangd.exe").resolve(),
         "installed MCP resolved another clangd executable",
     )
@@ -1674,7 +1698,7 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
         main_locations = [
             location
             for location in refs["data"]["locations"]
-            if Path(location["path"]).resolve() == (server.project / main).resolve()
+            if reported_path(location["path"]) == (server.project / main).resolve()
         ]
         require(
             any(
@@ -1981,7 +2005,7 @@ def doctor_gate(
             f"installed static report does not identify managed data: {field}",
         )
     require(
-        Path(result["runtime_root"]).resolve() == runtime.resolve(),
+        reported_path(result["runtime_root"]) == runtime.resolve(),
         "static report managed root differs",
     )
 
