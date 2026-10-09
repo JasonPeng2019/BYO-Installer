@@ -141,6 +141,14 @@ MSVC `/experimental:deterministic` plus `/pathmap` to replace that root with
 Cppcheck rebuild and final-byte/archive leak check remain required. These build
 options do not change the measured legacy translation-unit path-length limit.
 
+The first rebuilt archive passed the compiled 0.1.8 sidecar self-test, but the
+final leak gate still found the temporary build/home path in Cppcheck's CodeView
+PDB record. The linker recipe also uses
+[`/PDBALTPATH:cppcheck.pdb`](https://learn.microsoft.com/en-us/cpp/build/reference/pdbaltpath-use-alternate-pdb-path)
+to embed a stable filename while preserving the actual private PDB location.
+That failed archive and its gate exits remain evidence; a corrected archive must
+repeat the same leak checks without allowances.
+
 The clangd 23.1.0 Windows archive SHA-256 is
 `23412a240756a162e7b98a282f36aa2a23a88db5ce16a0cbc4fef7253768c810`, matching the
 recorded official asset digest. Selection contains its executable, `LICENSE.TXT`
