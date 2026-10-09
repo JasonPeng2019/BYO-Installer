@@ -54,11 +54,17 @@ struct Check {
     code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     remedy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<serde_json::Value>,
 }
 
 fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     let (_, runtime) = manifest::load_current(paths)?;
     let release = manifest::verify_runtime(&runtime)?;
+    #[cfg(windows)]
+    let _lease = lease::RuntimeLeaseGuard::acquire(paths, &release.version, "global-doctor")?;
+    #[cfg(windows)]
+    let analysis = managed_analysis_status(&runtime, &release)?;
     install::sidecar_self_test(&runtime)?;
     let pack = pack::WorkspacePack::load(&runtime.join("workflow/workspace.pack"))?;
     if pack.version().is_empty() {
@@ -80,18 +86,21 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     let leases = lease::inspect(paths, true)?;
     let live_lease_count = leases.iter().filter(|status| status.live).count();
     let stale_lease_count = leases.len() - live_lease_count;
-    Ok(vec![
+    #[allow(unused_mut)]
+    let mut checks = vec![
         Check {
             id: "runtime.manifest.integrity".to_string(),
             status: "passed".to_string(),
             code: None,
             remedy: None,
+            identity: None,
         },
         Check {
             id: "runtime.sidecar.self-test".to_string(),
             status: "passed".to_string(),
             code: None,
             remedy: None,
+            identity: None,
         },
         Check {
             id: if release.development_unsigned {
@@ -112,6 +121,7 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
             } else {
                 None
             },
+            identity: None,
         },
         Check {
             id: "runtime.leases".to_string(),
@@ -124,8 +134,47 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
             remedy: (stale_lease_count != 0).then(|| {
                 format!("{stale_lease_count} stale lease(s) were removed; {live_lease_count} live")
             }),
+            identity: None,
         },
-    ])
+    ];
+    #[cfg(windows)]
+    if analysis["status"] == "ready" {
+        for name in ["cppcheck", "clangd"] {
+            checks.push(Check {
+                id: format!("runtime.analysis.{name}"),
+                status: "passed".into(),
+                code: None,
+                remedy: None,
+                identity: Some(serde_json::json!({"runtime_root":analysis["runtime_root"],"runtime_manifest_sha256":analysis["runtime_manifest_sha256"],"analysis_mapping_sha256":analysis["analysis_mapping_sha256"],"program":analysis["programs"][name]})),
+            });
+        }
+    } else {
+        checks.push(Check {
+            id: "runtime.analysis".into(),
+            status: "warning".into(),
+            code: Some("ANALYSIS_RUNTIME_UNAVAILABLE".into()),
+            remedy: Some("Install a release with the complete managed analysis payload.".into()),
+            identity: Some(analysis),
+        });
+    }
+    Ok(checks)
+}
+
+#[cfg(windows)]
+fn managed_analysis_status(
+    root: &std::path::Path,
+    release: &manifest::ReleaseManifest,
+) -> Result<serde_json::Value> {
+    if !release
+        .files
+        .iter()
+        .any(|leaf| leaf.path.starts_with("analysis/"))
+    {
+        return Ok(
+            serde_json::json!({"status":"unavailable","reason":"This older runtime has no managed analysis payload."}),
+        );
+    }
+    code_analysis::runtime_status(root, release)
 }
 
 #[derive(Clone, Copy)]
@@ -291,6 +340,7 @@ fn init_health_summary(project: &std::path::Path, paths: &ProductPaths) -> Resul
         status: "passed".to_string(),
         code: None,
         remedy: None,
+        identity: None,
     });
     let warnings = checks
         .iter()
@@ -466,6 +516,13 @@ fn run() -> Result<i32> {
                 manifest::verify_runtime(&runtime),
                 ExitCategory::RuntimeIntegrity,
             )?;
+            #[cfg(windows)]
+            let _lease = lease::RuntimeLeaseGuard::acquire(&paths, &release.version, "status")?;
+            #[cfg(windows)]
+            let analysis = categorize(
+                managed_analysis_status(&runtime, &release),
+                ExitCategory::RuntimeIntegrity,
+            )?;
             let project_status = argument
                 .project
                 .as_deref()
@@ -481,15 +538,18 @@ fn run() -> Result<i32> {
                     Ok::<_, anyhow::Error>(project.display().to_string())
                 })
                 .transpose()?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "runtime_version": release.version,
-                    "runtime_root": runtime,
-                    "project": project_status,
-                    "development_unsigned": release.development_unsigned
-                }))?
-            );
+            #[allow(unused_mut)]
+            let mut status = serde_json::json!({
+                "runtime_version": release.version,
+                "runtime_root": runtime,
+                "project": project_status,
+                "development_unsigned": release.development_unsigned
+            });
+            #[cfg(windows)]
+            {
+                status["analysis"] = analysis;
+            }
+            println!("{}", serde_json::to_string_pretty(&status)?);
         }
         Command::Init(arguments) => {
             let project = categorize(
@@ -553,6 +613,7 @@ fn run() -> Result<i32> {
                         status: "passed".to_string(),
                         code: None,
                         remedy: None,
+                        identity: None,
                     });
                 }
             }

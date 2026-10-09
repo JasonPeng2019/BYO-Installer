@@ -234,8 +234,11 @@ The native build matrix is authoritative for the four advertised targets and
 runs archive verification plus installed hardware-free end-to-end tests. Do not
 publish a development archive as a signed production release.
 
-Windows x86_64 code-analysis packaging is being prepared against the accepted
-source pins and [`release/analysis-tools.lock.json`](release/analysis-tools.lock.json).
+Windows x86_64 code-analysis staging is integrated into the existing release
+builder against the accepted source pins and
+[`release/analysis-tools.lock.json`](release/analysis-tools.lock.json). Supply its
+local archives with `--analysis-input-dir` or `BYO_ANALYSIS_INPUT_DIR`; the builder
+rebuilds static Cppcheck and selects the exact clangd resources without downloads.
 See the [pending analysis release notes](docs/code-analysis-release-notes.md) for
 mandatory target-aware Cppcheck configuration, saved-file semantic query scope,
 recovery steps and the measured Windows source-path limit. Input selection is

@@ -1,0 +1,2 @@
+/release/patches/cppcheck-static-msvc.patch -text
+/release/patches/cppcheck-utf8.manifest -text

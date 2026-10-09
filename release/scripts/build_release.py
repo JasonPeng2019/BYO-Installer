@@ -22,6 +22,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
+import analysis_tools
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -29,7 +31,13 @@ def run(
     argv: list[str], *, cwd: Path = ROOT, env: dict[str, str] | None = None
 ) -> None:
     print("+", " ".join(argv), flush=True)
-    subprocess.run(argv, cwd=cwd, env=env, check=True)
+    subprocess.run(
+        argv,
+        cwd=cwd,
+        env=env,
+        check=True,
+        stdin=subprocess.DEVNULL if platform.system() == "Windows" else None,
+    )
 
 
 def remap_encoded_rustflags(env: dict[str, str]) -> str:
@@ -306,7 +314,13 @@ def purl(kind: str, name: str, version: str) -> str:
     return f"pkg:{kind}/{quote(name, safe='')}@{quote(version, safe='')}"
 
 
-def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
+def write_sbom(
+    bundle: Path,
+    nuitka_report: Path,
+    version: str,
+    payload_files: list[dict[str, object]] | None = None,
+    analysis_provenance: dict | None = None,
+) -> None:
     """Write a deterministic CycloneDX inventory of bundled dependencies."""
 
     report = ET.parse(nuitka_report).getroot()
@@ -376,23 +390,33 @@ def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
         }
     )
 
+    payload_files = (
+        payload_files if payload_files is not None else payload_inventory(bundle)
+    )
     native_suffixes = {".dylib", ".dll", ".pyd", ".so"}
-    for path in sorted(
-        candidate for candidate in bundle.rglob("*") if candidate.is_file()
-    ):
-        if path.suffix.lower() not in native_suffixes:
+    for leaf in payload_files:
+        relative = str(leaf["path"])
+        if Path(relative).suffix.lower() not in native_suffixes or relative.startswith(
+            "analysis/"
+        ):
             continue
-        relative = path.relative_to(bundle).as_posix()
         add(
             {
                 "type": "file",
                 "bom-ref": f"byo-native:{relative}",
                 "name": relative,
-                "hashes": [{"alg": "SHA-256", "content": digest(path)}],
+                "hashes": [{"alg": "SHA-256", "content": leaf["sha256"]}],
                 "properties": [{"name": "byo:bundled-native-file", "value": "true"}],
             }
         )
 
+    analysis_dependencies = []
+    if analysis_provenance is not None:
+        analysis_components, analysis_dependencies = analysis_tools.sbom_components(
+            analysis_tools.load_lock(), payload_files, analysis_provenance
+        )
+        for component in analysis_components:
+            add(component)
     components.sort(key=lambda component: str(component["bom-ref"]))
     nuitka_version = report.attrib.get("nuitka_version", "unknown")
     sbom = {
@@ -418,6 +442,15 @@ def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
         },
         "components": components,
     }
+    if analysis_dependencies:
+        sbom["dependencies"] = analysis_dependencies
+    if platform.system() == "Windows":
+        sbom["metadata"]["tools"]["components"][0]["properties"] = [
+            {
+                "name": "byo:windows:dependency-detector",
+                "value": "Nuitka bundled pefile, force-dependencies-pefile; independent final PE ordinary/delay-import and installed gates required",
+            }
+        ]
     (bundle / "sbom.cdx.json").write_text(
         json.dumps(sbom, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -426,6 +459,103 @@ def write_sbom(bundle: Path, nuitka_report: Path, version: str) -> None:
 
 def command_output(argv: list[str], *, cwd: Path = ROOT) -> str:
     return subprocess.check_output(argv, cwd=cwd, text=True).strip()
+
+
+def payload_inventory(bundle: Path) -> list[dict[str, object]]:
+    """Hash final transformed payloads once, before SBOM; never self-hash metadata."""
+    lock = (
+        analysis_tools.load_lock()
+        if (bundle / "analysis/runtime.json").is_file()
+        else None
+    )
+    files = []
+    for path in sorted(
+        candidate for candidate in bundle.rglob("*") if candidate.is_file()
+    ):
+        relative = path.relative_to(bundle).as_posix()
+        if relative in {
+            "sbom.cdx.json",
+            "release-manifest.json",
+            "release-manifest.sig",
+        }:
+            continue
+        classified = analysis_tools.classification(relative, lock) if lock else None
+        executable = relative in {
+            "byo",
+            "byo.exe",
+            "sidecar/byo-mcp-sidecar",
+            "sidecar/byo-mcp-sidecar.exe",
+        }
+        kind = (
+            "launcher"
+            if relative in {"byo", "byo.exe"}
+            else "workflow"
+            if relative == "workflow/workspace.pack"
+            else "sidecar"
+        )
+        if classified:
+            kind, executable = classified
+        if executable and os.name != "nt":
+            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        files.append(
+            {
+                "path": relative,
+                "sha256": digest(path),
+                "size": path.stat().st_size,
+                "kind": kind,
+                "executable": executable,
+            }
+        )
+    return files
+
+
+def signed_analysis_inputs(
+    bundle: Path, evidence: Path
+) -> tuple[dict[str, bytes], dict]:
+    """Preserve already signed analysis bytes across the existing finalization stage."""
+    lock = analysis_tools.load_lock()
+    provenance = json.loads((evidence / "cppcheck-build.json").read_bytes())
+    if (
+        provenance.get("sources")
+        != {name: p["source"] for name, p in lock["programs"].items()}
+        or provenance.get("recipe") != lock["programs"]["cppcheck"]["recipe"]
+    ):
+        raise RuntimeError(
+            "Prepared analysis source/recipe provenance differs from the lock"
+        )
+    expected = {"analysis/runtime.json"}
+    for program in lock["programs"].values():
+        expected.add(program["executable"])
+        expected.update(program["dependencies"])
+        expected.update(leaf["runtime_path"] for leaf in program["selected_files"])
+    actual = {
+        path.relative_to(bundle).as_posix()
+        for path in (bundle / "analysis").rglob("*")
+        if path.is_file()
+    }
+    if actual != expected:
+        raise RuntimeError("Prepared signed analysis namespace differs from the lock")
+    payload = {}
+    for name in sorted(expected):
+        path = bundle / name
+        if (
+            path.is_symlink()
+            or path.is_junction()
+            or any(
+                parent.is_symlink() or parent.is_junction()
+                for parent in path.parents
+                if parent != bundle and parent.is_relative_to(bundle)
+            )
+        ):
+            raise RuntimeError("Prepared analysis input traverses a reparse entry")
+        payload[name] = path.read_bytes()
+    if json.loads(payload["analysis/runtime.json"]) != analysis_tools.mapping(lock):
+        raise RuntimeError("Prepared signed analysis mapping differs from the lock")
+    for program in lock["programs"].values():
+        for leaf in program["selected_files"]:
+            if leaf["kind"] != "analysis-executable":
+                analysis_tools.checked_bytes(payload[leaf["runtime_path"]], leaf)
+    return payload, provenance
 
 
 def load_source_lock() -> dict[str, object]:
@@ -670,6 +800,23 @@ def main() -> int:
     parser.add_argument("--channel", default="development")
     parser.add_argument("--output", type=Path, default=ROOT / "release" / "dist")
     parser.add_argument(
+        "--build-dir",
+        type=Path,
+        default=ROOT / "release/build",
+        help="Owned build scratch directory; use a short Windows path for MSVC/Nuitka",
+    )
+    parser.add_argument(
+        "--analysis-input-dir",
+        type=Path,
+        default=os.environ.get("BYO_ANALYSIS_INPUT_DIR"),
+        help="Windows: directory with the two pinned local analysis archives (no downloads)",
+    )
+    parser.add_argument(
+        "--analysis-cmake",
+        type=Path,
+        help="Existing Windows CMake executable for the pinned Cppcheck recipe",
+    )
+    parser.add_argument(
         "--production",
         action="store_true",
         help="Build without development escape hatches and require manifest/platform signing",
@@ -707,6 +854,12 @@ def main() -> int:
     )
     args = parser.parse_args()
     args.version = release_version(args.version)
+    if platform.system() == "Windows" and (
+        architecture() != "x86_64" or args.analysis_input_dir is None
+    ):
+        raise RuntimeError(
+            "Windows x86_64 builds require --analysis-input-dir with the pinned local archives"
+        )
     if args.production and args.channel == "development":
         raise RuntimeError("production builds must use a non-development channel")
     if (args.prepare_platform_signing or args.platform_signing_complete) and (
@@ -727,7 +880,7 @@ def main() -> int:
     signing: tuple[Path, str, str] | None = (
         signing_configuration(args) if args.production else None
     )
-    build = ROOT / "release" / "build"
+    build = args.build_dir.resolve()
     pack = build / "workspace.pack"
     report = build / "workspace-classification.json"
     workspace_export = build / "agent-workspace-source"
@@ -760,9 +913,12 @@ def main() -> int:
             cargo_environment
         )
         run(cargo, cwd=ROOT / "launcher", env=cargo_environment)
-    launcher = (
-        ROOT / "launcher/target/release" / ("byo.exe" if os.name == "nt" else "byo")
+    cargo_target = Path(
+        os.environ.get("CARGO_TARGET_DIR", str(ROOT / "launcher/target"))
     )
+    if not cargo_target.is_absolute():
+        cargo_target = ROOT / "launcher" / cargo_target
+    launcher = cargo_target / "release" / ("byo.exe" if os.name == "nt" else "byo")
     if not launcher.is_file():
         raise RuntimeError("native Rust launcher output is missing")
 
@@ -780,7 +936,16 @@ def main() -> int:
                 "-m",
                 "nuitka",
                 "--mode=standalone",
-                "--assume-yes-for-downloads",
+                *(
+                    []
+                    if platform.system() == "Windows"
+                    else ["--assume-yes-for-downloads"]
+                ),
+                *(
+                    ["--msvc=latest", "--experimental=force-dependencies-pefile"]
+                    if platform.system() == "Windows"
+                    else []
+                ),
                 "--disable-cache=ccache",
                 f"--report={nuitka_report}",
                 "--report-diffable",
@@ -806,6 +971,9 @@ def main() -> int:
         )
 
     bundle = args.output / f"byo-{args.version}-{platform_name()}-{architecture()}"
+    signed_analysis = None
+    if args.platform_signing_complete:
+        signed_analysis = signed_analysis_inputs(bundle, build / "analysis-evidence")
     if bundle.exists():
         shutil.rmtree(bundle)
     (bundle / "sidecar").mkdir(parents=True)
@@ -818,6 +986,21 @@ def main() -> int:
         else:
             shutil.copy2(child, destination)
     shutil.copy2(pack, bundle / "workflow/workspace.pack")
+    analysis_provenance = None
+    if platform.system() == "Windows":
+        if signed_analysis is not None:
+            payload, analysis_provenance = signed_analysis
+            for name, data in payload.items():
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+        else:
+            analysis_provenance = analysis_tools.stage_windows(
+                bundle,
+                args.analysis_input_dir.resolve(strict=True),
+                build / "analysis-evidence",
+                args.analysis_cmake,
+            )
 
     if not nuitka_report.is_file():
         raise RuntimeError(
@@ -864,39 +1047,34 @@ def main() -> int:
                 ]
             )
 
-    write_sbom(bundle, nuitka_report, args.version)
+    files = payload_inventory(bundle)
+    write_sbom(bundle, nuitka_report, args.version, files, analysis_provenance)
     toolchains = toolchain_provenance(args.python, nuitka_report)
-
-    files = []
-    for path in sorted(
-        candidate for candidate in bundle.rglob("*") if candidate.is_file()
-    ):
-        relative = path.relative_to(bundle).as_posix()
-        executable = relative in {
-            "byo",
-            "byo.exe",
-            "sidecar/byo-mcp-sidecar",
-            "sidecar/byo-mcp-sidecar.exe",
+    sbom_path = bundle / "sbom.cdx.json"
+    files.append(
+        {
+            "path": "sbom.cdx.json",
+            "sha256": digest(sbom_path),
+            "size": sbom_path.stat().st_size,
+            "kind": "metadata",
+            "executable": False,
         }
-        if executable and os.name != "nt":
-            path.chmod(path.stat().st_mode | stat.S_IXUSR)
-        kind = (
-            "launcher"
-            if relative in {"byo", "byo.exe"}
-            else "workflow"
-            if relative == "workflow/workspace.pack"
-            else "metadata"
-            if relative == "sbom.cdx.json"
-            else "sidecar"
+    )
+    if analysis_provenance is not None:
+        analysis_tools.write_json(
+            build / "analysis-evidence/program-probes.json",
+            analysis_tools.probe_programs(bundle),
         )
-        files.append(
-            {
-                "path": relative,
-                "sha256": digest(path),
-                "size": path.stat().st_size,
-                "kind": kind,
-                "executable": executable,
-            }
+        analysis_tools.validate_analysis(
+            files,
+            lambda name: (bundle / name).read_bytes(),
+            json.loads(sbom_path.read_bytes()),
+        )
+        analysis_tools.write_json(
+            build / "analysis-evidence/pe-closure.json",
+            analysis_tools.validate_pe_closure(
+                files, lambda name: (bundle / name).read_bytes()
+            ),
         )
     manifest = {
         "schema": 1,

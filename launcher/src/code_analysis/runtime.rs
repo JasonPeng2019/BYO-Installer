@@ -12,6 +12,7 @@ pub(crate) struct Program {
     pub(super) executable: PathBuf,
     pub(super) version: String,
     pub(super) fields: Value,
+    mapping: Value,
     snapshots: Vec<Snapshot>,
     directories: Vec<(PathBuf, config::Identity)>,
     root: PathBuf,
@@ -123,6 +124,47 @@ fn namespace(root: &Path, budget: &Budget) -> Result<BTreeSet<String>> {
     Ok(actual)
 }
 impl Program {
+    // Doctor/status expose the validated mapping and sole release inventory.
+    // Keeping this accessor separate leaves selected Cppcheck verification's
+    // resource boundary unchanged and does not rehash the whole runtime.
+    pub(super) fn status(&self, release: &ReleaseManifest) -> Result<Value> {
+        let mut programs = serde_json::Map::new();
+        for name in ["cppcheck", "clangd"] {
+            let program = &self.mapping["programs"][name];
+            let executable = program["executable"].as_str().unwrap();
+            let leaf = release
+                .files
+                .iter()
+                .find(|leaf| leaf.path == executable)
+                .ok_or_else(|| invalid(format!("Missing program inventory: {executable}")))?;
+            if leaf.kind != "analysis-executable" || !leaf.executable {
+                return Err(invalid(format!(
+                    "Misclassified program inventory: {executable}"
+                )));
+            }
+            let mut data_paths = serde_json::Map::new();
+            for key in if name == "cppcheck" {
+                vec!["cfg_dir", "platforms_dir"]
+            } else {
+                vec!["resource_dir"]
+            } {
+                data_paths.insert(
+                    key.into(),
+                    json!(self.root.join(program[key].as_str().unwrap())),
+                );
+            }
+            let prefix = format!("analysis/{name}/");
+            let files: Vec<_> = release
+                .files
+                .iter()
+                .filter(|leaf| leaf.path.starts_with(&prefix))
+                .collect();
+            programs.insert(name.into(), json!({"version":program["version"],"executable":self.root.join(executable),"executable_origin":"managed_runtime","executable_sha256":leaf.sha256,"data_paths":data_paths,"files":files}));
+        }
+        Ok(
+            json!({"status":"ready","runtime_root":self.root,"runtime_manifest_sha256":self.fields["runtime_manifest_sha256"],"analysis_mapping_sha256":self.fields["analysis_mapping_sha256"],"programs":programs}),
+        )
+    }
     pub(super) fn recheck(&self, budget: &Budget) -> Result<()> {
         let checked = (|| -> Result<()> {
             for snapshot in &self.snapshots {
@@ -474,6 +516,7 @@ pub(crate) fn resolve(root: &Path, release: &ReleaseManifest, budget: &Budget) -
             executable: root.join("analysis/cppcheck/cppcheck.exe"),
             version: cpp_version,
             fields,
+            mapping,
             snapshots,
             directories,
             root,

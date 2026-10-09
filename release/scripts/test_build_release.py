@@ -10,8 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+import tempfile
+import json
 
 import build_release as br
+from test_analysis_tools import fixture
+import analysis_tools
 
 SEP = "\x1f"
 
@@ -86,6 +90,58 @@ def test_development_matrix_derives_bundle_version() -> None:
     assert "steps.release.outputs.version" in workflow
     assert "--version 0." not in workflow
     assert "bundle: byo-0." not in workflow
+
+
+def test_final_payload_hashes_are_reused_in_sbom():
+    with tempfile.TemporaryDirectory() as temporary:
+        bundle = Path(temporary)
+        (bundle / "sidecar").mkdir()
+        native = bundle / "sidecar/dependency.dll"
+        native.write_bytes(b"final transformed native bytes")
+        report = bundle / "report.xml"
+        report.write_text(
+            '<report nuitka_version="test"><python python_version="3.12.0"/><distributions/></report>'
+        )
+        files = br.payload_inventory(bundle)
+        with patch.object(
+            br, "digest", side_effect=AssertionError("SBOM rehashed a payload")
+        ):
+            br.write_sbom(bundle, report, "0.1.8", files)
+        sbom = json.loads((bundle / "sbom.cdx.json").read_bytes())
+        dependency = next(
+            c for c in sbom["components"] if c["name"] == "sidecar/dependency.dll"
+        )
+        assert (
+            dependency["hashes"][0]["content"]
+            == next(f for f in files if f["path"] == "sidecar/dependency.dll")["sha256"]
+        )
+        assert not any(f["path"] == "sbom.cdx.json" for f in files)
+
+
+def test_windows_finalization_preserves_signed_analysis_bytes():
+    lock, data, _, _ = fixture()
+    # Signing changes executable bytes; those transformed bytes must survive
+    # finalization and become the SBOM/inventory identity without rebuilding.
+    path = lock["programs"]["cppcheck"]["executable"]
+    data[path] += b"simulated Authenticode transformation"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        bundle, evidence = root / "bundle", root / "evidence"
+        for name, value in data.items():
+            target = bundle / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(value)
+        provenance = {
+            "sources": {
+                name: program["source"] for name, program in lock["programs"].items()
+            },
+            "recipe": lock["programs"]["cppcheck"]["recipe"],
+        }
+        analysis_tools.write_json(evidence / "cppcheck-build.json", provenance)
+        with patch.object(analysis_tools, "load_lock", return_value=lock):
+            saved, recorded = br.signed_analysis_inputs(bundle, evidence)
+        assert saved[path] == data[path]
+        assert recorded == provenance
 
 
 def main() -> int:

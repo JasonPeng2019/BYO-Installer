@@ -81,9 +81,12 @@ settings explicitly. Tool calls never download or install analyzers.
 The accepted layout uses `analysis/runtime.json` for program/data references,
 `release-manifest.json.files` as the sole payload size/SHA-256 inventory and
 `sbom.cdx.json` for source, notices and dependency relationships. The closed
-release manifest schema remains unchanged. Both managed executables must resolve
-from the verified active runtime with no analyzer PATH fallback. Doctor, status
-and report identity integration remains pending.
+release manifest schema remains unchanged. Both managed executables resolve
+from the verified active runtime with no analyzer PATH fallback. Native doctor
+and status reuse the Rust analysis mapping boundary under an active runtime
+lease. They expose managed executable/data paths and inventoried byte identities,
+and probe both program versions. Installed validation of these reports remains
+pending.
 
 | Failure | Recovery |
 | --- | --- |
@@ -149,3 +152,61 @@ saved-file freshness, owned-child EOF/idle cleanup, and update/uninstall
 preservation. Independent testing and review must bind to the final clean
 candidate and exact archive digest. Skipped or failed required Windows gates
 remain incomplete; the supported Windows analysis range is not yet established.
+
+## Local Windows build recipe
+
+The existing builder stages analysis before creating the SBOM and sole release
+inventory. Supply the two local archives named in the lock through
+`--analysis-input-dir` or `BYO_ANALYSIS_INPUT_DIR`. No analyzer download or
+installation is performed. Cppcheck is rebuilt from its source archive and exact
+patch; clangd is selected from its official pinned archive. Install the build
+toolchain separately before running the recipe.
+
+Use a clean, detached `AgentWorkspace` checkout at
+`2889c2fdbd77a56f33095ff21f03d78dc1317d03` and `Firmware MCP New` checkout at
+`d9a1bc4a1aaf629f1442c83245f4e382a6806beb`. The installer/server version equality
+check is intentional. Build with an existing Python environment containing the
+server lock's dependencies and Nuitka 2.8.9; the builder compiles the checked-out
+server source using that environment.
+
+```powershell
+$env:CARGO_NET_OFFLINE = 'true'
+$env:CARGO_TARGET_DIR = 'C:/build/byo-cargo'
+python release/scripts/build_release.py `
+  --build-dir C:/build/byo-release `
+  --python C:/build/python-environment/Scripts/python.exe `
+  --analysis-input-dir C:/build/pinned-analysis-archives
+python release/scripts/verify_build_output.py `
+  --dist release/dist --expected-target windows-x86_64 --archive-type zip
+```
+
+Choose owned scratch directories and a short path: native MSVC link steps can
+fail with `LNK1104` when generated outputs are placed under a deeply nested
+checkout. This build-output constraint is separate from Cppcheck's measured
+translation-unit source-path limitation. Neither a short build scratch directory
+nor a long database-path test establishes long source-path support.
+
+The build scratch `analysis-evidence` directory retains configure/build argv,
+exit codes and full logs, actual MSVC/CMake/linker/SDK identity, and analyzer
+version probes and PE import evidence. The verifier repeats checks against final
+ZIP entries and payload bytes, including exact upstream resources and SBOM
+ownership, and records tested System32/API-set module and imported-symbol
+resolution. These host observations do not establish clean-machine acceptance
+or support for another Windows OS build. No PATH module fallback is accepted.
+
+Windows analysis packaging negatives are wired into the existing build matrix.
+The protected clean-test kit includes the Windows verifier modules and locks,
+and clean-machine CI has a Windows-only final archive/PE gate. The kit has been
+composed locally without publishing. CI must supply the pinned local input
+archives. Provisioning that input location and wiring/running the independent
+installed test remain integration gates; publication jobs are unchanged. The
+independent installed tester's reserved paths remain with that tester.
+
+Nuitka 2.8.9's Windows standalone build uses its bundled `pefile` detector through
+`--experimental=force-dependencies-pefile`, as selected by its installed source.
+This avoids downloading Dependency Walker. The detector is a build input
+selection mechanism; it does not replace the independent checks of all bundled
+PE images, ordinary/delay imports and symbols, or installed and clean-host proof.
+The first native attempt compiled and linked the server but stopped at the
+missing Dependency Walker prompt; no download occurred. That failed standalone
+output is not an accepted sidecar and cannot be reused as a successful build.

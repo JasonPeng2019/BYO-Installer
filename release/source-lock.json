@@ -8,6 +8,6 @@
   "firmware_mcp": {
     "repository": "JasonPeng2019/BYO-Firmware-MCP",
     "branch": "release/0.1.8-preview",
-    "commit": "e3aa8e1b36cbb6bf23d7431fa8cf478cbb9292c4"
+    "commit": "d9a1bc4a1aaf629f1442c83245f4e382a6806beb"
   }
 }

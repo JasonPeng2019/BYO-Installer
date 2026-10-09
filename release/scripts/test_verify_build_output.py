@@ -11,10 +11,16 @@ Exits non-zero on the first failed assertion.
 from __future__ import annotations
 
 import struct
+import argparse
+import json
+import zipfile
+from unittest.mock import patch
 import tempfile
 from pathlib import Path, PurePosixPath
 
 import verify_build_output as vbo
+import analysis_tools
+from test_analysis_tools import fixture
 
 
 def _bundle(files: dict[str, bytes]) -> Path:
@@ -239,10 +245,123 @@ def test_real_bundles_are_stripped_when_present() -> None:
     print(f"    (real-bundle strip check exercised {checked} executable(s))")
 
 
+def test_windows_zip_actual_bytes_and_resource_negatives() -> None:
+    lock, data, files, sbom = fixture()
+    data["sbom.cdx.json"] = json.dumps(sbom).encode()
+    files.append(
+        {
+            "path": "sbom.cdx.json",
+            "kind": "metadata",
+            "executable": False,
+            "size": len(data["sbom.cdx.json"]),
+            "sha256": analysis_tools.sha256(data["sbom.cdx.json"]),
+        }
+    )
+    manifest = {"platform": "windows", "development_unsigned": True, "files": files}
+    data["release-manifest.json"] = json.dumps(manifest).encode()
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / "byo-test.zip"
+
+        def write(leaves):
+            with zipfile.ZipFile(archive, "w") as output:
+                for path, value in leaves.items():
+                    output.writestr("byo-test/" + path, value)
+
+        with patch.object(analysis_tools, "load_lock", return_value=lock):
+            write(data)
+            vbo.validate_archive(archive, "zip", "byo-test", manifest)
+            for extra in (
+                "analysis/clangd/lib/clang/23/include/extra.h",
+                "sidecar/extra.dll",
+                ".firm/report.json",
+                ".cache/x",
+                "analysis/cppcheck/addons/a.py",
+                "sidecar/private.pdb",
+            ):
+                write({**data, extra: b"unselected"})
+                try:
+                    vbo.validate_archive(archive, "zip", "byo-test", manifest)
+                    raise AssertionError(extra)
+                except RuntimeError as error:
+                    assert "inventory" in str(error), error
+            changed = dict(data)
+            changed["analysis/clangd/lib/clang/23/include/stddef.h"] += b"corrupt"
+            write(changed)
+            try:
+                vbo.validate_archive(archive, "zip", "byo-test", manifest)
+                raise AssertionError("changed archived bytes passed")
+            except RuntimeError as error:
+                assert "byte mismatch" in str(error), error
+            moved = dict(data)
+            moved["analysis/clangd/stddef.h"] = moved.pop(
+                "analysis/clangd/lib/clang/23/include/stddef.h"
+            )
+            write(moved)
+            try:
+                vbo.validate_archive(archive, "zip", "byo-test", manifest)
+                raise AssertionError("misplaced resource passed")
+            except RuntimeError as error:
+                assert "inventory" in str(error), error
+            write(data)
+            try:
+                vbo.validate_archive(
+                    archive, "zip", "byo-test", {**manifest, "version": "different"}
+                )
+                raise AssertionError("different archive manifest passed")
+            except RuntimeError as error:
+                assert "manifest differs" in str(error), error
+
+
+def test_windows_inventory_rejects_rehashed_arbitrary_source() -> None:
+    lock, data, files, sbom = fixture()
+    data["sbom.cdx.json"] = json.dumps(sbom).encode()
+    for path in (
+        "sidecar/arbitrary.cpp",
+        "sidecar/private.pdb",
+        ".firm/code-analysis/result.json",
+        ".cache/project.json",
+        "sidecar/addons/script.txt",
+    ):
+        raw = b"bad payload"
+        data[path] = raw
+        manifest = {
+            "files": files
+            + [
+                {
+                    "path": path,
+                    "size": len(raw),
+                    "sha256": analysis_tools.sha256(raw),
+                    "kind": "sidecar",
+                    "executable": False,
+                }
+            ]
+        }
+        with patch.object(analysis_tools, "load_lock", return_value=lock):
+            try:
+                vbo.validate_windows_payload(manifest, data.__getitem__)
+                raise AssertionError(path)
+            except RuntimeError as error:
+                assert "source/development" in str(error), error
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--windows-only", action="store_true")
+    args = parser.parse_args()
     tests = [
         value for name, value in sorted(globals().items()) if name.startswith("test_")
     ]
+    if args.windows_only:
+        tests = [
+            test
+            for test in tests
+            if test.__name__
+            not in {
+                "test_macho_strip_check_passes_when_clean_fails_when_debug",
+                "test_elf_strip_check_keys_on_symtab_not_debug_gdb_scripts",
+                "test_real_bundles_are_stripped_when_present",
+            }
+        ]
     for test in tests:
         test()
         print(f"ok  {test.__name__}")

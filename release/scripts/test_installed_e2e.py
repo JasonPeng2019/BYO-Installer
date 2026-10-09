@@ -256,6 +256,11 @@ def main() -> int:
     bundle_launcher = bundle / ("byo.exe" if os.name == "nt" else "byo")
     if not bundle_launcher.is_file():
         raise AcceptanceFailure("bundle launcher is missing")
+    if manifest.get("platform") == "windows":
+        import verify_build_output
+
+        verify_build_output.validate_windows_bundle(bundle, manifest)
+        verify_build_output.validate_archive(archive, "zip", bundle.name, manifest)
     leaked = [
         path.relative_to(bundle).as_posix()
         for path in bundle.rglob("*")
@@ -267,7 +272,7 @@ def main() -> int:
             or path.name in {"Cargo.toml", "pyproject.toml", "uv.lock"}
         )
     ]
-    if leaked:
+    if leaked and manifest.get("platform") != "windows":
         raise AcceptanceFailure(f"bundle leaked source or development files: {leaked}")
 
     with tempfile.TemporaryDirectory(prefix="byo-installed-e2e-") as raw_root:

@@ -67,6 +67,15 @@ jobs:
           if test "$RUNNER_OS" = Linux; then args+=(--public-key "$RUNNER_TEMP/byo-release-public.pem"); fi
           python "test-kit/release/scripts/clean_candidate.py" "${args[@]}"
 
+      - name: Check exact Windows analysis archive and PE imports
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath candidate -Filter '*-windows-x86_64.zip' -File -Recurse)
+          if ($archives.Count -ne 1) { throw 'Expected exactly one Windows candidate archive' }
+          python test-kit/release/scripts/verify_build_output.py windows-analysis-archive --archive $archives[0].FullName --receipt evidence/windows-analysis-archive.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload clean-machine evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
