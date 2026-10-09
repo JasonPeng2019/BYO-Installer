@@ -1,0 +1,7 @@
+[
+  {
+    "directory": ".",
+    "file": "src/a.c",
+    "command": "cc -I\"include\" -DVALUE=\"a b\" -c \"src/a.c\""
+  }
+]

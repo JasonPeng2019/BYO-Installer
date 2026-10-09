@@ -1,0 +1,294 @@
+{
+  "schema": "code-analysis-parity/v1",
+  "pinned_cppcheck": "2.22.0",
+  "diagnostics": [
+    {
+      "xml": "clean.xml",
+      "exit_code": 0,
+      "status": "pass",
+      "style": false
+    },
+    {
+      "xml": "findings.xml",
+      "exit_code": 1,
+      "status": "findings_failed",
+      "style": false
+    },
+    {
+      "xml": "findings-exit-zero.xml",
+      "exit_code": 0,
+      "status": "findings_failed",
+      "style": false
+    },
+    {
+      "xml": "missing-include.xml",
+      "exit_code": 1,
+      "status": "blocked",
+      "style": false
+    },
+    {
+      "xml": "missing-system-include.xml",
+      "exit_code": 1,
+      "status": "blocked",
+      "style": false
+    },
+    {
+      "xml": "analysis-limit.xml",
+      "exit_code": 0,
+      "status": "blocked",
+      "style": false
+    },
+    {
+      "xml": "unknown-macro.xml",
+      "exit_code": 1,
+      "status": "blocked",
+      "style": false
+    },
+    {
+      "xml": "internal-error.xml",
+      "exit_code": 1,
+      "status": "execution_error",
+      "style": false
+    },
+    {
+      "xml": "syntax-error.xml",
+      "exit_code": 1,
+      "status": "execution_error",
+      "style": false
+    },
+    {
+      "xml": "critical-checkers.xml",
+      "exit_code": 0,
+      "status": "execution_error",
+      "style": false
+    },
+    {
+      "xml": "unknown-information.xml",
+      "exit_code": 0,
+      "status": "blocked",
+      "style": false
+    },
+    {
+      "xml": "unexplained-exit.xml",
+      "exit_code": 1,
+      "status": "execution_error",
+      "style": false
+    },
+    {
+      "xml": "exit-two-findings.xml",
+      "exit_code": 2,
+      "status": "execution_error",
+      "style": false
+    },
+    {
+      "xml": "style-disabled.xml",
+      "exit_code": 0,
+      "status": "pass",
+      "style": false
+    },
+    {
+      "xml": "style-enabled.xml",
+      "exit_code": 1,
+      "status": "findings_failed",
+      "style": true
+    },
+    {
+      "xml": "purged-equivalent.xml",
+      "exit_code": 0,
+      "status": "pass",
+      "style": false
+    },
+    {
+      "xml": "malformed.xml",
+      "exit_code": 0,
+      "status": "malformed"
+    },
+    {
+      "xml": "checkLevelNormal.xml",
+      "exit_code": 0,
+      "status": "blocked"
+    },
+    {
+      "xml": "normalCheckLevelMaxBranches.xml",
+      "exit_code": 0,
+      "status": "blocked"
+    },
+    {
+      "xml": "normalCheckLevelConditionExpressions.xml",
+      "exit_code": 0,
+      "status": "blocked"
+    },
+    {
+      "xml": "cppcheckLimit.xml",
+      "exit_code": 1,
+      "status": "blocked"
+    },
+    {
+      "xml": "includeNestedTooDeeply.xml",
+      "exit_code": 1,
+      "status": "blocked"
+    },
+    {
+      "xml": "internalAstError.xml",
+      "exit_code": 1,
+      "status": "execution_error"
+    },
+    {
+      "xml": "directiveAsMacroParameter.xml",
+      "exit_code": 1,
+      "status": "execution_error"
+    },
+    {
+      "xml": "unhandledChar.xml",
+      "exit_code": 1,
+      "status": "execution_error"
+    },
+    {
+      "xml": "missingFile.xml",
+      "exit_code": 1,
+      "status": "execution_error"
+    }
+  ],
+  "selection": [
+    {
+      "target": ".",
+      "kind": "all",
+      "sources": [
+        "src/a.c",
+        "src/sub/b.cpp"
+      ]
+    },
+    {
+      "target": "src/a.c",
+      "kind": "source",
+      "sources": [
+        "src/a.c"
+      ]
+    },
+    {
+      "target": "src/sub",
+      "kind": "directory",
+      "sources": [
+        "src/sub/b.cpp"
+      ]
+    },
+    {
+      "target": "include/a.h",
+      "kind": "header_all",
+      "sources": [
+        "src/a.c",
+        "src/sub/b.cpp"
+      ]
+    },
+    {
+      "target": "config",
+      "status": "blocked",
+      "code": "analysis/scope-empty"
+    }
+  ],
+  "required_flags": [
+    "--enable=warning,performance,portability,information,missingInclude",
+    "--error-exitcode=1",
+    "--xml",
+    "--xml-version=2"
+  ],
+  "defaults": {
+    "enable_style": false,
+    "timeout_seconds": 120
+  },
+  "database_cases": [
+    {
+      "name": "duplicate-identical",
+      "append_entry": 0,
+      "selected_count": 2
+    },
+    {
+      "name": "conflicting-anywhere",
+      "append_entry": 0,
+      "append_argument": "-DOTHER",
+      "status": "blocked"
+    },
+    {
+      "name": "arguments-preferred",
+      "append_entry": 0,
+      "additional_command": "cc never_execute",
+      "selected_count": 2
+    }
+  ],
+  "config_cases": [
+    {
+      "name": "bool-schema",
+      "json": {
+        "schema_version": true
+      },
+      "field": "schema_version"
+    },
+    {
+      "name": "unknown",
+      "json": {
+        "schema_version": 1,
+        "extra": true
+      },
+      "field": "extra"
+    },
+    {
+      "name": "zero-timeout",
+      "json": {
+        "schema_version": 1,
+        "cppcheck": {
+          "timeout_seconds": 0
+        }
+      },
+      "field": "timeout_seconds"
+    }
+  ],
+  "runtime_cases": [
+    {
+      "case": "managed-missing",
+      "status": "blocked",
+      "path_fallback": false
+    },
+    {
+      "case": "managed-hash-mismatch",
+      "status": "blocked",
+      "path_fallback": false
+    },
+    {
+      "case": "unmanaged-supplied-runtime-failure",
+      "origin": "path",
+      "warning_required": true
+    },
+    {
+      "case": "manifest-target-mismatch",
+      "status": "blocked"
+    },
+    {
+      "case": "mapping-unknown-field",
+      "status": "blocked"
+    },
+    {
+      "case": "mapping-path-escape",
+      "status": "blocked"
+    },
+    {
+      "case": "missing-data",
+      "status": "blocked"
+    },
+    {
+      "case": "runtime-version-mismatch",
+      "status": "blocked"
+    }
+  ],
+  "diagnostic_reference": {
+    "upstream_commit": "a436ca35ed1887bee789765122b65ed2d7a7e045",
+    "files": {
+      "lib/errorlogger.cpp": "eb64c47d59fc026d4de488023c56cfef496f7def48ed2e3bf536389c3e3c007a",
+      "lib/preprocessor.cpp": "7b7527dc0b7773935ac43737ef8e2942f56f2c6a6bbba187d39776a97280154f",
+      "lib/tokenize.cpp": "35cfe6fc2461a4498017218cd48b6cbddea4d7314113620d97c046993644bd87",
+      "lib/cppcheck.cpp": "f4b79b4c1f3f9d7c91e14016c4658a6565a332591654c3a8dd068b7336ee8c7c",
+      "lib/valueflow.cpp": "97b533e20e3002b610821191d3e11c35d5ddd56c1aa6c448c8d14c43a2eca64f",
+      "lib/forwardanalyzer.cpp": "77e83aec147ed18be7b2e7f506cc7514a347aabd18b85e8fa1cc902e7782bb44",
+      "cli/cppcheckexecutor.cpp": "b7806cb70616967aa6c6f17923cc0e7accfa55b5186222b12df7bdf06a5d85c8"
+    }
+  }
+}

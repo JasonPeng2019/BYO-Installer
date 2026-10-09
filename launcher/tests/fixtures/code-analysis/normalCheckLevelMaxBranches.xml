@@ -1,0 +1,1 @@
+<results version="2"><cppcheck version="2.22.0"/><errors><error id="normalCheckLevelMaxBranches" severity="information" msg="Analysis was limited."/></errors></results>

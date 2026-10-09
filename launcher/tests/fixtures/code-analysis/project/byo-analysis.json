@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "cppcheck": {
+    "platform_file": "config/platform.xml"
+  }
+}

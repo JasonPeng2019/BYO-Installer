@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "platform": "windows",
+  "architecture": "x86_64",
+  "programs": {
+    "cppcheck": {
+      "version": "2.22.0",
+      "executable": "analysis/cppcheck/cppcheck.exe",
+      "cfg_dir": "analysis/cppcheck/cfg",
+      "platforms_dir": "analysis/cppcheck/platforms",
+      "licenses": [
+        "analysis/cppcheck/licenses/COPYING",
+        "analysis/cppcheck/licenses/simplecpp-LICENSE",
+        "analysis/cppcheck/licenses/tinyxml2-LICENSE",
+        "analysis/cppcheck/licenses/picojson-LICENSE"
+      ],
+      "dependencies": [],
+      "sbom_ref": "byo-analysis:cppcheck"
+    },
+    "clangd": {
+      "version": "23.1.0",
+      "executable": "analysis/clangd/bin/clangd.exe",
+      "resource_dir": "analysis/clangd/lib/clang/23",
+      "licenses": [
+        "analysis/clangd/LICENSE.TXT"
+      ],
+      "dependencies": [],
+      "sbom_ref": "byo-analysis:clangd"
+    }
+  }
+}

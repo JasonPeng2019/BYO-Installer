@@ -1,0 +1,1 @@
+<results version="2"><cppcheck version="2.22.0"/><errors><error id="internalAstError" severity="error" msg="Analysis did not complete."/><error id="checkersReport" severity="information" msg="Active checkers: There was critical errors (use --checkers-report=&lt;filename&gt; to see details)"/></errors></results>

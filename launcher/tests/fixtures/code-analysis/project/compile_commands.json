@@ -1,0 +1,23 @@
+[
+  {
+    "directory": ".",
+    "file": "src/a.c",
+    "arguments": [
+      "cc",
+      "-Iinclude",
+      "-DVALUE=a b",
+      "-c",
+      "src/a.c"
+    ],
+    "output": "a.o"
+  },
+  {
+    "directory": "src/sub",
+    "file": "b.cpp",
+    "arguments": [
+      "c++",
+      "-c",
+      "b.cpp"
+    ]
+  }
+]

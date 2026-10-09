@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<results version="2"><cppcheck version="2.22.0"/><errors><error id="missingInclude" severity="information" msg="fixture diagnostic" verbose="complete fixture diagnostic"><location file="src/a.c" line="1" column="1"/></error><error id="checkersReport" severity="information" msg="Active checkers: 125/189 (use --checkers-report=&lt;filename&gt; to see details)"/></errors></results>
