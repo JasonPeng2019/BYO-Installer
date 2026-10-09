@@ -1048,11 +1048,12 @@ def report_once(
     count: int | None,
     kind: str | None,
     cppcheck_sha256: str = CPP_EXE_SHA,
+    failure_exit: int = 1,
 ) -> dict:
     reports = project / ".firm/code-analysis/reports"
     before = set(reports.glob("*/result.json"))
     outcome = evidence.run(
-        name, command, env, project, expected=0 if status == "pass" else 1
+        name, command, env, project, expected=0 if status == "pass" else failure_exit
     )
     require(
         ("VERIFY: PASS" in outcome.stdout + outcome.stderr) == (status == "pass"),
@@ -1211,6 +1212,9 @@ def arm_runner(
     database = file_record(project / "build/compile_commands.json")
     platform_file = file_record(project / "config/arm32.xml")
     results = []
+    # The public launcher reports a failed verify as its WorkflowPolicy exit
+    # category; the companion Python runner exits 1.
+    failure_exit = 13 if native else 1
     try:
         for phase, data, status, code in (
             ("clean", clean, "pass", 0),
@@ -1235,6 +1239,7 @@ def arm_runner(
                 code,
                 3,
                 "all",
+                failure_exit=failure_exit,
             )
             if native:
                 require(
@@ -1281,6 +1286,7 @@ def arm_runner(
             1,
             3,
             "header_all",
+            failure_exit=failure_exit,
         )
     finally:
         source.write_bytes(clean)
@@ -1628,8 +1634,9 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
         == (runtime / "analysis/clangd/bin/clangd.exe").resolve(),
         "installed MCP resolved another clangd executable",
     )
+    # The public status reports the executable's own --version banner.
     require(
-        data["version"] == "23.1.0",
+        (data["version"] or "").split()[:3] == ["clangd", "version", "23.1.0"],
         "installed clangd version disagrees with pinned input",
     )
     main = "src/main.cpp"
