@@ -95,7 +95,11 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures/code-analysis-installed"
 CPP_INPUT_SHA = "e8f71939bafaba468ac299a3995e30ddf05c82365176a2f7c82365f55b57b4d3"
-CPP_EXE_SHA = "bd85657e81f80597c63f4380c2e5f91f6a840e0b12cce159df9812e76bb147cb"
+# Final 0.1.8 artifact rebuilt by the accepted lock recipe (/pathmap, /PDBALTPATH),
+# not the earlier probe input. The MSVC link is not bit-reproducible: an
+# independent rebuild from the same pins differed only in COFF/debug timestamps,
+# CheckSum and the CodeView GUID, and matched after zeroing exactly those fields.
+CPP_EXE_SHA = "3bc2924b33d707644b7b80c2d619907f3b7517a17c8c62120a0cfae212df0f13"
 CLANG_EXE_SHA = "dbd52c13d21ef9d284f4f0627efe76c81adf2fe0998f230127f554a54fc9dde7"
 CLANG_INPUT_SHA = "4b6a35d3950b05b2708021da3f2f78ea29cab0922a35cda07a5229af733191b2"
 ARM_INPUT_SHA = "ab3a5ea27dd222b753def82b36066c1e803c8eec76d0b2947f2d61e893ed6291"
@@ -189,6 +193,15 @@ def is_reparse(path: Path) -> bool:
     return bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)
 
 
+def reported_path(value: str) -> Path:
+    """Resolve a product-reported Windows path, including the extended form."""
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return Path(value).resolve()
+
+
 def below(root: Path, relative: str) -> Path:
     p = PurePosixPath(relative)
     if (
@@ -216,26 +229,10 @@ def verify_file(path: Path, record: dict, *, product: bool = False) -> None:
 class WindowsProcesses:
     """Independent native process observations; no image-name termination."""
 
-    class Entry(ctypes.Structure):
-        _fields_ = [
-            ("size", wintypes.DWORD),
-            ("usage", wintypes.DWORD),
-            ("pid", wintypes.DWORD),
-            ("heap", ctypes.c_size_t),
-            ("module", wintypes.DWORD),
-            ("threads", wintypes.DWORD),
-            ("parent", wintypes.DWORD),
-            ("priority", wintypes.LONG),
-            ("flags", wintypes.DWORD),
-            ("name", wintypes.WCHAR * 260),
-        ]
-
     def __init__(self):
         self.k = ctypes.WinDLL("kernel32", use_last_error=True)
-        for name in ("OpenProcess", "CreateToolhelp32Snapshot"):
-            getattr(self.k, name).restype = wintypes.HANDLE
+        self.k.OpenProcess.restype = wintypes.HANDLE
         self.k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        self.k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
         self.k.CloseHandle.argtypes = [wintypes.HANDLE]
         self.k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
             ctypes.POINTER(wintypes.FILETIME)
@@ -248,8 +245,22 @@ class WindowsProcesses:
         ]
         self.k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         self.k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        self.k.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(self.Entry)]
-        self.k.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(self.Entry)]
+        self.k.GetSystemTimePreciseAsFileTime.argtypes = [
+            ctypes.POINTER(wintypes.FILETIME)
+        ]
+        self.nt = ctypes.WinDLL("ntdll")
+        self.nt.NtQuerySystemInformation.argtypes = [
+            wintypes.ULONG,
+            ctypes.c_void_p,
+            wintypes.ULONG,
+            ctypes.POINTER(wintypes.ULONG),
+        ]
+        self.buffer = ctypes.create_string_buffer(1 << 21)
+
+    def now(self) -> int:
+        current = wintypes.FILETIME()
+        self.k.GetSystemTimePreciseAsFileTime(ctypes.byref(current))
+        return (current.dwHighDateTime << 32) | current.dwLowDateTime
 
     def identity(self, pid: int) -> dict | None:
         handle = self.k.OpenProcess(0x1000 | 0x100000, False, pid)
@@ -276,20 +287,32 @@ class WindowsProcesses:
             self.k.CloseHandle(handle)
 
     def snapshot(self) -> dict:
-        handle = self.k.CreateToolhelp32Snapshot(2, 0)
-        if handle == ctypes.c_void_p(-1).value:
-            raise Setup("Windows Toolhelp process snapshot failed")
+        # One atomic SystemProcessInformation copy. A Python Toolhelp walk over
+        # hundreds of host processes outlasts a short analyzer. x64 entry
+        # offsets: next entry 0x00, PID 0x50, parent PID 0x58.
+        size = wintypes.ULONG()
+        while True:
+            status = self.nt.NtQuerySystemInformation(
+                5, self.buffer, len(self.buffer), ctypes.byref(size)
+            )
+            if status & 0xFFFFFFFF != 0xC0000004:
+                break
+            self.buffer = ctypes.create_string_buffer(
+                max(size.value, 2 * len(self.buffer))
+            )
+        if status:
+            raise Setup(f"Windows process snapshot failed: {status & 0xFFFFFFFF:#x}")
+        view = memoryview(self.buffer).cast("B")
         entries = {}
-        try:
-            entry = self.Entry()
-            entry.size = ctypes.sizeof(entry)
-            ok = self.k.Process32FirstW(handle, ctypes.byref(entry))
-            while ok:
-                entries[int(entry.pid)] = int(entry.parent)
-                ok = self.k.Process32NextW(handle, ctypes.byref(entry))
-        finally:
-            self.k.CloseHandle(handle)
-        return entries
+        offset = 0
+        while True:
+            pid = int.from_bytes(view[offset + 0x50 : offset + 0x58], "little")
+            parent = int.from_bytes(view[offset + 0x58 : offset + 0x60], "little")
+            entries[pid] = parent
+            step = int.from_bytes(view[offset : offset + 4], "little")
+            if not step:
+                return entries
+            offset += step
 
     def alive(self, identity: dict) -> bool:
         current = self.identity(identity["pid"])
@@ -332,6 +355,7 @@ class Owned:
         self.thread.start()
 
     def sample_once(self) -> None:
+        started = self.native.now()
         parents = self.native.snapshot()
         # Breadth-first capture permits launcher -> sidecar -> clangd in one sample.
         for _ in range(8):
@@ -346,11 +370,13 @@ class Owned:
                     and child["creation_filetime"] >= live[parent]["creation_filetime"]
                 ):
                     # Snapshot and identity acquisition are separate system
-                    # calls. Recheck the relationship and parent's creation so
-                    # PID reuse between them cannot establish false ownership.
-                    if self.native.snapshot().get(
-                        pid
-                    ) != parent or not self.native.alive(live[parent]):
+                    # calls. A PID reused after the snapshot belongs to a
+                    # process created after it started, so reject those and
+                    # recheck the parent without a second costly snapshot:
+                    # one cycle must fit inside a ~0.1 s analyzer lifetime.
+                    if child["creation_filetime"] >= started or not self.native.alive(
+                        live[parent]
+                    ):
                         continue
                     key = (pid, child["creation_filetime"])
                     if key not in self.records:
@@ -365,7 +391,7 @@ class Owned:
 
     def sample(self) -> None:
         try:
-            while not self.stop.wait(0.05):
+            while not self.stop.wait(0.005):
                 self.sample_once()
         except Exception as exc:
             self.error = repr(exc)
@@ -742,13 +768,34 @@ def input_gate(args, evidence: Evidence, lab: Path) -> dict:
         verify_file(path, item)
         verify_file(below(args.bundle, item["runtime_path"]), item, product=True)
         protected[str(path)] = file_record(path)
+    # Ship clangd, its license and resource headers. Upstream compiler-rt
+    # libraries and sanitizer ignorelists are link inputs for compiled programs,
+    # not clangd runtime dependencies (clangd.exe imports only system DLLs).
+    clangd_payload = {
+        relative
+        for relative in clang["files"]
+        if relative in ("bin/clangd.exe", "LICENSE.TXT")
+        or relative.startswith("lib/clang/23/include/")
+    }
     for relative, item in clang["files"].items():
         path = below(args.clangd_root, relative)
         verify_file(path, item)
-        verify_file(
-            below(args.bundle, f"analysis/clangd/{relative}"), item, product=True
-        )
+        if relative in clangd_payload:
+            verify_file(
+                below(args.bundle, f"analysis/clangd/{relative}"), item, product=True
+            )
         protected[str(path)] = file_record(path)
+    clangd_bundle = args.bundle / "analysis/clangd"
+    shipped_clangd = {
+        path.relative_to(clangd_bundle).as_posix()
+        for path in clangd_bundle.rglob("*")
+        if not path.is_dir()
+    }
+    if shipped_clangd != clangd_payload:
+        raise Red(
+            "clangd payload differs from upstream executable, license and headers: "
+            f"{sorted(shipped_clangd ^ clangd_payload)[:5]}"
+        )
     arm_inventory = (
         ROOT / "launcher/tests/fixtures/cppcheck-acceptance/arm-originals.json"
     )
@@ -930,6 +977,8 @@ def copy_arm(args, lab: Path, name: str, evidence: Evidence) -> Path:
     (project / ".clangd").write_text(
         "# User-owned configuration, preserve exactly.\n", encoding="utf-8"
     )
+    # Firmware mode requires a project-owned .clang-format; init never creates it.
+    (project / ".clang-format").write_text("BasedOnStyle: LLVM\n", encoding="utf-8")
     (project / "customer.txt").write_text("unrelated user file µ\n", encoding="utf-8")
     write_json(evidence.root / f"{name}-relocated-inputs.json", tree_record(project))
     return project
@@ -998,11 +1047,13 @@ def report_once(
     process_exit: int | None,
     count: int | None,
     kind: str | None,
+    cppcheck_sha256: str = CPP_EXE_SHA,
+    failure_exit: int = 1,
 ) -> dict:
     reports = project / ".firm/code-analysis/reports"
     before = set(reports.glob("*/result.json"))
     outcome = evidence.run(
-        name, command, env, project, expected=0 if status == "pass" else 1
+        name, command, env, project, expected=0 if status == "pass" else failure_exit
     )
     require(
         ("VERIFY: PASS" in outcome.stdout + outcome.stderr) == (status == "pass"),
@@ -1027,12 +1078,12 @@ def report_once(
             f"{name}: real analyzer exit differs from {process_exit}",
         )
         require(
-            Path(result["executable"]).resolve()
+            reported_path(result["executable"])
             == (runtime / "analysis/cppcheck/cppcheck.exe").resolve(),
             f"{name}: runner did not execute installed Cppcheck",
         )
         require(
-            result["executable_sha256"] == CPP_EXE_SHA
+            result["executable_sha256"] == cppcheck_sha256
             and result["version"] == "2.22.0",
             f"{name}: real executable/version identity differs",
         )
@@ -1042,7 +1093,7 @@ def report_once(
             f"{name}: selected database digest not recorded",
         )
         require(
-            Path(result["platform_file"]).resolve()
+            reported_path(result["platform_file"])
             == (project / "config/arm32.xml").resolve(),
             f"{name}: explicit ARM ABI platform not used",
         )
@@ -1104,7 +1155,7 @@ def report_once(
                     for r in observed
                     if r["pid"] == event["pid"]
                     and Path(r["image"]).resolve()
-                    == Path(result["executable"]).resolve()
+                    == reported_path(result["executable"])
                 ]
                 identities.extend(matches)
         require(
@@ -1161,6 +1212,9 @@ def arm_runner(
     database = file_record(project / "build/compile_commands.json")
     platform_file = file_record(project / "config/arm32.xml")
     results = []
+    # The public launcher reports a failed verify as its WorkflowPolicy exit
+    # category; the companion Python runner exits 1.
+    failure_exit = 13 if native else 1
     try:
         for phase, data, status, code in (
             ("clean", clean, "pass", 0),
@@ -1185,6 +1239,7 @@ def arm_runner(
                 code,
                 3,
                 "all",
+                failure_exit=failure_exit,
             )
             if native:
                 require(
@@ -1231,6 +1286,7 @@ def arm_runner(
             1,
             3,
             "header_all",
+            failure_exit=failure_exit,
         )
     finally:
         source.write_bytes(clean)
@@ -1424,7 +1480,7 @@ class Mcp:
                 value.get("backend") == "clangd", f"{name} did not use semantic backend"
             )
             require(
-                Path(value["project_root"]).resolve() == self.project.resolve(),
+                reported_path(value["project_root"]) == self.project.resolve(),
                 "MCP analysis used runtime cwd as project",
             )
             require(
@@ -1574,12 +1630,13 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
         "installed MCP clangd fell back to PATH",
     )
     require(
-        Path(data["executable"]).resolve()
+        reported_path(data["executable"])
         == (runtime / "analysis/clangd/bin/clangd.exe").resolve(),
         "installed MCP resolved another clangd executable",
     )
+    # The public status reports the executable's own --version banner.
     require(
-        data["version"] == "23.1.0",
+        (data["version"] or "").split()[:3] == ["clangd", "version", "23.1.0"],
         "installed clangd version disagrees with pinned input",
     )
     main = "src/main.cpp"
@@ -1648,7 +1705,7 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
         main_locations = [
             location
             for location in refs["data"]["locations"]
-            if Path(location["path"]).resolve() == (server.project / main).resolve()
+            if reported_path(location["path"]) == (server.project / main).resolve()
         ]
         require(
             any(
@@ -1955,12 +2012,16 @@ def doctor_gate(
             f"installed static report does not identify managed data: {field}",
         )
     require(
-        Path(result["runtime_root"]).resolve() == runtime.resolve(),
+        reported_path(result["runtime_root"]) == runtime.resolve(),
         "static report managed root differs",
     )
 
 
 def main() -> int:
+    # Gate reasons quote non-ASCII lab paths; a legacy console codepage must not
+    # turn a recorded gate result into an unrelated harness exception.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -2140,12 +2201,16 @@ def main() -> int:
             try:
                 semantic_queries(server, runtime, env, full=True)
             finally:
-                server.close()
+                # Idle EOF cleanup is observed and recorded even after a RED query.
+                if evidence.gate("stdio-idle-eof-cleanup", server.close):
+                    evidence.report["gates"]["stdio-idle-eof-cleanup"]["evidence"] = (
+                        str(server.path)
+                    )
+            require(
+                evidence.report["gates"]["stdio-idle-eof-cleanup"]["status"] == "PASS",
+                f"stdio EOF cleanup failed; {server.path}",
+            )
             assert_preserved(semantic, before)
-            evidence.report["gates"]["stdio-idle-eof-cleanup"] = {
-                "status": "PASS",
-                "evidence": str(server.path),
-            }
 
         evidence.gate("mcp-no-board", mcp_no_board)
         evidence.gate(
@@ -2175,9 +2240,11 @@ def main() -> int:
         # Move the entire installed home after all servers have exited. Project
         # integrations are refreshed through their public update route.
         relocated_home = lab / "moved installed home 测试 µ"
+        relocated_runners = False
 
         def relocate():
             nonlocal home, env, byo, runtime, rust_command, python_env
+            nonlocal relocated_runners
             home.rename(relocated_home)
             home = relocated_home
             env = isolated_environment(home, lab)
@@ -2234,13 +2301,16 @@ def main() -> int:
                 3,
                 "all",
             )
+            relocated_runners = True
             server = Mcp(evidence, byo, semantic, env, version, "relocated")
             try:
                 semantic_queries(server, runtime, env, full=False)
             finally:
                 server.close()
 
-        if not evidence.gate("relocation", relocate):
+        # A RED relocated MCP query keeps relocation RED, but once the moved home
+        # and both runners passed, update and uninstall still have a valid start.
+        if not evidence.gate("relocation", relocate) and not relocated_runners:
             raise Halt()
 
         def update():
@@ -2269,6 +2339,17 @@ def main() -> int:
             )
             for item in other["files"]:
                 verify_file(below(args.update_bundle, item["path"]), item)
+            # Each rebuild links a new Cppcheck hash; bind the update runtime to
+            # its own explicitly hash-bound manifest, never to the first pin.
+            updated_cppcheck = [
+                item["sha256"]
+                for item in other["files"]
+                if item["path"] == "analysis/cppcheck/cppcheck.exe"
+            ]
+            require(
+                len(updated_cppcheck) == 1,
+                "update manifest lacks one installed Cppcheck record",
+            )
             evidence.report["update_input"] = {
                 "manifest": file_record(args.update_bundle / "release-manifest.json"),
                 "version": other["version"],
@@ -2302,6 +2383,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
+                cppcheck_sha256=updated_cppcheck[0],
             )
             updated_python_env = {
                 **python_env,
@@ -2321,6 +2403,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
+                cppcheck_sha256=updated_cppcheck[0],
             )
             server = Mcp(evidence, byo, semantic, env, other["version"], "updated")
             try:
