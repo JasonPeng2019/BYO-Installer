@@ -702,6 +702,12 @@ def pe_imports(data: bytes) -> dict:
 
 def system_module(name: str, symbols: list[str]) -> dict:
     """Resolve OS imports with LOAD_LIBRARY_SEARCH_SYSTEM32, never ambient PATH."""
+    if re.fullmatch(
+        r"(?:vcruntime|msvcp|concrt|vcomp|msvcr)[0-9].*\.dll", name.lower()
+    ):
+        raise RuntimeError(
+            f"Redistributable dependency must be inventoried beside its program, not assumed from System32: {name}"
+        )
     if os.name != "nt":
         raise RuntimeError("Windows OS import testing requires a native Windows host")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)

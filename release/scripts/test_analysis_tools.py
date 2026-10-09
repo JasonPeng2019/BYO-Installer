@@ -228,6 +228,11 @@ class WindowsAnalysisTests(unittest.TestCase):
                 "kernel32.dll", ["BYO_missing_export_for_negative_test"]
             )
 
+    def test_installed_vc_redist_is_not_a_windows_os_module(self):
+        for name in ("vcruntime140.dll", "msvcp140.dll", "concrt140.dll", "msvcr120.dll"):
+            with self.assertRaisesRegex(RuntimeError, "Redistributable dependency"):
+                tools.system_module(name, [])
+
     def test_windows_path_aliases_rejected(self):
         for path in (
             "../escape",
