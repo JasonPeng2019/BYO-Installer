@@ -2018,6 +2018,10 @@ def doctor_gate(
 
 
 def main() -> int:
+    # Gate reasons quote non-ASCII lab paths; a legacy console codepage must not
+    # turn a recorded gate result into an unrelated harness exception.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
