@@ -6,7 +6,9 @@
 //! `revert_recorded_edits` undoes precisely those records, so uninstall never
 //! guesses at unrelated PATH entries.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(not(windows), test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,7 @@ fn save_record(paths: &ProductPaths, record: &PathEdits) -> Result<()> {
 
 /// The shell profile BYO edits, chosen from the login shell. One file keeps the
 /// marked block — and therefore its reversal — unambiguous.
+#[cfg(any(not(windows), test))]
 fn choose_unix_profile(home: &Path, shell: Option<&str>) -> PathBuf {
     let leaf = shell
         .and_then(|value| value.rsplit(['/', '\\']).next())
@@ -90,6 +93,7 @@ fn choose_unix_profile(home: &Path, shell: Option<&str>) -> PathBuf {
 
 /// Append the marked export block for `bin`, unless the block is already present.
 /// Returns the new file contents, or `None` if BYO already configured this file.
+#[cfg(any(not(windows), test))]
 fn insert_block(contents: &str, bin: &str) -> Option<String> {
     if contents.contains(BEGIN_MARKER) {
         return None;
