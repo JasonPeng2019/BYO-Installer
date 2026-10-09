@@ -394,10 +394,22 @@ def write_sbom(
         payload_files if payload_files is not None else payload_inventory(bundle)
     )
     native_suffixes = {".dylib", ".dll", ".pyd", ".so"}
+    pinned_native = (
+        {
+            f["runtime_path"]
+            for f in analysis_tools.load_lock()
+            .get("windows_native", {})
+            .get("selected_files", [])
+        }
+        if analysis_provenance is not None
+        else set()
+    )
     for leaf in payload_files:
         relative = str(leaf["path"])
-        if Path(relative).suffix.lower() not in native_suffixes or relative.startswith(
-            "analysis/"
+        if (
+            Path(relative).suffix.lower() not in native_suffixes
+            or relative.startswith("analysis/")
+            or relative in pinned_native
         ):
             continue
         add(
@@ -417,6 +429,12 @@ def write_sbom(
         )
         for component in analysis_components:
             add(component)
+        native_components, native_dependencies = analysis_tools.native_sbom(
+            payload_files, analysis_tools.load_lock()
+        )
+        for component in native_components:
+            add(component)
+        analysis_dependencies.extend(native_dependencies)
     components.sort(key=lambda component: str(component["bom-ref"]))
     nuitka_version = report.attrib.get("nuitka_version", "unknown")
     sbom = {
@@ -1001,6 +1019,13 @@ def main() -> int:
                 build / "analysis-evidence",
                 args.analysis_cmake,
             )
+        analysis_tools.stage_windows_native(
+            bundle,
+            args.python,
+            nuitka_report,
+            build / "analysis-evidence",
+            args.platform_signing_complete,
+        )
 
     if not nuitka_report.is_file():
         raise RuntimeError(
@@ -1069,6 +1094,12 @@ def main() -> int:
             files,
             lambda name: (bundle / name).read_bytes(),
             json.loads(sbom_path.read_bytes()),
+        )
+        analysis_tools.validate_windows_native(
+            files,
+            lambda name: (bundle / name).read_bytes(),
+            json.loads(sbom_path.read_bytes()),
+            not args.production,
         )
         analysis_tools.write_json(
             build / "analysis-evidence/pe-closure.json",

@@ -3344,5 +3344,50 @@
     }
   },
   "schema_version": 1,
-  "validation": "Input selection only. Rebuild Cppcheck, record actual toolchain, final bytes/SBOM/inventory, PE ordinary/delay-import closure and isolated installed Windows evidence before acceptance. Other platforms unverified."
+  "validation": "Input selection only. Rebuild Cppcheck, record actual toolchain, final bytes/SBOM/inventory, PE ordinary/delay-import closure and isolated installed Windows evidence before acceptance. Other platforms unverified.",
+  "windows_native": {
+    "distribution_review": "CPython Windows binary notice records Microsoft Distributable Code conditions. Preservation does not establish distribution compliance; review final artifacts and applicable Microsoft terms before any publication.",
+    "license": "licenses/CPython-Windows-LICENSE.txt",
+    "name": "Microsoft Visual C++ runtime",
+    "selected_files": [
+      {
+        "executable": false,
+        "kind": "native-dependency",
+        "runtime_path": "vcruntime140.dll",
+        "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+        "size": 124544,
+        "upstream_path": "vcruntime140.dll"
+      },
+      {
+        "executable": false,
+        "kind": "native-dependency",
+        "runtime_path": "sidecar/vcruntime140.dll",
+        "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+        "size": 124544,
+        "upstream_path": "vcruntime140.dll"
+      },
+      {
+        "executable": false,
+        "kind": "native-dependency",
+        "runtime_path": "sidecar/vcruntime140_1.dll",
+        "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+        "size": 49792,
+        "upstream_path": "vcruntime140_1.dll"
+      },
+      {
+        "executable": false,
+        "kind": "license",
+        "runtime_path": "licenses/CPython-Windows-LICENSE.txt",
+        "sha256": "886a0ead2d89030ee62dbff52b04e47ab91998341295bb9c56fb952b4e081c7a",
+        "size": 25066,
+        "upstream_path": "LICENSE.txt"
+      }
+    ],
+    "source": {
+      "kind": "Observed local CPython 3.12.13 Windows x86_64 interpreter binaries, selected by Nuitka 2.8.9 included_dll report",
+      "python_version": "3.12.13",
+      "reference": "${sys.real_prefix}; not an independently published binary digest"
+    },
+    "version": "14.44.35211.0"
+  }
 }

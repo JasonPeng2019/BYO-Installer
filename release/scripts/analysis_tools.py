@@ -68,6 +68,14 @@ def load_lock() -> dict:
             seen.add(path.casefold())
             if not re.fullmatch("[0-9a-f]{64}", leaf["sha256"]) or leaf["size"] < 0:
                 raise RuntimeError(f"Invalid pinned file identity: {path}")
+    for leaf in lock.get("windows_native", {}).get("selected_files", []):
+        path = safe_relative(leaf["runtime_path"])
+        safe_relative(leaf["upstream_path"])
+        if path.casefold() in seen or leaf["executable"] is not False:
+            raise RuntimeError(f"Duplicate/executable native dependency: {path}")
+        seen.add(path.casefold())
+        if not re.fullmatch("[0-9a-f]{64}", leaf["sha256"]) or leaf["size"] < 0:
+            raise RuntimeError(f"Invalid pinned native identity: {path}")
     return lock
 
 
@@ -331,6 +339,9 @@ def stage_windows(
 def classification(relative: str, lock: dict) -> tuple[str, bool] | None:
     if relative == "analysis/runtime.json":
         return "metadata", False
+    for leaf in lock.get("windows_native", {}).get("selected_files", []):
+        if relative == leaf["runtime_path"]:
+            return leaf["kind"], leaf["executable"]
     for program in lock["programs"].values():
         if relative == program["executable"]:
             return "analysis-executable", True
@@ -342,6 +353,150 @@ def classification(relative: str, lock: dict) -> tuple[str, bool] | None:
     if relative.startswith("analysis/"):
         raise RuntimeError(f"Unselected analysis payload: {relative}")
     return None
+
+
+def stage_windows_native(
+    bundle: Path, python: Path, report: Path, evidence: Path, signed: bool = False
+) -> None:
+    """Place the pinned launcher dependency beside its EXE, never from PATH."""
+    native = load_lock()["windows_native"]
+    identity = json.loads(
+        subprocess.check_output(
+            [
+                str(python),
+                "-c",
+                "import sys,json,platform;print(json.dumps({'base':sys.base_prefix,'version':platform.python_version()}))",
+            ],
+            text=True,
+        )
+    )
+    if identity["version"] != native["source"]["python_version"]:
+        raise RuntimeError(
+            "Pinned Windows native dependency interpreter version changed"
+        )
+    base = Path(identity["base"])
+    dlls = {
+        n.attrib["dest_path"]: n.attrib
+        for n in ET.parse(report).getroot().iter("included_dll")
+    }
+    receipt = {"source": native["source"], "interpreter": identity, "files": []}
+    for leaf in native["selected_files"]:
+        upstream = base / safe_relative(leaf["upstream_path"])
+        original = checked_bytes(upstream.read_bytes(), leaf)
+        if leaf["kind"] == "native-dependency":
+            name = leaf["upstream_path"]
+            node = dlls.get(name)
+            if (
+                not node
+                or node.get("source_path", "").replace("\\", "/")
+                != "${sys.real_prefix}/" + name
+                or node.get("ignored") != "no"
+            ):
+                raise RuntimeError(
+                    f"Nuitka did not select the pinned interpreter DLL: {name}"
+                )
+            selected = (bundle / "sidecar" / name).read_bytes()
+            pe_imports(selected)
+            if not signed:
+                checked_bytes(selected, leaf)
+            data = selected
+        else:
+            data = original
+        target = bundle / leaf["runtime_path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        receipt["files"].append(
+            {
+                "path": leaf["runtime_path"],
+                "source": str(upstream),
+                "source_sha256": leaf["sha256"],
+                "final_sha256": sha256(data),
+            }
+        )
+    write_json(evidence / "windows-native-inputs.json", receipt)
+
+
+def native_sbom(files: list[dict], lock: dict) -> tuple[list[dict], list[dict]]:
+    native = lock.get("windows_native")
+    if not native:
+        return [], []
+    inventory = {f["path"]: f for f in files}
+    ref = "byo-windows:msvc-runtime"
+    refs = []
+    components = [
+        {
+            "type": "library",
+            "bom-ref": ref,
+            "name": native["name"],
+            "version": native["version"],
+            "licenses": [
+                {
+                    "license": {
+                        "name": "Microsoft Distributable Code; conditions recorded in CPython Windows binary notice"
+                    }
+                }
+            ],
+            "properties": [
+                {
+                    "name": "byo:windows:source",
+                    "value": json.dumps(native["source"], sort_keys=True),
+                },
+                {"name": "byo:windows:license-notice", "value": native["license"]},
+                {
+                    "name": "byo:windows:distribution-review",
+                    "value": native["distribution_review"],
+                },
+            ],
+        }
+    ]
+    for leaf in native["selected_files"]:
+        path = leaf["runtime_path"]
+        if path not in inventory:
+            raise RuntimeError(f"Missing pinned Windows native inventory: {path}")
+        file_ref = "byo-windows:file:" + path
+        refs.append(file_ref)
+        components.append(
+            {
+                "type": "file",
+                "bom-ref": file_ref,
+                "name": path,
+                "hashes": [{"alg": "SHA-256", "content": inventory[path]["sha256"]}],
+                "properties": [
+                    {"name": "byo:windows:owner", "value": ref},
+                    {
+                        "name": "byo:windows:upstream",
+                        "value": "${sys.real_prefix}/" + leaf["upstream_path"],
+                    },
+                ],
+            }
+        )
+    return components, [{"ref": ref, "dependsOn": refs}]
+
+
+def validate_windows_native(
+    files: list[dict], read_bytes, sbom: dict, unsigned: bool
+) -> None:
+    lock = load_lock()
+    native = lock.get("windows_native")
+    if not native:
+        return
+    inventory = {f["path"]: f for f in files}
+    for leaf in native["selected_files"]:
+        path = leaf["runtime_path"]
+        entry = inventory.get(path)
+        if not entry or (entry["kind"], entry["executable"]) != (leaf["kind"], False):
+            raise RuntimeError(
+                f"Missing or misclassified Windows native dependency: {path}"
+            )
+        if unsigned or leaf["kind"] == "license":
+            checked_bytes(read_bytes(path), leaf)
+    components, dependencies = native_sbom(files, lock)
+    actual = {c.get("bom-ref"): c for c in sbom.get("components", [])}
+    for expected in components:
+        if actual.get(expected["bom-ref"]) != expected:
+            raise RuntimeError("Windows native source/license/hash SBOM mismatch")
+    if any(d not in sbom.get("dependencies", []) for d in dependencies):
+        raise RuntimeError("Windows native dependency SBOM ownership mismatch")
 
 
 def sbom_components(

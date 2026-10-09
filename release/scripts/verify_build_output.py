@@ -249,6 +249,12 @@ def validate_windows_payload(manifest: dict, read_bytes) -> None:
     analysis_tools.validate_analysis(
         manifest["files"], read_bytes, json.loads(read_bytes("sbom.cdx.json")), lock
     )
+    analysis_tools.validate_windows_native(
+        manifest["files"],
+        read_bytes,
+        json.loads(read_bytes("sbom.cdx.json")),
+        manifest.get("development_unsigned") is True,
+    )
     if manifest.get("development_unsigned") is True:
         program = lock["programs"]["clangd"]
         executable = next(

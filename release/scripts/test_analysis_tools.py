@@ -75,6 +75,10 @@ def fixture() -> tuple[dict, dict[str, bytes], list[dict], dict]:
         program["selected_files"] = selected
         data[program["executable"]] = pe()
     data["analysis/runtime.json"] = json.dumps(tools.mapping(lock)).encode()
+    for leaf in lock.get("windows_native", {}).get("selected_files", []):
+        value = pe() if leaf["kind"] == "native-dependency" else b"test Windows notice"
+        leaf.update(size=len(value), sha256=tools.sha256(value))
+        data[leaf["runtime_path"]] = value
     files = [
         {
             "path": path,
@@ -86,6 +90,9 @@ def fixture() -> tuple[dict, dict[str, bytes], list[dict], dict]:
         for path, value in sorted(data.items())
     ]
     components, dependencies = tools.sbom_components(lock, files, {})
+    native_components, native_dependencies = tools.native_sbom(files, lock)
+    components.extend(native_components)
+    dependencies.extend(native_dependencies)
     return lock, data, files, {"components": components, "dependencies": dependencies}
 
 
@@ -217,6 +224,30 @@ class WindowsAnalysisTests(unittest.TestCase):
     def test_mapping_inventory_and_sbom_agree(self):
         lock, data, files, sbom = fixture()
         tools.validate_analysis(files, data.__getitem__, sbom, lock)
+
+    def test_windows_native_missing_modified_or_unowned_dependencies_block(self):
+        lock, data, files, sbom = fixture()
+        with mock.patch.object(tools, "load_lock", return_value=lock):
+            tools.validate_windows_native(files, data.__getitem__, sbom, True)
+            with self.assertRaisesRegex(RuntimeError, "Missing or misclassified"):
+                tools.validate_windows_native(
+                    [f for f in files if f["path"] != "vcruntime140.dll"],
+                    data.__getitem__,
+                    sbom,
+                    True,
+                )
+            changed = dict(data)
+            changed["vcruntime140.dll"] += b"changed"
+            with self.assertRaisesRegex(RuntimeError, "Pinned upstream bytes changed"):
+                tools.validate_windows_native(files, changed.__getitem__, sbom, True)
+            unowned = copy.deepcopy(sbom)
+            unowned["dependencies"] = [
+                d
+                for d in unowned["dependencies"]
+                if d["ref"] != "byo-windows:msvc-runtime"
+            ]
+            with self.assertRaisesRegex(RuntimeError, "ownership mismatch"):
+                tools.validate_windows_native(files, data.__getitem__, unowned, True)
 
     def test_modified_resource_rejected_even_with_rehashed_inventory(self):
         lock, data, files, sbom = fixture()

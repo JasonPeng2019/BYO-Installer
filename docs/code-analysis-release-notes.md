@@ -213,3 +213,14 @@ PE images, ordinary/delay imports and symbols, or installed and clean-host proof
 The first native attempt compiled and linked the server but stopped at the
 missing Dependency Walker prompt; no download occurred. That failed standalone
 output is not an accepted sidecar and cannot be reused as a successful build.
+
+The native launcher imports `vcruntime140.dll`; its copy belongs beside
+`byo.exe`. The sidecar also requires that DLL and `vcruntime140_1.dll`. Their
+observed CPython 3.12.13 Windows interpreter bytes, sizes, version 14.44.35211.0,
+Nuitka selection provenance and Windows license notice are pinned in the tool
+lock and represented in the SBOM and payload inventory. The builder checks the
+declared interpreter bytes and report before staging, and never obtains a
+redistributable from PATH or assumes that a System32 installation is present.
+The preserved CPython Windows binary notice includes Microsoft Distributable
+Code conditions. Final distribution review remains required; the notice and
+local provenance do not establish compliance or clean-host behavior.
