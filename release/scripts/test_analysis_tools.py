@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import struct
+import subprocess
+import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from unittest import mock
 
 import analysis_tools as tools
 
@@ -85,6 +90,106 @@ def fixture() -> tuple[dict, dict[str, bytes], list[dict], dict]:
 
 
 class WindowsAnalysisTests(unittest.TestCase):
+    @unittest.skipUnless(tools.os.name == "nt", "native Windows staging")
+    def test_stage_copies_pinned_archive_data_before_source_cleanup(self):
+        lock, data, _, _ = fixture()
+        recipe = lock["programs"]["cppcheck"]["recipe"]
+        patch = (tools.ROOT / recipe["patch"]).read_bytes()
+        # Supply the real patch context in a small local archive. Only native
+        # compilation is stubbed; Git, extraction, byte checks and staging run.
+        options = b"\n" * 204 + b"".join(
+            line[1:]
+            for line in patch.splitlines(keepends=True)[3:]
+            if line[:1] in (b" ", b"-")
+        )
+        patched = options.replace(
+            b"    add_compile_options($<$<NOT:$<CONFIG:Debug>>:/MD>) # Runtime Library - Multi-threaded DLL\n",
+            b"",
+        ).replace(
+            b"    add_compile_options($<$<CONFIG:Debug>:/MDd>) # Runtime Library - Multi-threaded Debug DLL\n",
+            b"",
+        )
+        recipe["upstream_compileroptions_sha256"] = tools.sha256(options)
+        recipe["patched_compileroptions_sha256"] = tools.sha256(patched)
+        run_native = subprocess.run
+        staged_sources = []
+        with tempfile.TemporaryDirectory(prefix="byo-stage-test-") as temporary:
+            root = Path(temporary)
+            for field in ("patch", "utf8_manifest"):
+                target = root / recipe[field]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((tools.ROOT / recipe[field]).read_bytes())
+            cpp = lock["programs"]["cppcheck"]
+            archive = root / cpp["source"]["archive"]
+            with tarfile.open(archive, "w:gz") as handle:
+                members = {
+                    cpp["source"]["archive_prefix"]
+                    + "cmake/compileroptions.cmake": options,
+                    **{
+                        f["upstream_path"]: data[f["runtime_path"]]
+                        for f in cpp["selected_files"]
+                    },
+                }
+                for name, value in members.items():
+                    member = tarfile.TarInfo(name)
+                    member.size = len(value)
+                    handle.addfile(member, io.BytesIO(value))
+            cpp["source"]["sha256"] = tools.sha256(archive.read_bytes())
+            clang = lock["programs"]["clangd"]
+            archive = root / clang["source"]["archive"]
+            with zipfile.ZipFile(archive, "w") as handle:
+                for leaf in clang["selected_files"]:
+                    handle.writestr(leaf["upstream_path"], data[leaf["runtime_path"]])
+            clang["source"]["sha256"] = tools.sha256(archive.read_bytes())
+            cmake = root / "cmake.exe"
+            cmake.write_bytes(b"test native compiler identity")
+
+            def run(argv, **kwargs):
+                if argv[0] == "git":
+                    return run_native(argv, **kwargs)
+                if "-S" in argv:
+                    staged_sources.append(Path(argv[argv.index("-S") + 1]))
+                elif "--build" in argv:
+                    build = Path(argv[argv.index("--build") + 1])
+                    output = build / recipe["output"]
+                    output.parent.mkdir(parents=True)
+                    output.write_bytes(pe())
+                    compiler = build / "CMakeFiles/test/CMakeCXXCompiler.cmake"
+                    compiler.parent.mkdir(parents=True)
+                    compiler.write_text(
+                        'set(CMAKE_CXX_COMPILER_VERSION "test")\nset(CMAKE_CXX_COMPILER_ID "MSVC")\nset(CMAKE_CXX_COMPILER_ARCHITECTURE_ID x64)\n'
+                    )
+                    (build / "CMakeCache.txt").write_text(
+                        f"CMAKE_LINKER:FILEPATH={cmake}\n"
+                    )
+                    (build / "cppcheck.vcxproj").write_text(
+                        '<Project xmlns="urn:test"><WindowsTargetPlatformVersion>test</WindowsTargetPlatformVersion><PlatformToolset>v143</PlatformToolset></Project>'
+                    )
+                return subprocess.CompletedProcess(argv, 0, stdout="test linker\n")
+
+            bundle = root / "bundle"
+            with (
+                mock.patch.object(tools, "ROOT", root),
+                mock.patch.object(tools, "load_lock", return_value=lock),
+                mock.patch.object(
+                    tools.subprocess, "check_output", return_value="test CMake\n"
+                ),
+                mock.patch.object(tools.subprocess, "run", side_effect=run),
+            ):
+                tools.stage_windows(bundle, root, root / "evidence", cmake)
+            self.assertTrue(staged_sources)
+            self.assertFalse(staged_sources[0].exists())
+            for name in ("cppcheck", "clangd"):
+                for leaf in lock["programs"][name]["selected_files"]:
+                    self.assertEqual(
+                        (bundle / leaf["runtime_path"]).read_bytes(),
+                        data[leaf["runtime_path"]],
+                    )
+            self.assertEqual(
+                json.loads((bundle / "analysis/runtime.json").read_bytes()),
+                tools.mapping(lock),
+            )
+
     def test_pinned_selection_counts_and_portable_recipe(self):
         lock = tools.load_lock()
         cpp = lock["programs"]["cppcheck"]["selected_files"]
@@ -229,7 +334,12 @@ class WindowsAnalysisTests(unittest.TestCase):
             )
 
     def test_installed_vc_redist_is_not_a_windows_os_module(self):
-        for name in ("vcruntime140.dll", "msvcp140.dll", "concrt140.dll", "msvcr120.dll"):
+        for name in (
+            "vcruntime140.dll",
+            "msvcp140.dll",
+            "concrt140.dll",
+            "msvcr120.dll",
+        ):
             with self.assertRaisesRegex(RuntimeError, "Redistributable dependency"):
                 tools.system_module(name, [])
 
