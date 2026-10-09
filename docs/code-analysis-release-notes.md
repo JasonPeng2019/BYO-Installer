@@ -183,12 +183,20 @@ installation is performed. Cppcheck is rebuilt from its source archive and exact
 patch; clangd is selected from its official pinned archive. Install the build
 toolchain separately before running the recipe.
 
-Use a clean, detached `AgentWorkspace` checkout at
-`2889c2fdbd77a56f33095ff21f03d78dc1317d03` and `Firmware MCP New` checkout at
-`d9a1bc4a1aaf629f1442c83245f4e382a6806beb`. The installer/server version equality
-check is intentional. Build with an existing Python environment containing the
-server lock's dependencies and Nuitka 2.8.9; the builder compiles the checked-out
-server source using that environment.
+Use clean, detached `AgentWorkspace` and `Firmware MCP New` checkouts at the exact
+commits in [`release/source-lock.json`](../release/source-lock.json). Read the
+current pins before preparing those checkouts; that lock is authoritative for
+each build. From the installer checkout:
+
+```powershell
+$sourceLock = Get-Content -LiteralPath release/source-lock.json -Raw | ConvertFrom-Json
+$sourceLock.agent_workspace.commit  # AgentWorkspace
+$sourceLock.firmware_mcp.commit     # Firmware MCP New
+```
+
+The installer/server version equality check is intentional. Build with an existing
+Python environment containing the server lock's dependencies and Nuitka 2.8.9;
+the builder compiles the checked-out server source using that environment.
 
 The Windows builder checks both imported source identity/version and installed
 `pyocd-debug-mcp` distribution metadata before compiling. Nuitka can fold a
@@ -207,12 +215,19 @@ runs the compiled sidecar self-test; provisioning alone does not establish a pas
 $env:CARGO_NET_OFFLINE = 'true'
 $env:CARGO_TARGET_DIR = 'C:/build/byo-cargo'
 python release/scripts/build_release.py `
+  --output release/dist `
   --build-dir C:/build/byo-release `
   --python C:/build/python-environment/Scripts/python.exe `
   --analysis-input-dir C:/build/pinned-analysis-archives
 python release/scripts/verify_build_output.py `
   --dist release/dist --expected-target windows-x86_64 --archive-type zip
 ```
+
+Run this recipe from the installer checkout. `--output` accepts relative and
+absolute destinations; relative paths resolve from your current working directory.
+Omitting it defaults to `release/dist` under the installer checkout. The builder
+resolves the destination before supplying the sidecar self-test's absolute runtime
+root. Use the same destination for the verifier's `--dist` option.
 
 Choose owned scratch directories and a short path: native MSVC link steps can
 fail with `LNK1104` when generated outputs are placed under a deeply nested

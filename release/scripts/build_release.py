@@ -928,6 +928,7 @@ def main() -> int:
         / ("Scripts/python.exe" if os.name == "nt" else "bin/python"),
     )
     args = parser.parse_args()
+    args.output = args.output.resolve()
     args.version = release_version(args.version)
     if platform.system() == "Windows" and (
         architecture() != "x86_64" or args.analysis_input_dir is None
