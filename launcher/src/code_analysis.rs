@@ -138,11 +138,17 @@ fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 fn native(path: &Path) -> String {
-    let text = path.to_string_lossy();
+    // Verbatim Windows paths do not normalize forward slashes, including those
+    // preserved by Path::join. Normalize before adding or retaining the prefix.
+    let text = path.to_string_lossy().replace('/', r"\");
     if text.encode_utf16().count() >= 260 && !text.starts_with(r"\\?\") {
-        format!(r"\\?\{text}")
+        if let Some(rest) = text.strip_prefix(r"\\") {
+            format!(r"\\?\UNC\{rest}")
+        } else {
+            format!(r"\\?\{text}")
+        }
     } else {
-        text.into_owned()
+        text
     }
 }
 fn read(path: &Path, budget: &Budget) -> Result<Vec<u8>> {
@@ -746,7 +752,10 @@ pub(crate) fn render_analysis(result: &Value) -> String {
             result["message"], result["remedy"]
         ));
     }
-    lines.push(format!("Evidence: {}", result["report_directory"]));
+    lines.push(format!(
+        "Evidence: {}",
+        result["report_directory"].as_str().unwrap_or("unavailable")
+    ));
     lines.join("\n")
 }
 
@@ -758,6 +767,35 @@ mod owner_tests {
 
     fn fixtures() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code-analysis")
+    }
+
+    #[test]
+    fn native_long_joined_file_arguments_are_readable() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-ri-native-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        let directory = root.join("x".repeat(240));
+        let path = directory.join("config/platform.xml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"native file argument").unwrap();
+        assert!(path.as_os_str().len() >= 260);
+        let prefixed = PathBuf::from(format!(r"\\?\{}", path.display()));
+        for input in [&path, &prefixed] {
+            let argument = native(input);
+            assert!(argument.starts_with(r"\\?\"));
+            assert_eq!(fs::read(argument).unwrap(), b"native file argument");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_long_unc_file_arguments_preserve_the_share() {
+        let path = PathBuf::from(format!(r"\\server\share\{}/platform.xml", "x".repeat(240)));
+        assert_eq!(
+            native(&path),
+            format!(r"\\?\UNC\server\share\{}\platform.xml", "x".repeat(240))
+        );
     }
 
     #[test]
