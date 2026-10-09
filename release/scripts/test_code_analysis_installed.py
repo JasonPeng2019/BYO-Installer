@@ -2201,12 +2201,16 @@ def main() -> int:
             try:
                 semantic_queries(server, runtime, env, full=True)
             finally:
-                server.close()
+                # Idle EOF cleanup is observed and recorded even after a RED query.
+                if evidence.gate("stdio-idle-eof-cleanup", server.close):
+                    evidence.report["gates"]["stdio-idle-eof-cleanup"]["evidence"] = (
+                        str(server.path)
+                    )
+            require(
+                evidence.report["gates"]["stdio-idle-eof-cleanup"]["status"] == "PASS",
+                f"stdio EOF cleanup failed; {server.path}",
+            )
             assert_preserved(semantic, before)
-            evidence.report["gates"]["stdio-idle-eof-cleanup"] = {
-                "status": "PASS",
-                "evidence": str(server.path),
-            }
 
         evidence.gate("mcp-no-board", mcp_no_board)
         evidence.gate(
@@ -2236,9 +2240,11 @@ def main() -> int:
         # Move the entire installed home after all servers have exited. Project
         # integrations are refreshed through their public update route.
         relocated_home = lab / "moved installed home 测试 µ"
+        relocated_runners = False
 
         def relocate():
             nonlocal home, env, byo, runtime, rust_command, python_env
+            nonlocal relocated_runners
             home.rename(relocated_home)
             home = relocated_home
             env = isolated_environment(home, lab)
@@ -2295,13 +2301,16 @@ def main() -> int:
                 3,
                 "all",
             )
+            relocated_runners = True
             server = Mcp(evidence, byo, semantic, env, version, "relocated")
             try:
                 semantic_queries(server, runtime, env, full=False)
             finally:
                 server.close()
 
-        if not evidence.gate("relocation", relocate):
+        # A RED relocated MCP query keeps relocation RED, but once the moved home
+        # and both runners passed, update and uninstall still have a valid start.
+        if not evidence.gate("relocation", relocate) and not relocated_runners:
             raise Halt()
 
         def update():
