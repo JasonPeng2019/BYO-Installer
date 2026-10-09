@@ -251,7 +251,7 @@ def stage_windows(
             "CMAKE_CXX_COMPILER_ID",
             "CMAKE_CXX_COMPILER_ARCHITECTURE_ID",
         ):
-            match = re.search(r"set\(" + field + r' "([^"]+)"\)', compiler_text)
+            match = re.search(r"set\(" + field + r'\s+"?([^"\s)]+)"?\)', compiler_text)
             if not match:
                 raise RuntimeError(f"CMake did not record {field}")
             provenance[field] = match[1]
