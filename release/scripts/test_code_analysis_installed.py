@@ -7,6 +7,7 @@ analysis mapping/programs is RED; absence of the bundle itself is SETUP_FAILURE)
 
   python release/scripts/test_code_analysis_installed.py --archive-only \
     --archive C:/inputs/byo.zip --archive-sha256 <64 hex> \
+    --cppcheck-sha256 <independently established raw candidate SHA256> \
     --bundle C:/inputs/byo --evidence C:/evidence/initial-red
 
 Later run against the exact final ZIP AND matching expanded bundle, adding:
@@ -33,18 +34,28 @@ compiled guidance/modes, not a public Python verify entrypoint. No private conte
 injection or guessed sidecar helper is used. This comparison does not claim that
 Python source scripts are shipped in the installed capsule.
 
-Availability input schema: {"schema":"installed-analysis-availability/v1",
-"cases":[{"state":"setup_lite","profile":"professional","root":"...",
-"files":{".firm/...":{"sha256":"...","size":123}},
-"witness":{"tool":"get_capabilities","arguments":{...},
-"state_pointer":"/some/public/tier", "profile_pointer":"/some/public/profile",
-"equals":{"/some/public/tier":"setup-lite","/some/public/profile":"professional"}}}]}. Supply ALL twelve
-state/profile pairs: no_board, no_setup, setup_lite, setup_full,
-revoked_unvalidated, corrupt_policy x personal, professional. Files are existing
-passive policy/profile fixtures, copied without internal APIs. The public witness
-must demonstrate the actual state/profile; labels alone earn no credit. This test
-does not create policies, unlock a board, probe hardware, or fake an MCP backend.
-Missing cases/witnesses are pending gates and exit nonzero, never skipped credit.
+Availability input schema: {"schema":"installed-analysis-availability/v2",
+"cases":[{"state":"setup_lite","profile":"personal","board_id":"existing_board",
+"root":"...", "files":{".firm/...":{"sha256":"...","size":123}}}]}.
+Existing passive policy/profile files are copied without internal APIs. Separate
+public server_health_check and get_capabilities(board_id) calls observe profile
+(narrative_logging enabled/not_built) and tier. --installed-profile selects the
+expected COMPILED archive profile; it cannot change it. A professional invocation
+requires a separately compiled professional archive, never labels/private mocks.
+All twelve state/profile pairs are reported individually; missing cases stay
+pending while supplied cases run. Without fixture inputs, the fresh no-board case
+runs for this archive profile. Revoked/unvalidated remains pending without an
+additional public revocation witness. Source unit/contract profile checks are
+separate evidence. No policy creation, board unlock, probing or fake MCP backend.
+
+--cppcheck-sha256 is mandatory, including archive-only preparation. Establish it
+independently before inspecting the bundle (e.g. reviewed build-byte receipt or
+independent rebuild comparison). ZIP, expanded bytes, inventory, mapping and
+both public runners are checked against it. A manifest claim is not an oracle.
+The genuine second-version bundle needs --update-cppcheck-sha256 as its own
+independent raw digest plus --update-manifest-sha256; it must not reuse the first
+digest by assumption. --validator-contract-checks exercises validator negatives
+with private mutations, returning 3 on success because installed gates are pending.
 
 Dependencies: native Windows AMD64, Python >=3.11 (stdlib only), existing cached
 rustc/MSVC link environment for the *build-control* fixture, PowerShell for owned
@@ -95,11 +106,8 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures/code-analysis-installed"
 CPP_INPUT_SHA = "e8f71939bafaba468ac299a3995e30ddf05c82365176a2f7c82365f55b57b4d3"
-# Final 0.1.8 artifact rebuilt by the accepted lock recipe (/pathmap, /PDBALTPATH),
-# not the earlier probe input. The MSVC link is not bit-reproducible: an
-# independent rebuild from the same pins differed only in COFF/debug timestamps,
-# CheckSum and the CodeView GUID, and matched after zeroing exactly those fields.
-CPP_EXE_SHA = "3bc2924b33d707644b7b80c2d619907f3b7517a17c8c62120a0cfae212df0f13"
+# MSVC rebuilds vary in PE timestamp/checksum/CodeView bytes. The caller must
+# supply an independently established raw candidate digest, never a bundle claim.
 CLANG_EXE_SHA = "dbd52c13d21ef9d284f4f0627efe76c81adf2fe0998f230127f554a54fc9dde7"
 CLANG_INPUT_SHA = "4b6a35d3950b05b2708021da3f2f78ea29cab0922a35cda07a5229af733191b2"
 ARM_INPUT_SHA = "ab3a5ea27dd222b753def82b36066c1e803c8eec76d0b2947f2d61e893ed6291"
@@ -224,6 +232,84 @@ def verify_file(path: Path, record: dict, *, product: bool = False) -> None:
         raise error(f"required regular file missing: {path}")
     if file_record(path) != {"sha256": record["sha256"], "size": record["size"]}:
         raise error(f"size/SHA256 mismatch: {path}")
+
+
+def expected_digest(value: str | None, option: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(c not in "0123456789abcdefABCDEF" for c in value)
+    ):
+        raise Setup(
+            f"{option} requires an explicit independent 64-hex executable digest"
+        )
+    return value.lower()
+
+
+def program_identity(
+    bundle: Path, inventory: dict, mapping: dict, expected: str
+) -> None:
+    """Bind the declared location, inventoried identity and bytes to the oracle."""
+    expected = expected_digest(expected, "--cppcheck-sha256")
+    expected_mapping = {
+        "schema_version": 1,
+        "platform": "windows",
+        "architecture": "x86_64",
+        "programs": {
+            "cppcheck": {
+                "executable": "analysis/cppcheck/cppcheck.exe",
+                "version": "2.22.0",
+                "cfg_dir": "analysis/cppcheck/cfg",
+                "platforms_dir": "analysis/cppcheck/platforms",
+                "dependencies": [],
+                "sbom_ref": "byo-analysis:cppcheck",
+                "licenses": [
+                    f"analysis/cppcheck/licenses/{name}"
+                    for name in (
+                        "COPYING",
+                        "picojson-LICENSE",
+                        "simplecpp-LICENSE",
+                        "tinyxml2-LICENSE",
+                    )
+                ],
+            },
+            "clangd": {
+                "executable": "analysis/clangd/bin/clangd.exe",
+                "version": "23.1.0",
+                "resource_dir": "analysis/clangd/lib/clang/23",
+                "dependencies": [],
+                "licenses": ["analysis/clangd/LICENSE.TXT"],
+                "sbom_ref": "byo-analysis:clangd",
+            },
+        },
+    }
+    require(
+        mapping == expected_mapping,
+        "analysis mapping differs from the accepted pinned layout",
+    )
+    for name, relative, version, sha in (
+        ("cppcheck", "analysis/cppcheck/cppcheck.exe", "2.22.0", expected),
+        ("clangd", "analysis/clangd/bin/clangd.exe", "23.1.0", CLANG_EXE_SHA),
+    ):
+        record = mapping["programs"][name]
+        require(
+            record["executable"] == relative and record["version"] == version,
+            f"{name} mapping path/version differs from the accepted contract",
+        )
+        require(relative in inventory, f"manifest lacks {name} executable")
+        require(
+            inventory[relative].get("kind") == "analysis-executable"
+            and inventory[relative].get("executable") is True,
+            f"manifest {name} executable classification changed",
+        )
+        require(
+            inventory[relative]["sha256"] == sha,
+            f"manifest {name} SHA256 differs from independent identity",
+        )
+        verify_file(below(bundle, relative), inventory[relative], product=True)
+        require(
+            digest(below(bundle, relative)) == sha, f"unpinned {name} binary shipped"
+        )
 
 
 class WindowsProcesses:
@@ -425,6 +511,14 @@ class Evidence:
             "invocation": sys.argv,
             "script": file_record(Path(__file__)),
             "gates": {g: {"status": "PENDING"} for g in GATES},
+            "availability_cases": {
+                f"{state}-{profile}": {
+                    "status": "PENDING",
+                    "reason": "not exercised against this installed archive",
+                }
+                for state in STATES
+                for profile in ("personal", "professional")
+            },
             "installed_acceptance": False,
             "limitations": [
                 "Preparation is not final independent installed acceptance.",
@@ -609,6 +703,8 @@ class Evidence:
 
 
 def archive_gate(args, evidence: Evidence) -> dict:
+    expected_cppcheck = expected_digest(args.cppcheck_sha256, "--cppcheck-sha256")
+    evidence.report["expected_cppcheck_sha256"] = expected_cppcheck
     if not args.archive.is_file() or not args.bundle.is_dir():
         raise Setup(
             "actual built ZIP and expanded bundle are required; source staging is not a bundle"
@@ -681,12 +777,9 @@ def archive_gate(args, evidence: Evidence) -> dict:
         and mapping.get("architecture") == "x86_64",
         "analysis mapping target/schema invalid",
     )
-    for program, sha in (("cppcheck", CPP_EXE_SHA), ("clangd", CLANG_EXE_SHA)):
+    program_identity(args.bundle, inventory, mapping, expected_cppcheck)
+    for program in ("cppcheck", "clangd"):
         record = mapping["programs"][program]
-        require(
-            digest(below(args.bundle, record["executable"])) == sha,
-            f"unpinned {program} binary shipped",
-        )
         require(record["licenses"], f"{program} has no license inventory")
         for relative in [*record["licenses"], *record["dependencies"]]:
             require(
@@ -1047,9 +1140,13 @@ def report_once(
     process_exit: int | None,
     count: int | None,
     kind: str | None,
-    cppcheck_sha256: str = CPP_EXE_SHA,
+    cppcheck_sha256: str | None = None,
     failure_exit: int = 1,
 ) -> dict:
+    cppcheck_sha256 = expected_digest(
+        cppcheck_sha256 or evidence.report.get("expected_cppcheck_sha256"),
+        "runner expected Cppcheck identity",
+    )
     reports = project / ".firm/code-analysis/reports"
     before = set(reports.glob("*/result.json"))
     outcome = evidence.run(
@@ -1789,6 +1886,73 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
     server.record_child_argv(env)
 
 
+def check_availability_witnesses(case: dict, health: dict, capabilities: dict) -> None:
+    """Check real public values, including states that are not tier names."""
+    expected_profile = {"personal": "enabled", "professional": "not_built"}[
+        case["profile"]
+    ]
+    require(
+        health.get("narrative_logging") == expected_profile,
+        f"compiled profile witness mismatch: narrative_logging={health.get('narrative_logging')!r}",
+    )
+    tiers = {
+        "no_board": "no-setup",
+        "no_setup": "no-setup",
+        "setup_lite": "setup-lite",
+        "setup_full": "setup-full",
+        "revoked_unvalidated": "no-setup",
+        "corrupt_policy": None,
+    }
+    require(
+        capabilities.get("tier") == tiers[case["state"]],
+        f"public tier witness mismatch: {capabilities.get('tier')!r}",
+    )
+    require(
+        capabilities.get("board_id") == case["board_id"],
+        "public witness names a different board",
+    )
+    if case["state"] == "corrupt_policy":
+        require(
+            capabilities.get("policy_status") == "corrupt",
+            "corrupt policy was not observed",
+        )
+    if case["state"] == "revoked_unvalidated":
+        require(
+            capabilities.get("setup_incomplete") is True,
+            "revoked/unvalidated setup was not observed",
+        )
+        # A tier response alone cannot prove the attachment revocation facts.
+        raise Pending(
+            "revoked attachment identity needs an additional public witness; no tier-only installed credit"
+        )
+
+
+def check_passive_case(case: dict) -> None:
+    board = case.get("board_id")
+    if (
+        not isinstance(board, str)
+        or not 1 <= len(board) <= 64
+        or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in board)
+    ):
+        raise Setup("availability board_id must be a real safe board identifier")
+    files = case.get("files")
+    if not isinstance(files, dict) or any(not p.startswith(".firm/") for p in files):
+        raise Setup("availability inputs must contain only passive .firm fixture files")
+    if case["state"] == "no_board":
+        if files:
+            raise Setup("no-board case cannot contain board/policy fixtures")
+    elif not any(
+        p in files
+        for p in (
+            f".firm/capabilities/{board}/current.json",
+            *(f".firm/boards/{board}{suffix}" for suffix in (".json", ".yaml", ".yml")),
+        )
+    ):
+        raise Pending(
+            "named board needs its actual hash-bound passive policy/profile, not unrelated fixture files"
+        )
+
+
 def availability_gate(
     args,
     evidence: Evidence,
@@ -1799,103 +1963,135 @@ def availability_gate(
     runtime: Path,
     version: str,
 ) -> None:
+    results = evidence.report["availability_cases"]
     if args.availability_inputs is None or args.availability_sha256 is None:
-        raise Pending(
-            "all safety tiers/profiles require immutable passive fixtures and PUBLIC state/profile witnesses; no private test seams allowed"
+        # A fresh public server with no policy/board fixture is real no-board
+        # evidence. Other pairs remain pending, without preventing this call.
+        cases = [
+            {
+                "state": "no_board",
+                "profile": args.installed_profile,
+                "board_id": "installed_no_board",
+                "files": {},
+            }
+        ]
+    else:
+        if digest(args.availability_inputs) != args.availability_sha256:
+            raise Setup("availability input manifest differs from explicit digest")
+        inputs = read_json(args.availability_inputs)
+        if inputs.get("schema") != "installed-analysis-availability/v2":
+            raise Setup(
+                "use availability/v2 with a board_id and separate public witnesses"
+            )
+        cases = inputs["cases"]
+        evidence.report["availability_inputs"] = file_record(args.availability_inputs)
+        evidence.report["read_only_inputs"][str(args.availability_inputs)] = (
+            file_record(args.availability_inputs)
         )
-    if digest(args.availability_inputs) != args.availability_sha256:
-        raise Setup("availability input manifest differs from explicit digest")
-    inputs = read_json(args.availability_inputs)
-    if inputs.get("schema") != "installed-analysis-availability/v1":
-        raise Setup("unsupported availability input schema")
-    cases = inputs["cases"]
-    needed = {
-        (state, profile) for state in STATES for profile in ("personal", "professional")
-    }
-    actual = {(c["state"], c["profile"]) for c in cases}
-    if actual != needed or len(cases) != len(needed):
-        raise Pending(
-            f"required state/profile pairs missing or duplicated: {sorted(needed - actual)}"
-        )
+    actual = [(c["state"], c["profile"]) for c in cases]
+    if len(set(actual)) != len(actual) or any(
+        f"{s}-{p}" not in results for s, p in actual
+    ):
+        raise Setup("unknown or duplicate state/profile availability cases")
     for case in cases:
         label = f"{case['state']}-{case['profile']}"
-        project = lab / f"availability {label} µ"
-        shutil.copytree(
-            base_project,
-            project,
-            ignore=shutil.ignore_patterns(
-                ".firm",
-                ".agent-workspace",
-                ".generated",
-                ".agents",
-                ".claude",
-                ".codex",
-                ".mcp.json",
-                "AGENTS.md",
-                "CLAUDE.md",
-            ),
-        )
-        # Relocate every compile command explicitly into the private project.
-        commands = read_json(project / "build/compile_commands.json")
-        for command in commands:
-            command["directory"] = str(project)
-            command["file"] = str(project / "src" / Path(command["file"]).name)
-        write_json(project / "build/compile_commands.json", commands)
-        evidence.run(
-            f"init-{label}", [str(byo), "init", "--project", str(project)], env, lab
-        )
-        for relative, record in case["files"].items():
-            source = below(Path(case["root"]), relative)
-            verify_file(source, record)
-            target = below(project, relative)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
-        witness = case.get("witness", {})
-        if witness.get("tool") not in {
-            "get_capabilities",
-            "get_server_info",
-            "get_code_analysis_status",
-        } or not witness.get("equals"):
-            raise Pending(f"{label} lacks a passive PUBLIC state/profile witness")
-        equals = witness["equals"]
-        state_pointer, profile_pointer = (
-            witness.get("state_pointer"),
-            witness.get("profile_pointer"),
-        )
-        if (
-            state_pointer not in equals
-            or profile_pointer not in equals
-            or equals[profile_pointer] != case["profile"]
-            or str(equals[state_pointer]).replace("-", "_") != case["state"]
-        ):
-            raise Pending(
-                f"{label} public witness must explicitly identify both the actual state and monitoring profile"
+        if case["profile"] != args.installed_profile:
+            results[label]["reason"] = (
+                "requires a separate compiled archive and invocation for this profile"
             )
-        protected = {p: file_record(below(project, p)) for p in case["files"]}
-        server = Mcp(evidence, byo, project, env, version, label)
+            continue
         try:
-            observed = server.tool(
-                witness["tool"], witness.get("arguments", {}), analysis=False
+            availability_case(
+                case, evidence, lab, base_project, byo, env, runtime, version
             )
-            for pointer, expected in witness["equals"].items():
-                require(pointer.startswith("/"), "witness pointer must be JSON pointer")
-                value = observed
-                for part in pointer[1:].split("/"):
-                    key = part.replace("~1", "/").replace("~0", "~")
-                    value = value[int(key)] if isinstance(value, list) else value[key]
-                require(
-                    value == expected,
-                    f"{label} public state/profile witness mismatch: {pointer}={value!r}",
-                )
-            semantic_queries(server, runtime, env, full=False)
-        finally:
-            server.close()
-        for relative, record in protected.items():
-            verify_file(below(project, relative), record, product=True)
+        except (Red, Setup, Pending, KeyError, TypeError, ValueError) as exc:
+            results[label] = {
+                "status": "PENDING"
+                if isinstance(exc, Pending)
+                else "SETUP_FAILURE"
+                if isinstance(exc, Setup)
+                else "RED",
+                "reason": str(exc),
+            }
+        else:
+            results[label] = {
+                "status": "PASS",
+                "evidence": str(evidence.root / f"availability-{label}.json"),
+            }
+    statuses = [r["status"] for r in results.values()]
+    for status, error in (("RED", Red), ("SETUP_FAILURE", Setup), ("PENDING", Pending)):
+        if status in statuses:
+            raise error(
+                f"availability pairs remain {status}; see availability_cases for individual observed credit"
+            )
+
+
+def availability_case(case, evidence, lab, base_project, byo, env, runtime, version):
+    label = f"{case['state']}-{case['profile']}"
+    check_passive_case(case)
+    project = lab / f"availability {label} µ"
+    shutil.copytree(
+        base_project,
+        project,
+        ignore=shutil.ignore_patterns(
+            ".firm",
+            ".agent-workspace",
+            ".generated",
+            ".agents",
+            ".claude",
+            ".codex",
+            ".mcp.json",
+            "AGENTS.md",
+            "CLAUDE.md",
+        ),
+    )
+    # Relocate every compile command explicitly into the private project.
+    commands = read_json(project / "build/compile_commands.json")
+    for command in commands:
+        command["directory"] = str(project)
+        command["file"] = str(project / "src" / Path(command["file"]).name)
+    write_json(project / "build/compile_commands.json", commands)
+    evidence.run(
+        f"init-{label}", [str(byo), "init", "--project", str(project)], env, lab
+    )
+    for relative, record in case["files"].items():
+        source = below(Path(case["root"]), relative)
+        verify_file(source, record)
+        evidence.report["read_only_inputs"][str(source)] = record
+        target = below(project, relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    protected = {p: file_record(below(project, p)) for p in case["files"]}
+    server = Mcp(evidence, byo, project, env, version, label)
+    try:
+        health = server.tool("server_health_check", {}, analysis=False)
+        capabilities = server.tool(
+            "get_capabilities", {"board_id": case["board_id"]}, analysis=False
+        )
         write_json(
             evidence.root / f"availability-{label}.json",
-            {"public_witness": observed, "preserved": protected},
+            {
+                "public_witnesses": {
+                    "server_health_check": health,
+                    "get_capabilities": capabilities,
+                },
+                "fixture_files": case["files"],
+                "preserved": protected,
+                "archive_sha256": evidence.report["artifact"]["sha256"],
+                "source": evidence.report["artifact"]["source"],
+                "sidecar": file_record(runtime / "sidecar/byo-mcp-sidecar.exe"),
+                "installed_credit": False,
+            },
         )
+        check_availability_witnesses(case, health, capabilities)
+        semantic_queries(server, runtime, env, full=False)
+    finally:
+        server.close()
+    for relative, record in protected.items():
+        verify_file(below(project, relative), record, product=True)
+    record = read_json(evidence.root / f"availability-{label}.json")
+    record["installed_credit"] = True
+    write_json(evidence.root / f"availability-{label}.json", record)
 
 
 def negative_runtime_gate(
@@ -2017,6 +2213,229 @@ def doctor_gate(
     )
 
 
+def validator_contract_checks(args, evidence: Evidence) -> None:
+    """Executable validator tests only; synthetic mutations earn no installed credit."""
+    import copy
+
+    archive_gate(args, evidence)
+    manifest = read_json(args.bundle / "release-manifest.json")
+    inventory = {item["path"]: item for item in manifest["files"]}
+    mapping = read_json(args.bundle / "analysis/runtime.json")
+    expected = expected_digest(args.cppcheck_sha256, "--cppcheck-sha256")
+    checks = []
+
+    def check(label, action, error=None):
+        try:
+            action()
+        except (Red, Setup, Pending) as exc:
+            require(
+                error is not None and isinstance(exc, error),
+                f"{label}: unexpected failure {exc}",
+            )
+            checks.append(
+                {
+                    "case": label,
+                    "status": "PASS",
+                    "observed": type(exc).__name__,
+                    "reason": str(exc),
+                }
+            )
+        else:
+            require(error is None, f"{label}: validator admitted a negative control")
+            checks.append({"case": label, "status": "PASS", "observed": "accepted"})
+
+    check("missing-oracle", lambda: expected_digest(None, "--cppcheck-sha256"), Setup)
+    check(
+        "malformed-oracle",
+        lambda: expected_digest("not-a-digest", "--cppcheck-sha256"),
+        Setup,
+    )
+    check(
+        "wrong-oracle",
+        lambda: program_identity(args.bundle, inventory, mapping, "0" * 64),
+        Red,
+    )
+    check(
+        "explicit-candidate",
+        lambda: program_identity(args.bundle, inventory, mapping, expected),
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="byo validator ", dir=args.temp_parent
+    ) as temporary:
+        bundle = Path(temporary)
+        for name in ("cppcheck", "clangd"):
+            relative = mapping["programs"][name]["executable"]
+            destination = below(bundle, relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(below(args.bundle, relative), destination)
+        bad_mapping = copy.deepcopy(mapping)
+        bad_mapping["programs"]["cppcheck"]["executable"] = (
+            "analysis/clangd/bin/clangd.exe"
+        )
+        check(
+            "altered-mapping-path",
+            lambda: program_identity(bundle, inventory, bad_mapping, expected),
+            Red,
+        )
+        bad_mapping = copy.deepcopy(mapping)
+        bad_mapping["programs"]["cppcheck"]["version"] = "0.0.0"
+        check(
+            "altered-mapping-version",
+            lambda: program_identity(bundle, inventory, bad_mapping, expected),
+            Red,
+        )
+        for name, field, value in (
+            ("cppcheck", "cfg_dir", "analysis/cppcheck/platforms"),
+            ("cppcheck", "platforms_dir", "analysis/cppcheck/cfg"),
+            ("cppcheck", "licenses", []),
+            ("cppcheck", "dependencies", ["unexpected.dll"]),
+            ("clangd", "resource_dir", "analysis/cppcheck/cfg"),
+            ("clangd", "sbom_ref", "byo-analysis:cppcheck"),
+        ):
+            altered = copy.deepcopy(mapping)
+            altered["programs"][name][field] = value
+            check(
+                f"altered-mapping-{name}-{field}",
+                lambda: program_identity(bundle, inventory, altered, expected),
+                Red,
+            )
+        bad_inventory = copy.deepcopy(inventory)
+        relative = "analysis/cppcheck/cppcheck.exe"
+        bad_inventory[relative]["sha256"] = "0" * 64
+        check(
+            "altered-manifest-digest",
+            lambda: program_identity(bundle, bad_inventory, mapping, expected),
+            Red,
+        )
+        bad_inventory = copy.deepcopy(inventory)
+        bad_inventory[relative]["size"] += 1
+        check(
+            "altered-manifest-size",
+            lambda: program_identity(bundle, bad_inventory, mapping, expected),
+            Red,
+        )
+        bad_inventory = copy.deepcopy(inventory)
+        bad_inventory[relative]["executable"] = False
+        check(
+            "altered-manifest-classification",
+            lambda: program_identity(bundle, bad_inventory, mapping, expected),
+            Red,
+        )
+        executable = below(bundle, relative)
+        original = executable.read_bytes()
+        executable.write_bytes(original + b"validator-only wrong binary")
+        bad_inventory[relative] = {**inventory[relative], **file_record(executable)}
+        check(
+            "self-consistent-wrong-binary",
+            lambda: program_identity(bundle, bad_inventory, mapping, expected),
+            Red,
+        )
+        # Independent second oracle tests plumbing, not a real distinct-version
+        # installed update. Real update still requires its own built input.
+        other_expected = digest(executable)
+        check(
+            "second-explicit-oracle",
+            lambda: program_identity(bundle, bad_inventory, mapping, other_expected),
+        )
+        check(
+            "second-oracle-not-first",
+            lambda: program_identity(bundle, inventory, mapping, other_expected),
+            Red,
+        )
+    for profile, value in (("personal", "enabled"), ("professional", "not_built")):
+        case = {"profile": profile, "state": "setup_lite", "board_id": "fixture"}
+        capabilities = {"tier": "setup-lite", "board_id": "fixture"}
+        check(
+            f"public-values-{profile}",
+            lambda: check_availability_witnesses(
+                case, {"narrative_logging": value}, capabilities
+            ),
+        )
+        check(
+            f"profile-label-only-{profile}",
+            lambda: check_availability_witnesses(
+                case, {"narrative_logging": profile}, capabilities
+            ),
+            Red,
+        )
+        check(
+            f"wrong-tier-{profile}",
+            lambda: check_availability_witnesses(
+                case, {"narrative_logging": value}, {**capabilities, "tier": "no-setup"}
+            ),
+            Red,
+        )
+    check(
+        "corrupt-policy-public-values",
+        lambda: check_availability_witnesses(
+            {"profile": "personal", "state": "corrupt_policy", "board_id": "fixture"},
+            {"narrative_logging": "enabled"},
+            {"tier": None, "policy_status": "corrupt", "board_id": "fixture"},
+        ),
+    )
+    check(
+        "revocation-tier-only-pending",
+        lambda: check_availability_witnesses(
+            {
+                "profile": "personal",
+                "state": "revoked_unvalidated",
+                "board_id": "fixture",
+            },
+            {"narrative_logging": "enabled"},
+            {"tier": "no-setup", "setup_incomplete": True, "board_id": "fixture"},
+        ),
+        Pending,
+    )
+    check(
+        "no-board-passive-fixture",
+        lambda: check_passive_case(
+            {"state": "no_board", "board_id": "fixture", "files": {}}
+        ),
+    )
+    check(
+        "state-label-only-pending",
+        lambda: check_passive_case(
+            {"state": "no_setup", "board_id": "fixture", "files": {}}
+        ),
+        Pending,
+    )
+    check(
+        "unrelated-fixture-pending",
+        lambda: check_passive_case(
+            {
+                "state": "no_setup",
+                "board_id": "fixture",
+                "files": {".firm/unrelated.json": {}},
+            }
+        ),
+        Pending,
+    )
+    check(
+        "non-passive-fixture-rejected",
+        lambda: check_passive_case(
+            {"state": "no_setup", "board_id": "fixture", "files": {"bin/verify": {}}}
+        ),
+        Setup,
+    )
+    check(
+        "invalid-board-identifier",
+        lambda: check_passive_case(
+            {"state": "no_board", "board_id": "../fixture", "files": {}}
+        ),
+        Setup,
+    )
+    write_json(
+        evidence.root / "validator-contract.json",
+        {
+            "checks": checks,
+            "script": file_record(Path(__file__)),
+            "archive": file_record(args.archive),
+            "expected_cppcheck_sha256": expected,
+            "installed_credit": False,
+        },
+    )
+
+
 def main() -> int:
     # Gate reasons quote non-ASCII lab paths; a legacy console codepage must not
     # turn a recorded gate result into an unrelated harness exception.
@@ -2050,9 +2469,11 @@ def main() -> int:
         parser.add_argument(f"--{name}", type=Path)
     for name in (
         "python-commit",
+        "cppcheck-sha256",
         "rustc-sha256",
         "availability-sha256",
         "update-manifest-sha256",
+        "update-cppcheck-sha256",
     ):
         parser.add_argument(f"--{name}")
     parser.add_argument(
@@ -2061,7 +2482,26 @@ def main() -> int:
         help="existing short local temp root; default native TEMP",
     )
     parser.add_argument("--keep-lab", action="store_true")
+    parser.add_argument(
+        "--install-timeout-seconds",
+        type=int,
+        default=120,
+        help="native installation deadline (default 120); recorded in invocation",
+    )
+    parser.add_argument(
+        "--validator-contract-checks",
+        action="store_true",
+        help="focused executable validator checks with private mutations; no installed credit",
+    )
+    parser.add_argument(
+        "--installed-profile",
+        choices=("personal", "professional"),
+        default="personal",
+        help="compiled archive profile; verified through public health, never runtime flags",
+    )
     args = parser.parse_args()
+    if args.install_timeout_seconds <= 0:
+        parser.error("--install-timeout-seconds must be positive")
     if (
         os.name != "nt"
         or platform.machine().lower() not in {"amd64", "x86_64"}
@@ -2084,6 +2524,12 @@ def main() -> int:
         print(f"SETUP_FAILURE: {exc}", file=sys.stderr)
         return 2
     manifest = {}
+
+    if args.validator_contract_checks:
+        evidence.gate(
+            "validator-contract", lambda: validator_contract_checks(args, evidence)
+        )
+        return evidence.save()
 
     def inspect_archive():
         manifest.update(archive_gate(args, evidence))
@@ -2132,6 +2578,7 @@ def main() -> int:
                 ],
                 env,
                 lab,
+                timeout=args.install_timeout_seconds,
             )
             require(byo.is_file(), "native public installation did not create byo.exe")
             assert_runtime(runtime, manifest)
@@ -2321,6 +2768,9 @@ def main() -> int:
                 raise Pending(
                     "a second hash-bound built bundle/version is required for actual runtime update preservation"
                 )
+            updated_cppcheck = expected_digest(
+                args.update_cppcheck_sha256, "--update-cppcheck-sha256"
+            )
             if (
                 digest(args.update_bundle / "release-manifest.json")
                 != args.update_manifest_sha256
@@ -2339,20 +2789,23 @@ def main() -> int:
             )
             for item in other["files"]:
                 verify_file(below(args.update_bundle, item["path"]), item)
-            # Each rebuild links a new Cppcheck hash; bind the update runtime to
-            # its own explicitly hash-bound manifest, never to the first pin.
-            updated_cppcheck = [
-                item["sha256"]
-                for item in other["files"]
-                if item["path"] == "analysis/cppcheck/cppcheck.exe"
-            ]
+            # A distinct build needs its own independent raw oracle, even when
+            # the manifest's digest is explicitly bound too.
+            update_inventory = {item["path"]: item for item in other["files"]}
             require(
-                len(updated_cppcheck) == 1,
-                "update manifest lacks one installed Cppcheck record",
+                len(update_inventory) == len(other["files"]),
+                "duplicate update inventory entries",
+            )
+            program_identity(
+                args.update_bundle,
+                update_inventory,
+                read_json(args.update_bundle / "analysis/runtime.json"),
+                updated_cppcheck,
             )
             evidence.report["update_input"] = {
                 "manifest": file_record(args.update_bundle / "release-manifest.json"),
                 "version": other["version"],
+                "expected_cppcheck_sha256": updated_cppcheck,
                 "files": tree_record(args.update_bundle),
             }
             evidence.run(
@@ -2383,7 +2836,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
-                cppcheck_sha256=updated_cppcheck[0],
+                cppcheck_sha256=updated_cppcheck,
             )
             updated_python_env = {
                 **python_env,
@@ -2403,7 +2856,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
-                cppcheck_sha256=updated_cppcheck[0],
+                cppcheck_sha256=updated_cppcheck,
             )
             server = Mcp(evidence, byo, semantic, env, other["version"], "updated")
             try:
