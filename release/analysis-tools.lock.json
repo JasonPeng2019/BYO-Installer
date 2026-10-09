@@ -2757,8 +2757,8 @@
           "apply",
           "{patch}"
         ],
-        "patch_sha256": "a8545a5a5b676ddb5f81cc606bea0a92172aaad3885b60a4615b5344d58a0662",
-        "patch_transformation": "Only CRLF to LF normalization of the supplied patch; hunk content unchanged.",
+        "patch_sha256": "5039f4e000f7aa762108e24ecce1be666866efb605a59e09bd295cd6667fc129",
+        "patch_transformation": "CRLF normalized to LF; context trimmed to the seven nonblank lines around the two removals. Applied compileroptions.cmake bytes remain identical to the accepted recipe.",
         "patched_compileroptions_sha256": "b5850d92d7ab7967d48fc1452f80023f185efc587bca608c2778c6d713927409",
         "required_toolchain": "Visual Studio 17 2022 x64, MSVC C/C++ compiler, linker, Windows SDK, CMake; record actual versions at build time",
         "source_path_remap": "MSVC /experimental:deterministic and /pathmap remove private source roots from __FILE__; this is build-byte privacy, not long source-path support.",

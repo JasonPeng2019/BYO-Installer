@@ -1,7 +1,6 @@
 --- upstream/cmake/compileroptions.cmake
 +++ candidate/cmake/compileroptions.cmake
-@@ -205,10 +205,8 @@
- 
+@@ -206,7 +206,5 @@
      # C/C++ - Code Generation
      add_compile_options($<$<NOT:$<CONFIG:Debug>>:/GF>) # Enable String Pooling
 -    add_compile_options($<$<NOT:$<CONFIG:Debug>>:/MD>) # Runtime Library - Multi-threaded DLL
@@ -9,5 +8,3 @@
      add_compile_options($<$<NOT:$<CONFIG:Debug>>:/Gy>) # Enable Function-Level Linking
 -    add_compile_options($<$<CONFIG:Debug>:/MDd>) # Runtime Library - Multi-threaded Debug DLL
      add_compile_options($<$<CONFIG:Debug>:/GS>) # Enable Security Check
- 
-     # C/C++ - Language
