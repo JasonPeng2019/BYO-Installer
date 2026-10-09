@@ -391,12 +391,10 @@ pub(super) fn run_owned(
                         WaitForSingleObject(member.handle.0, 0) == WAIT_OBJECT_0
                     })
                 {
-                    if info.TotalProcesses as usize != members.len() + 1 {
-                        return Err(Problem::execution(
-                            "cleanup-failed",
-                            "Cannot confirm the identity of every owned Job descendant.",
-                        ));
-                    }
+                    // TotalProcesses includes historical children that exited
+                    // before enumeration; they have no captured live identity.
+                    // The terminated Job must be empty and every retained
+                    // process handle signaled before cleanup can be confirmed.
                     break;
                 }
             } else if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
@@ -447,6 +445,40 @@ pub(super) fn run_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exited_job_descendant_does_not_require_a_live_identity() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-ri-exited-child-{}",
+            hex::encode(rand::random::<[u8; 8]>())
+        ));
+        fs::create_dir(&root).unwrap();
+        let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let argv = vec![
+            shell.display().to_string(),
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-Command".into(),
+            "& $env:ComSpec /c exit 0".into(),
+        ];
+        let mut budget = Budget::new();
+        budget.configure(10.0).unwrap();
+        let mut events = Vec::new();
+        assert_eq!(
+            run_owned(&argv, &root, &budget, &root, "analysis", &mut events, None).unwrap(),
+            0
+        );
+        let cleanup = events.last().unwrap();
+        assert_eq!(cleanup["cleanup"], "confirmed");
+        assert_eq!(cleanup["ownership"], "windows_job");
+        for member in cleanup["descendants"].as_array().unwrap() {
+            assert_eq!(member["cleanup"], "confirmed");
+            assert!(member["pid"].as_u64().unwrap() > 0);
+            assert!(member["creation_filetime"].as_u64().unwrap() > 0);
+        }
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     #[test]
     fn version_phase_cap_is_inside_the_existing_request_budget() {
         let root = std::env::temp_dir().join(format!(
