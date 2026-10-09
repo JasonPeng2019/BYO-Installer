@@ -136,6 +136,84 @@ fn creation(process: HANDLE) -> Result<u64> {
     }
     Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
 }
+struct Descendant {
+    pid: u32,
+    created: u64,
+    handle: Handle,
+}
+fn descendants(
+    job: HANDLE,
+    parent_pid: u32,
+    remaining: impl Fn() -> Result<Duration>,
+) -> Result<Vec<Descendant>> {
+    let mut capacity = 16usize;
+    let header_words =
+        std::mem::offset_of!(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) / size_of::<usize>();
+    loop {
+        remaining()?;
+        let mut storage = vec![0usize; capacity + header_words];
+        let list = storage
+            .as_mut_ptr()
+            .cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>();
+        let success = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                list.cast(),
+                size_of_val(storage.as_slice()) as u32,
+                std::ptr::null_mut(),
+            )
+        };
+        if success == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(ERROR_MORE_DATA as i32) {
+                return Err(error.into());
+            }
+        }
+        let assigned = unsafe { (*list).NumberOfAssignedProcesses as usize };
+        let count = unsafe { (*list).NumberOfProcessIdsInList as usize };
+        if success == 0 || assigned > count {
+            capacity = assigned.max(capacity * 2);
+            continue;
+        }
+        let mut members = Vec::new();
+        for &pid in &storage[header_words..header_words + count] {
+            remaining()?;
+            let pid = u32::try_from(pid).map_err(|_| {
+                Problem::execution("cleanup-failed", "Invalid owned Job process identity.")
+            })?;
+            if pid == parent_pid {
+                continue;
+            }
+            let handle = Handle(unsafe {
+                OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                    0,
+                    pid,
+                )
+            });
+            if handle.0.is_null() {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+                    continue; // The enumerated process has already exited.
+                }
+                return Err(error.into());
+            }
+            let mut member = 0;
+            unsafe {
+                check(IsProcessInJob(handle.0, job, &mut member))?;
+            }
+            if member != 0 {
+                members.push(Descendant {
+                    pid,
+                    created: creation(handle.0)?,
+                    handle,
+                });
+            } // A reused PID outside our Job is left untouched.
+        }
+        return Ok(members);
+    }
+}
 pub(super) fn run_owned(
     argv: &[String],
     cwd: &Path,
@@ -258,7 +336,31 @@ pub(super) fn run_owned(
     // Always clean by retained process/Job handles, including startup failures.
     let cleanup_start = Instant::now();
     let mut terminal_exit = 0;
+    let mut descendant_events = Vec::new();
     let cleanup = (|| -> Result<()> {
+        let remaining = || -> Result<Duration> {
+            let mut remaining = budget.remaining()?;
+            if let Some(limit) = phase_limit {
+                remaining =
+                    remaining.min(limit.checked_sub(phase_start.elapsed()).ok_or_else(|| {
+                        Problem::execution(
+                            "cleanup-failed",
+                            "Version probe cleanup exceeded its five-second budget.",
+                        )
+                    })?);
+            }
+            Ok(remaining)
+        };
+        let members = if assigned {
+            descendants(job.0, child.dwProcessId, remaining)
+        } else {
+            Ok(Vec::new())
+        };
+        if let Ok(members) = &members {
+            descendant_events = members.iter().map(|member| {
+                json!({"pid":member.pid,"creation_filetime":member.created,"cleanup":"unconfirmed"})
+            }).collect();
+        }
         if assigned {
             unsafe {
                 check(TerminateJobObject(job.0, 1))?;
@@ -268,6 +370,9 @@ pub(super) fn run_owned(
                 check(TerminateProcess(process.0, 1))?;
             }
         }
+        // TerminateJobObject initiates termination. Retain exact member handles
+        // and wait for them as well as the parent before confirming cleanup.
+        let members = members?;
         loop {
             if assigned {
                 let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
@@ -282,23 +387,22 @@ pub(super) fn run_owned(
                 }
                 if info.ActiveProcesses == 0
                     && unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0
+                    && members.iter().all(|member| unsafe {
+                        WaitForSingleObject(member.handle.0, 0) == WAIT_OBJECT_0
+                    })
                 {
+                    if info.TotalProcesses as usize != members.len() + 1 {
+                        return Err(Problem::execution(
+                            "cleanup-failed",
+                            "Cannot confirm the identity of every owned Job descendant.",
+                        ));
+                    }
                     break;
                 }
             } else if unsafe { WaitForSingleObject(process.0, 0) } == WAIT_OBJECT_0 {
                 break;
             }
-            let mut remaining = budget.remaining()?;
-            if let Some(limit) = phase_limit {
-                remaining =
-                    remaining.min(limit.checked_sub(phase_start.elapsed()).ok_or_else(|| {
-                        Problem::execution(
-                            "cleanup-failed",
-                            "Version probe cleanup exceeded its five-second budget.",
-                        )
-                    })?);
-            }
-            std::thread::sleep(Duration::from_millis(2).min(remaining));
+            std::thread::sleep(Duration::from_millis(2).min(remaining()?));
         }
         // The same retained handle must still denote the recorded creation.
         if created.is_some() && created != Some(creation(process.0)?) {
@@ -310,11 +414,20 @@ pub(super) fn run_owned(
         unsafe {
             check(GetExitCodeProcess(process.0, &mut terminal_exit))?;
         }
+        for (member, event) in members.iter().zip(&mut descendant_events) {
+            if creation(member.handle.0)? != member.created {
+                return Err(Problem::execution(
+                    "cleanup-failed",
+                    "Owned descendant identity changed.",
+                ));
+            }
+            event["cleanup"] = json!("confirmed");
+        }
         out.sync_all()?;
         err.sync_all()?;
         Ok(())
     })();
-    events.push(json!({"phase":phase,"pid":child.dwProcessId,"creation_filetime":created,"cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"},"ownership":if assigned{"windows_job"}else{"suspended_process"},"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64(),"process_exit_code":execution.as_ref().ok().copied(),"terminal_exit_code":if cleanup.is_ok(){Some(terminal_exit)}else{None}}));
+    events.push(json!({"phase":phase,"pid":child.dwProcessId,"creation_filetime":created,"cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"},"ownership":if assigned{"windows_job"}else{"suspended_process"},"descendants":descendant_events,"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64(),"process_exit_code":execution.as_ref().ok().copied(),"terminal_exit_code":if cleanup.is_ok(){Some(terminal_exit)}else{None}}));
     if let Err(error) = cleanup {
         return Err(Problem::execution(
             "cleanup-failed",
@@ -407,6 +520,16 @@ mod tests {
         assert!(events[0]["creation_filetime"].as_u64().unwrap() > 0);
         let descendant: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
         let descendant_pid = descendant["pid"].as_u64().unwrap() as u32;
+        assert!(events.last().unwrap()["descendants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|member| {
+                member["pid"].as_u64() == Some(u64::from(descendant_pid))
+                    && member["creation_filetime"].as_u64().unwrap().to_string()
+                        == descendant["creation"].as_str().unwrap()
+                    && member["cleanup"] == "confirmed"
+            }));
         let handle = Handle(unsafe {
             OpenProcess(
                 PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
