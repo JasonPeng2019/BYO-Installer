@@ -131,6 +131,13 @@ UTF-8 active-code-page manifest. Actual compiler, linker, SDK and CMake versions
 must be recorded when the release builder executes it. Recipe identity alone
 does not establish bit-for-bit reproducibility.
 
+The staged native Cppcheck executable exposed a private source root in
+`__FILE__` strings. The recipe now retains the default C++ flags and adds
+MSVC `/experimental:deterministic` plus `/pathmap` to replace that root with
+`C:/cppcheck-src`. An actual MSVC object check verified the mapping; a full
+Cppcheck rebuild and final-byte/archive leak check remain required. These build
+options do not change the measured legacy translation-unit path-length limit.
+
 The clangd 23.1.0 Windows archive SHA-256 is
 `23412a240756a162e7b98a282f36aa2a23a88db5ce16a0cbc4fef7253768c810`, matching the
 recorded official asset digest. Selection contains its executable, `LICENSE.TXT`
