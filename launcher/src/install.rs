@@ -76,6 +76,30 @@ fn write_if_changed(path: &Path, payload: &[u8]) -> Result<bool> {
     Ok(true)
 }
 
+fn write_public_launcher(path: &Path, payload: &[u8]) -> Result<bool> {
+    #[cfg(windows)]
+    if path.is_file() && std::fs::read(path)?.as_slice() != payload {
+        // Windows permits moving a mapped image, but refuses replacing it.
+        // Keep it mapped under an owned temporary name until this process exits.
+        let tombstone = path
+            .parent()
+            .context("public launcher has no parent")?
+            .join(format!(".byo-update-{:016x}.exe", rand::random::<u64>()));
+        retry_transient_io(|| std::fs::rename(path, &tombstone))
+            .context("failed to move the previous public launcher aside")?;
+        let replacement = start_windows_launcher_cleanup(&tombstone, Some(std::process::id()))
+            .and_then(|_| write_if_changed(path, payload));
+        if let Err(error) = replacement {
+            retry_transient_io(|| std::fs::rename(&tombstone, path)).with_context(|| {
+                format!("public launcher replacement failed ({error:#}) and restoration failed")
+            })?;
+            return Err(error);
+        }
+        return Ok(true);
+    }
+    write_if_changed(path, payload)
+}
+
 fn portable_relative_path(path: &Path) -> Result<String> {
     let mut components = Vec::new();
     for component in path.components() {
@@ -136,13 +160,43 @@ pub fn launcher_path(runtime: &Path) -> PathBuf {
 }
 
 pub fn sidecar_self_test(runtime: &Path) -> Result<()> {
+    sidecar_self_test_version(runtime, env!("CARGO_PKG_VERSION"))
+}
+
+// A staged or rollback runtime belongs to its own inventoried launcher, not
+// the older process doing the switch. Ordinary active-runtime checks above
+// continue to require the running launcher's exact version.
+fn selected_sidecar_self_test(runtime: &Path, release: &ReleaseManifest) -> Result<()> {
+    let launcher = launcher_path(runtime);
+    let declared = release
+        .files
+        .iter()
+        .find(|file| file.kind == "launcher" && runtime.join(&file.path) == launcher)
+        .context("release manifest has no inventoried launcher at its required path")?;
+    if !declared.executable || sha256_file(&launcher)? != declared.sha256 {
+        bail!("selected runtime launcher does not match its verified inventory");
+    }
+    let output = Command::new(&launcher)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to probe selected runtime launcher version")?;
+    if !output.status.success()
+        || String::from_utf8_lossy(&output.stdout).trim() != format!("byo {}", release.version)
+    {
+        bail!("selected runtime launcher version does not match its verified manifest");
+    }
+    sidecar_self_test_version(runtime, &release.version)
+}
+
+fn sidecar_self_test_version(runtime: &Path, launcher_version: &str) -> Result<()> {
     let executable = sidecar_path(runtime);
     let output = Command::new(&executable)
         .arg("self-test")
         .arg("--runtime-root")
         .arg(runtime)
         .arg("--launcher-version")
-        .arg(env!("CARGO_PKG_VERSION"))
+        .arg(launcher_version)
         .env("BYO_SIDECAR_COMPILED", "1")
         .stdin(Stdio::null())
         .output()
@@ -162,7 +216,7 @@ pub fn sidecar_self_test(runtime: &Path) -> Result<()> {
         || document["capsule_schema"] != 1
         || document["project_state_schema"] != 1
         || document["runtime_manifest_verified"] != true
-        || document["version"] != env!("CARGO_PKG_VERSION")
+        || document["version"] != launcher_version
     {
         bail!("sidecar self-test returned an incompatible result");
     }
@@ -214,7 +268,7 @@ pub(crate) fn install_bundle_locked(
                     .map(|_| ())
             })
             .and_then(|_| set_runtime_permissions(&staging, &source_manifest))
-            .and_then(|_| sidecar_self_test(&staging))
+            .and_then(|_| selected_sidecar_self_test(&staging, &source_manifest))
         {
             let _ = std::fs::remove_dir_all(&staging);
             return Err(error);
@@ -242,7 +296,7 @@ pub(crate) fn install_bundle_locked(
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
     let previous_locator = std::fs::read(paths.install_locator()).ok();
     let switch = (|| -> Result<()> {
-        write_if_changed(&paths.public_launcher(), &bytes)?;
+        write_public_launcher(&paths.public_launcher(), &bytes)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -254,7 +308,7 @@ pub(crate) fn install_bundle_locked(
         paths.write_install_locator()?;
         write_json(&paths.current(), &current)?;
         let activated = verify_runtime(&final_runtime)?;
-        sidecar_self_test(&final_runtime)?;
+        selected_sidecar_self_test(&final_runtime, &activated)?;
         crate::pack::WorkspacePack::load(&final_runtime.join("workflow/workspace.pack"))?;
         if sha256_file(&paths.public_launcher())?
             != activated
@@ -504,7 +558,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
         bail!("repair candidate must be an installed version directory");
     }
     let release = verify_runtime(&candidate)?;
-    sidecar_self_test(&candidate)?;
+    selected_sidecar_self_test(&candidate, &release)?;
     let current = CurrentRuntime {
         schema: 1,
         version: release.version.clone(),
@@ -516,7 +570,7 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
     let previous_launcher = std::fs::read(paths.public_launcher()).ok();
     let previous_locator = std::fs::read(paths.install_locator()).ok();
     let switch = (|| -> Result<()> {
-        write_if_changed(&paths.public_launcher(), &launcher)?;
+        write_public_launcher(&paths.public_launcher(), &launcher)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -527,8 +581,8 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
         }
         paths.write_install_locator()?;
         write_json(&paths.current(), &current)?;
-        verify_runtime(&candidate)?;
-        sidecar_self_test(&candidate)?;
+        let activated = verify_runtime(&candidate)?;
+        selected_sidecar_self_test(&candidate, &activated)?;
         crate::pack::WorkspacePack::load(&candidate.join("workflow/workspace.pack"))?;
         if sha256_file(&paths.public_launcher())?
             != release
@@ -689,11 +743,202 @@ pub fn uninstall_global(paths: &ProductPaths) -> Result<GlobalUninstallOutcome> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::{portable_relative_path, write_if_changed};
 
     #[cfg(windows)]
     use super::{remove_public_launcher, start_windows_launcher_cleanup};
+
+    #[cfg(all(windows, feature = "development"))]
+    pub(crate) fn runtime_fixture(root: &std::path::Path, version: &str, failure: &str) {
+        use std::sync::OnceLock;
+        static EXECUTABLE: OnceLock<std::path::PathBuf> = OnceLock::new();
+        let executable = EXECUTABLE.get_or_init(|| {
+            let build = std::env::temp_dir().join(format!(
+                "byo-switch-fixture-{:032x}",
+                rand::random::<u128>()
+            ));
+            std::fs::create_dir_all(&build).unwrap();
+            let executable = build.join("fixture.exe");
+            let output = std::process::Command::new("rustc")
+                .arg(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/runtime-switch/fake_runtime.rs"),
+                )
+                .args(["-Ctarget-feature=+crt-static", "-o"])
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            executable
+        });
+        std::fs::create_dir_all(root.join("sidecar")).unwrap();
+        std::fs::create_dir_all(root.join("workflow")).unwrap();
+        std::fs::copy(executable, super::launcher_path(root)).unwrap();
+        std::fs::copy(executable, super::sidecar_path(root)).unwrap();
+        std::fs::write(
+            root.join("runtime-test-identity"),
+            format!("{version}\n{failure}\n"),
+        )
+        .unwrap();
+        let header = serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "product": "byo", "workspace_version": version,
+            "workflow_protocol": 1, "compression": "zlib", "resources": []
+        }))
+        .unwrap();
+        let mut pack = b"BYOWPK1\n".to_vec();
+        pack.extend_from_slice(&(header.len() as u64).to_be_bytes());
+        pack.extend_from_slice(&header);
+        std::fs::write(root.join("workflow/workspace.pack"), pack).unwrap();
+        let files: Vec<_> = [
+            ("byo.exe", "launcher", true),
+            ("sidecar/byo-mcp-sidecar.exe", "sidecar", true),
+            ("workflow/workspace.pack", "workflow-pack", false),
+            ("runtime-test-identity", "metadata", false),
+        ]
+        .into_iter()
+        .map(|(path, kind, executable)| {
+            serde_json::json!({
+                "path": path, "kind": kind, "executable": executable,
+                "size": std::fs::metadata(root.join(path)).unwrap().len(),
+                "sha256": crate::manifest::sha256_file(&root.join(path)).unwrap()
+            })
+        })
+        .collect();
+        let source = serde_json::json!({"repository": "fixture", "commit": "0".repeat(40)});
+        crate::manifest::write_json(&root.join("release-manifest.json"), &serde_json::json!({
+            "schema": 1, "product": "byo", "version": version, "channel": "development",
+            "platform": "windows", "architecture": "x86_64", "launcher_protocol": 1,
+            "sidecar_protocol": 1, "worker_protocol": 1, "workflow_protocol": 1,
+            "capsule_schema": 1, "project_state_schema": 1, "development_unsigned": true,
+            "source": {"installer": source, "agent_workspace": source, "firmware_mcp": source},
+            "toolchain": {"rustc": "fixture", "cargo": "fixture", "python": "fixture", "nuitka": "fixture"},
+            "files": files
+        })).unwrap();
+    }
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn staged_version_switch_and_rollback_preserve_strict_active_check() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-version-switch-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let old = root.join("old");
+        let new = root.join("new");
+        runtime_fixture(&old, env!("CARGO_PKG_VERSION"), "");
+        runtime_fixture(&new, "0.1.9", "");
+        assert_ne!(env!("CARGO_PKG_VERSION"), "0.1.9");
+        super::install_bundle(&old, &paths).unwrap();
+        super::install_bundle(&new, &paths).unwrap();
+        let (current, runtime) = crate::manifest::load_current(&paths).unwrap();
+        assert_eq!(current.version, "0.1.9");
+        super::repair(&paths, Some(&runtime)).unwrap();
+        assert!(
+            super::sidecar_self_test(&runtime).is_err(),
+            "running old launcher must reject new active runtime"
+        );
+        crate::update::rollback(&paths, Some(env!("CARGO_PKG_VERSION"))).unwrap();
+        let (current, runtime) = crate::manifest::load_current(&paths).unwrap();
+        assert_eq!(current.version, env!("CARGO_PKG_VERSION"));
+        super::sidecar_self_test(&runtime).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn staged_launcher_identity_and_inventory_cannot_be_relabelled() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-version-identity-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let bundle = root.join("bundle");
+        runtime_fixture(&bundle, "0.1.9", "");
+        let manifest_path = bundle.join("release-manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["version"] = serde_json::json!("0.1.10");
+        crate::manifest::write_json(&manifest_path, &manifest).unwrap();
+        let error = super::install_bundle(&bundle, &paths).unwrap_err();
+        assert!(format!("{error:#}").contains("launcher version does not match"));
+        assert!(!paths.current().exists());
+        std::fs::write(super::launcher_path(&bundle), b"changed launcher").unwrap();
+        let error = super::install_bundle(&bundle, &paths).unwrap_err();
+        assert!(format!("{error:#}").contains("manifest size mismatch"));
+        assert!(!paths.public_launcher().exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn windows_public_launcher_can_be_replaced_while_running() {
+        let root =
+            std::env::temp_dir().join(format!("byo-live-switch-{:032x}", rand::random::<u128>()));
+        runtime_fixture(&root, env!("CARGO_PKG_VERSION"), "");
+        let launcher = super::launcher_path(&root);
+        let ready = root.join("ready");
+        let mut child = std::process::Command::new(&launcher)
+            .arg("hold")
+            .arg(&ready)
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if ready.is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(ready.is_file());
+        let result = super::write_public_launcher(&launcher, b"replacement");
+        child.kill().unwrap();
+        child.wait().unwrap();
+        result.expect("a running public launcher must be replaceable during update/rollback");
+        assert_eq!(std::fs::read(&launcher).unwrap(), b"replacement");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn staged_failure_and_failed_activation_restore_selection_and_public_files() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-version-failure-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let old = root.join("old");
+        runtime_fixture(&old, env!("CARGO_PKG_VERSION"), "");
+        super::install_bundle(&old, &paths).unwrap();
+        let previous = [
+            paths.current(),
+            paths.public_launcher(),
+            paths.install_locator(),
+        ]
+        .map(|p| std::fs::read(p).unwrap());
+        for (version, failure) in [("0.1.9", "protocol"), ("0.1.10", "activation")] {
+            let bundle = root.join(version);
+            runtime_fixture(&bundle, version, failure);
+            let error = super::install_bundle(&bundle, &paths).unwrap_err();
+            assert!(format!("{error:#}").contains("sidecar self-test"));
+            for (path, bytes) in [
+                paths.current(),
+                paths.public_launcher(),
+                paths.install_locator(),
+            ]
+            .iter()
+            .zip(&previous)
+            {
+                assert_eq!(&std::fs::read(path).unwrap(), bytes);
+            }
+        }
+        assert!(std::fs::read_dir(paths.staging()).unwrap().next().is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn write_registered_project(
         paths: &crate::paths::ProductPaths,

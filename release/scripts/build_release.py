@@ -65,6 +65,10 @@ def remap_encoded_rustflags(env: dict[str, str]) -> str:
         f"--remap-path-prefix={cargo_home}=/cargo",
         f"--remap-path-prefix={ROOT}=/src",
     ]
+    if platform.system() == "Windows":
+        # Installation projects only the EXE into public bin. Its CRT must be
+        # static; a DLL in the private runtime cannot satisfy pre-main imports.
+        remaps.append("-Ctarget-feature=+crt-static")
     return "\x1f".join([*existing, *remaps])
 
 
@@ -74,6 +78,13 @@ def digest(path: Path) -> str:
         for chunk in iter(lambda: handle.read(65536), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
+
+
+def public_launcher_closure(launcher: Path) -> dict:
+    """Check the actual one-file public bin layout, including reused signed PE."""
+    return analysis_tools.validate_pe_closure(
+        [{"path": "byo.exe"}], lambda _name: launcher.read_bytes()
+    )
 
 
 def canonical_json(document: object) -> bytes:
@@ -992,6 +1003,11 @@ def main() -> int:
     launcher = cargo_target / "release" / ("byo.exe" if os.name == "nt" else "byo")
     if not launcher.is_file():
         raise RuntimeError("native Rust launcher output is missing")
+    if platform.system() == "Windows":
+        analysis_tools.write_json(
+            build / "analysis-evidence/public-launcher-pe-closure.json",
+            public_launcher_closure(launcher),
+        )
 
     nuitka_output = build / "nuitka"
     nuitka_report = build / "nuitka-compilation-report.xml"

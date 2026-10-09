@@ -231,10 +231,14 @@ or support for another Windows OS build. No PATH module fallback is accepted.
 Windows analysis packaging negatives are wired into the existing build matrix.
 The protected clean-test kit includes the Windows verifier modules and locks,
 and clean-machine CI has a Windows-only final archive/PE gate. The kit has been
-composed locally without publishing. CI must supply the pinned local input
-archives. Provisioning that input location and wiring/running the independent
-installed test remain integration gates; publication jobs are unchanged. The
-independent installed tester's reserved paths remain with that tester.
+composed locally without publishing. Both Windows build jobs prepare the archives
+from the lock's immutable source URLs, check SHA-256 before exporting
+`BYO_ANALYSIS_INPUT_DIR`, and pass the directory explicitly to every Windows
+builder stage. Windows build Python is pinned to the native-input interpreter
+version. Protected signing and finalization preserve signed payload bytes.
+These workflow changes have local fixture coverage; no CI run or publication has
+been performed. Running the independent installed test remains an integration
+gate. The independent installed tester's reserved paths remain with that tester.
 
 Nuitka 2.8.9's Windows standalone build uses its bundled `pefile` detector through
 `--experimental=force-dependencies-pefile`, as selected by its installed source.
@@ -245,8 +249,13 @@ The first native attempt compiled and linked the server but stopped at the
 missing Dependency Walker prompt; no download occurred. That failed standalone
 output is not an accepted sidecar and cannot be reused as a successful build.
 
-The native launcher imports `vcruntime140.dll`; its copy belongs beside
-`byo.exe`. The sidecar also requires that DLL and `vcruntime140_1.dll`. Their
+Windows release builds now use Rust's static CRT flag and check the launcher's
+ordinary/delay PE closure using its actual one-file public-bin layout before
+assembly, including signed launcher reuse. The installer and repair continue to
+project only the EXE into public bin. A native rebuilt launcher passed that
+closure without VC redistributable imports. Final integrated installed and
+clean-host validation remain separate gates.
+The sidecar requires `vcruntime140.dll` and `vcruntime140_1.dll`. Their
 observed CPython 3.12.13 Windows interpreter bytes, sizes, version 14.44.35211.0,
 Nuitka selection provenance and Windows license notice are pinned in the tool
 lock and represented in the SBOM and payload inventory. The builder checks the
@@ -255,3 +264,19 @@ redistributable from PATH or assumes that a System32 installation is present.
 The preserved CPython Windows binary notice includes Microsoft Distributable
 Code conditions. Final distribution review remains required; the notice and
 local provenance do not establish compliance or clean-host behavior.
+
+Staged installation, repair and rollback now check the verified inventoried
+launcher's own `--version` before passing the selected manifest version to its
+sidecar self-test. Ordinary active-runtime doctor and MCP checks retain exact
+compatibility with the running launcher. After a version switch, doctor runs
+through the verified selected public launcher, with an explicit custom product
+home or its verified installation locator. Focused native fixtures cover
+distinct versions, protocol/version/inventory rejection and failed-activation
+recovery. On Windows, a changed public EXE is moved to an owned temporary name
+before replacement; the existing hidden cleanup helper removes the old mapped
+image after the mutating process exits. Native owner smoke with separately built
+0.1.8/0.1.9 launchers and genuine matching sidecars covers isolated public CLI
+startup, offline version activation, rollback, repair, failed-candidate recovery
+and global cleanup while preserving project configuration. These reassembled
+smoke fixtures do not establish acceptance of a final integrated ZIP or a clean
+Windows host; a signed HTTPS channel update remains unexecuted.

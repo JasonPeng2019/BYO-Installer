@@ -58,6 +58,50 @@ struct Check {
     identity: Option<serde_json::Value>,
 }
 
+fn doctor_after_activation(paths: &ProductPaths) -> Result<()> {
+    let (_, runtime) = manifest::load_current(paths)?;
+    let release = manifest::verify_runtime(&runtime)?;
+    if release.version == env!("CARGO_PKG_VERSION") {
+        return global_doctor(paths).map(|_| ());
+    }
+    // The mutating process still has the previous version loaded. Run doctor
+    // through the newly selected launcher so exact active-version checks stay
+    // enforced by that version, including after rollback or repair.
+    let launcher = paths.public_launcher();
+    let declared = release
+        .files
+        .iter()
+        .find(|file| {
+            file.kind == "launcher" && runtime.join(&file.path) == install::launcher_path(&runtime)
+        })
+        .context("release manifest has no inventoried launcher")?;
+    if !declared.executable || manifest::sha256_file(&launcher)? != declared.sha256 {
+        bail!("public BYO launcher does not match the selected runtime");
+    }
+    paths.verify_install_locator()?;
+    let mut command = ProcessCommand::new(&launcher);
+    command.args(["doctor", "--global", "--json"]);
+    command.env_remove("BYO_HOME");
+    // Explicitly preserve an isolated/custom product home. Default per-user
+    // layouts instead resolve from the verified locator beside this EXE.
+    if let Some(root) = paths.data.parent() {
+        if ProductPaths::from_install_dir(root).as_ref().ok() == Some(paths) {
+            command.env("BYO_HOME", root);
+        }
+    }
+    let output = command
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to start the selected launcher for post-activation doctor")?;
+    if !output.status.success() {
+        bail!(
+            "selected launcher failed post-activation doctor: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     let (_, runtime) = manifest::load_current(paths)?;
     let release = manifest::verify_runtime(&runtime)?;
@@ -739,7 +783,7 @@ fn run() -> Result<i32> {
                 .map(|(_, runtime)| runtime);
             let outcome = categorize(update::perform(&arguments, &paths), ExitCategory::Update)?;
             if !arguments.dry_run {
-                if let Err(doctor_error) = global_doctor(&paths) {
+                if let Err(doctor_error) = doctor_after_activation(&paths) {
                     if let Some(previous) = previous.as_deref() {
                         if let Err(rollback_error) = install::repair(&paths, Some(previous)) {
                             return Err(error::fail(
@@ -765,7 +809,7 @@ fn run() -> Result<i32> {
                 update::rollback(&paths, arguments.version.as_deref()),
                 ExitCategory::UpdateRolledBack,
             )?;
-            categorize(global_doctor(&paths), ExitCategory::Doctor)?;
+            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
             println!("BYO runtime rolled back to {}", selected.display());
         }
         Command::Repair(arguments) => {
@@ -773,7 +817,7 @@ fn run() -> Result<i32> {
                 install::repair(&paths, arguments.runtime.as_deref()),
                 ExitCategory::RuntimeIntegrity,
             )?;
-            categorize(global_doctor(&paths), ExitCategory::Doctor)?;
+            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
             if let Some(raw_project) = arguments.project.as_deref() {
                 let project = project::canonical_project(Some(raw_project), &paths)?;
                 categorize(
@@ -839,7 +883,7 @@ fn run() -> Result<i32> {
                 install::install_bundle(&arguments.bundle, &paths),
                 ExitCategory::Installer,
             )?;
-            categorize(global_doctor(&paths), ExitCategory::Doctor)?;
+            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
             println!(
                 "Installed BYO {} at {}",
                 manifest.version,
@@ -955,6 +999,34 @@ mod tests {
     use crate::pack::{
         CompiledCodex, CompiledMode, CompiledStructure, CompiledVerify, CompiledWorkflow,
     };
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn post_activation_doctor_uses_selected_launcher_and_reports_failure() {
+        let root =
+            std::env::temp_dir().join(format!("byo-post-doctor-{:032x}", rand::random::<u128>()));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        for (version, failure) in [("0.1.9", ""), ("0.1.10", "doctor")] {
+            let bundle = root.join(version);
+            crate::install::tests::runtime_fixture(&bundle, version, failure);
+            crate::install::install_bundle(&bundle, &paths).unwrap();
+            let result = super::doctor_after_activation(&paths);
+            if failure.is_empty() {
+                result.unwrap();
+                // Tampered public bytes must fail before executing doctor.
+                std::fs::write(paths.public_launcher(), b"changed launcher").unwrap();
+                let error = super::doctor_after_activation(&paths).unwrap_err();
+                assert!(format!("{error:#}").contains("does not match the selected runtime"));
+                crate::install::repair(&paths, Some(&paths.versions().join(version))).unwrap();
+            } else {
+                assert!(format!("{:#}", result.unwrap_err()).contains("fixture doctor failed"));
+                // This is the same recovery used by Command::Update.
+                crate::install::repair(&paths, Some(&paths.versions().join("0.1.9"))).unwrap();
+                super::doctor_after_activation(&paths).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn sidecar_environment_preserves_windows_profile_resolution() {
