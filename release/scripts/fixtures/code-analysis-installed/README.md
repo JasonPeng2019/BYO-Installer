@@ -9,7 +9,8 @@ The `build_control.rs` fixture validates the frozen genuine ARM ELF/map and the
 requested target. It does **not** rebuild firmware or substitute for an analyzer.
 The installed Cppcheck and clangd executables must match the accepted pinned
 hashes. The static smoke deliberately mutates only a private source copy, then
-restores it; the expected actual analyzer exits are 0/1/0.
+restores it; the expected actual exits are 0/1/0 for the Python runner and
+0/13/0 for the public launcher (its WorkflowPolicy category for a failed verify).
 
 Use a new evidence directory for every invocation:
 
