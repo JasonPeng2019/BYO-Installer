@@ -1598,14 +1598,18 @@ class Mcp:
         return value
 
     def record_child_argv(self, env: dict) -> None:
-        children = [
-            r
+        observations = [
+            {**r, "alive_at_argv_observation": self.evidence.native.alive(r)}
             for r in list(self.owned.records.values())
             if Path(r["image"]).name.casefold() == "clangd.exe"
         ]
+        # Version probes and sessions replaced after database changes remain in
+        # Owned for EOF cleanup. Only the current live session has inspectable argv.
+        write_json(self.path / "clangd-argv-selection.json", observations)
+        children = [r for r in observations if r["alive_at_argv_observation"]]
         require(
             children,
-            "no real owned clangd PID+creation was observed; sampling gap remains RED",
+            "no live owned clangd PID+creation was observed; sampling gap remains RED",
         )
         powershell = (
             Path(os.environ["SystemRoot"])

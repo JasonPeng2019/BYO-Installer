@@ -138,6 +138,13 @@ are retained in `--evidence` with a SHA256 manifest. MCP requests/replies and fu
 stderr are retained, along with actual executable argv, exits and process
 identities. No cleanup selects processes by image name.
 
+Argv inspection requires a live owned clangd session. Completed version probes
+and sessions replaced after compilation-database changes have no live argv to
+inspect. `clangd-argv-selection.json` records every observed clangd identity and
+its liveness at selection; all identities remain in the final EOF cleanup check.
+No live session, an identity change during inspection, or any surviving child
+still fails the installed gate.
+
 This correction is test preparation at installer base
 `f75032a85b21ceeff9e03018263debdbe19d8547`, tree
 `cbfae9a0d08609f250813dcab88b8aebfb9e6c78`. Old-archive regression uses only the
