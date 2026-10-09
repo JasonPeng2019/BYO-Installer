@@ -121,7 +121,10 @@ The portable input selection and proposed build argv are in
 built from `a436ca35ed1887bee789765122b65ed2d7a7e045`; its source archive SHA-256 is
 `68ed9efb7aad635b7f4c121662689b2377d1d745dc9e76227566516a9617f343`, observed from
 the official codeload archive, without an independently published checksum.
-The supplied MSVC patch and UTF-8 manifest are preserved verbatim. The declared
+The MSVC patch preserves the supplied hunk content with CRLF normalized to LF
+so it applies to the pinned LF upstream source. The lock records both hashes
+and applies it with `git -c core.autocrlf=false` to preserve the accepted patched
+source bytes. The UTF-8 manifest is preserved verbatim. The declared
 recipe uses Visual Studio 17 2022/x64 Release, static `MultiThreaded`, empty
 `FILESDIR`, no core/shared DLL, GUI, tests, Boost or matchcompiler, and an embedded
 UTF-8 active-code-page manifest. Actual compiler, linker, SDK and CMake versions

@@ -214,14 +214,19 @@ def stage_windows(
             raise RuntimeError(
                 "Cppcheck compiler options differ from accepted upstream"
             )
-        subprocess.run(
-            ["git", "apply", "--check", str(ROOT / recipe["patch"])],
-            cwd=source_dir,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "apply", str(ROOT / recipe["patch"])], cwd=source_dir, check=True
-        )
+        patch_argv = [
+            part.format(patch=str(ROOT / recipe["patch"]))
+            for part in recipe["patch_argv"]
+        ]
+        # Keep the accepted LF upstream/transformed source bytes independent of
+        # the developer's Git autocrlf setting; the patch itself is -text.
+        for argv in (patch_argv[:-1] + ["--check", patch_argv[-1]], patch_argv):
+            result = subprocess.run(argv, cwd=source_dir, check=False)
+            provenance["commands"].append(
+                {"step": "patch", "argv": argv, "exit_code": result.returncode}
+            )
+            write_json(evidence / "cppcheck-build.json", provenance)
+            result.check_returncode()
         if sha256(options.read_bytes()) != recipe["patched_compileroptions_sha256"]:
             raise RuntimeError("Cppcheck patched options differ from accepted recipe")
         substitutions = {
