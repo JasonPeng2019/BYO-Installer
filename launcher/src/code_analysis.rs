@@ -406,7 +406,9 @@ fn validate_suppressions(data: &[u8], budget: &Budget) -> Result<()> {
             .filter(|id| glob_matches(pattern, id.as_bytes()))
             .collect();
         if !hidden.is_empty() {
-            return Err(Problem::blocked("config-invalid", format!("cppcheck.suppressions_file line {} can hide coverage diagnostics {hidden:?}: {}", index+1,String::from_utf8_lossy(rule)), "Remove rules matching coverage diagnostics; correct include/build configuration and retain finding suppressions."));
+            let mut error = Problem::blocked("config-invalid", format!("cppcheck.suppressions_file line {} can hide coverage diagnostics {hidden:?}: {}", index+1,String::from_utf8_lossy(rule)), "Remove rules matching coverage diagnostics; correct include/build configuration and retain finding suppressions.");
+            error.details = json!({"coverage_reasons": [error.message]});
+            return Err(error);
         }
     }
     Ok(())
