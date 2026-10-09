@@ -95,7 +95,11 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures/code-analysis-installed"
 CPP_INPUT_SHA = "e8f71939bafaba468ac299a3995e30ddf05c82365176a2f7c82365f55b57b4d3"
-CPP_EXE_SHA = "bd85657e81f80597c63f4380c2e5f91f6a840e0b12cce159df9812e76bb147cb"
+# Final 0.1.8 artifact rebuilt by the accepted lock recipe (/pathmap, /PDBALTPATH),
+# not the earlier probe input. The MSVC link is not bit-reproducible: an
+# independent rebuild from the same pins differed only in COFF/debug timestamps,
+# CheckSum and the CodeView GUID, and matched after zeroing exactly those fields.
+CPP_EXE_SHA = "3bc2924b33d707644b7b80c2d619907f3b7517a17c8c62120a0cfae212df0f13"
 CLANG_EXE_SHA = "dbd52c13d21ef9d284f4f0627efe76c81adf2fe0998f230127f554a54fc9dde7"
 CLANG_INPUT_SHA = "4b6a35d3950b05b2708021da3f2f78ea29cab0922a35cda07a5229af733191b2"
 ARM_INPUT_SHA = "ab3a5ea27dd222b753def82b36066c1e803c8eec76d0b2947f2d61e893ed6291"
@@ -998,6 +1002,7 @@ def report_once(
     process_exit: int | None,
     count: int | None,
     kind: str | None,
+    cppcheck_sha256: str = CPP_EXE_SHA,
 ) -> dict:
     reports = project / ".firm/code-analysis/reports"
     before = set(reports.glob("*/result.json"))
@@ -1032,7 +1037,7 @@ def report_once(
             f"{name}: runner did not execute installed Cppcheck",
         )
         require(
-            result["executable_sha256"] == CPP_EXE_SHA
+            result["executable_sha256"] == cppcheck_sha256
             and result["version"] == "2.22.0",
             f"{name}: real executable/version identity differs",
         )
@@ -2269,6 +2274,17 @@ def main() -> int:
             )
             for item in other["files"]:
                 verify_file(below(args.update_bundle, item["path"]), item)
+            # Each rebuild links a new Cppcheck hash; bind the update runtime to
+            # its own explicitly hash-bound manifest, never to the first pin.
+            updated_cppcheck = [
+                item["sha256"]
+                for item in other["files"]
+                if item["path"] == "analysis/cppcheck/cppcheck.exe"
+            ]
+            require(
+                len(updated_cppcheck) == 1,
+                "update manifest lacks one installed Cppcheck record",
+            )
             evidence.report["update_input"] = {
                 "manifest": file_record(args.update_bundle / "release-manifest.json"),
                 "version": other["version"],
@@ -2302,6 +2318,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
+                cppcheck_sha256=updated_cppcheck[0],
             )
             updated_python_env = {
                 **python_env,
@@ -2321,6 +2338,7 @@ def main() -> int:
                 0,
                 3,
                 "all",
+                cppcheck_sha256=updated_cppcheck[0],
             )
             server = Mcp(evidence, byo, semantic, env, other["version"], "updated")
             try:
