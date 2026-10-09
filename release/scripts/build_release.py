@@ -491,7 +491,11 @@ def validate_windows_build_python(python: Path, source: Path, version: str) -> d
     result = subprocess.run(
         argv,
         cwd=source,
-        env={**os.environ, "PYTHONPATH": str(source / "src")},
+        env={
+            **os.environ,
+            "PYTHONPATH": str(source / "src"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -1026,6 +1030,11 @@ def main() -> int:
             env={
                 **os.environ,
                 "PYTHONPATH": str(mcp / "src"),
+                **(
+                    {"PYTHONDONTWRITEBYTECODE": "1"}
+                    if platform.system() == "Windows"
+                    else {}
+                ),
                 "NUITKA_CACHE_DIR": str(
                     Path(tempfile.gettempdir()) / "byo-nuitka-cache"
                 ),
