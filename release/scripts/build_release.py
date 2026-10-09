@@ -479,6 +479,48 @@ def command_output(argv: list[str], *, cwd: Path = ROOT) -> str:
     return subprocess.check_output(argv, cwd=cwd, text=True).strip()
 
 
+def validate_windows_build_python(python: Path, source: Path, version: str) -> dict:
+    """Reject stale installed metadata before Nuitka can fold its version."""
+    source = source.resolve(strict=True)
+    code = (
+        "import json,sys;from importlib import metadata;import pyocd_debug_mcp as p;"
+        "print(json.dumps({'python':sys.executable,'distribution_version':metadata.version('pyocd-debug-mcp'),"
+        "'source_version':p.__version__,'source_file':p.__file__}))"
+    )
+    argv = [str(python), "-c", code]
+    result = subprocess.run(
+        argv,
+        cwd=source,
+        env={**os.environ, "PYTHONPATH": str(source / "src")},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(
+            f"Windows build Python metadata/source probe failed: {result.stderr}"
+        )
+    identity = json.loads(result.stdout)
+    if (
+        identity["distribution_version"] != version
+        or identity["source_version"] != version
+        or Path(identity["source_file"]).resolve()
+        != source / "src/pyocd_debug_mcp/__init__.py"
+    ):
+        raise RuntimeError(
+            f"Windows build Python must have accepted source and distribution metadata {version}: {identity}. "
+            "Supply an isolated matching --python environment; do not mutate input environments."
+        )
+    return {
+        "argv": argv,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "identity": identity,
+    }
+
+
 def payload_inventory(bundle: Path) -> list[dict[str, object]]:
     """Hash final transformed payloads once, before SBOM; never self-hash metadata."""
     lock = (
@@ -899,6 +941,13 @@ def main() -> int:
         signing_configuration(args) if args.production else None
     )
     build = args.build_dir.resolve()
+    if platform.system() == "Windows":
+        analysis_tools.write_json(
+            build / "analysis-evidence/python-build-input.json",
+            validate_windows_build_python(
+                args.python, ROOT / "Firmware MCP New", args.version
+            ),
+        )
     pack = build / "workspace.pack"
     report = build / "workspace-classification.json"
     workspace_export = build / "agent-workspace-source"

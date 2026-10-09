@@ -172,6 +172,15 @@ check is intentional. Build with an existing Python environment containing the
 server lock's dependencies and Nuitka 2.8.9; the builder compiles the checked-out
 server source using that environment.
 
+The Windows builder checks both imported source identity/version and installed
+`pyocd-debug-mcp` distribution metadata before compiling. Nuitka can fold a
+metadata version from the build interpreter, so pointing `PYTHONPATH` at the
+accepted source while retaining older installed metadata is insufficient. Use
+an isolated, preprovisioned matching environment without modifying the accepted
+checkouts or another development environment. The observed supplied environment
+had 0.1.7 metadata and failed the native sidecar's retained self-test against
+0.1.8 source; that standalone output is not an accepted product sidecar.
+
 ```powershell
 $env:CARGO_NET_OFFLINE = 'true'
 $env:CARGO_TARGET_DIR = 'C:/build/byo-cargo'

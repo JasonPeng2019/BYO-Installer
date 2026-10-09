@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 import tempfile
 import json
 
@@ -81,6 +82,40 @@ def test_release_version_rejects_component_or_requested_drift() -> None:
             assert "must match" in str(error)
         else:
             raise AssertionError("a stale requested release version was accepted")
+
+
+def test_windows_python_rejects_stale_metadata_and_wrong_source():
+    with tempfile.TemporaryDirectory() as temporary:
+        source = Path(temporary).resolve()
+        identity = {
+            "python": "python.exe",
+            "distribution_version": "0.1.8",
+            "source_version": "0.1.8",
+            "source_file": str(source / "src/pyocd_debug_mcp/__init__.py"),
+        }
+
+        def result(value):
+            return subprocess.CompletedProcess([], 0, json.dumps(value), "")
+
+        with patch.object(br.subprocess, "run", return_value=result(identity)):
+            assert (
+                br.validate_windows_build_python(Path("python.exe"), source, "0.1.8")[
+                    "identity"
+                ]
+                == identity
+            )
+        for changed in (
+            {**identity, "distribution_version": "0.1.7"},
+            {**identity, "source_file": str(source / "wrong/__init__.py")},
+        ):
+            with patch.object(br.subprocess, "run", return_value=result(changed)):
+                try:
+                    br.validate_windows_build_python(
+                        Path("python.exe"), source, "0.1.8"
+                    )
+                    raise AssertionError("stale metadata/source was accepted")
+                except RuntimeError as error:
+                    assert "isolated matching" in str(error)
 
 
 def test_development_matrix_derives_bundle_version() -> None:
