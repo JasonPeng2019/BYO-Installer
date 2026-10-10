@@ -394,7 +394,7 @@ class WindowsProcesses:
                 raise Setup(f"PID {pid} liveness unobservable: wait result {state}")
             transition = None
             if image_error is not None and state == 258:
-                started = time.monotonic()
+                started = time.perf_counter()
                 state = self.k.WaitForSingleObject(handle, self.IMAGE_EXIT_WAIT_MS)
                 transition = {
                     "initial_wait": 258,
@@ -402,7 +402,7 @@ class WindowsProcesses:
                     "creation_before": created,
                     "wait_timeout_ms": self.IMAGE_EXIT_WAIT_MS,
                     "final_wait": state,
-                    "elapsed_ms": (time.monotonic() - started) * 1000,
+                    "elapsed_ms": (time.perf_counter() - started) * 1000,
                 }
                 if state == 0:
                     if not self.k.GetProcessTimes(
