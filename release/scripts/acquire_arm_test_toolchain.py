@@ -125,9 +125,14 @@ def acquire(target: str, output: Path) -> dict:
     expanded = output / "toolchain"
     expanded.mkdir()
     _expand(output / source["archive"], expanded, source)
-    compiler = (expanded / source["directory"] / source["compiler"]).resolve(
-        strict=True
-    )
+    try:
+        compiler = (expanded / source["directory"] / source["compiler"]).resolve(
+            strict=True
+        )
+    except OSError as error:
+        raise RuntimeError(
+            "Pinned ARM archive has no accessible compiler in its owned root"
+        ) from error
     if not compiler.is_relative_to(expanded) or not compiler.is_file():
         raise RuntimeError(
             "Pinned ARM archive has no regular compiler in its owned root"
