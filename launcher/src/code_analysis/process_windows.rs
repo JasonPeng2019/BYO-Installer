@@ -445,6 +445,55 @@ pub(in crate::code_analysis) fn run_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::windows::process::CommandExt;
+    #[test]
+    #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
+    fn deadline_leaf_fixture() {
+        let root = std::env::current_dir().unwrap();
+        if !root.join(".byo-windows-child-fixture").is_file() {
+            return;
+        }
+        fs::write(root.join("leaf-ready"), b"ready").unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+    }
+    #[test]
+    #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
+    fn deadline_parent_fixture() {
+        let root = std::env::current_dir().unwrap();
+        if !root.join(".byo-windows-child-fixture").is_file() {
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .creation_flags(CREATE_NO_WINDOW)
+            .args([
+                "code_analysis::process::platform::tests::deadline_leaf_fixture",
+                "--ignored",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let ready_start = Instant::now();
+        while !root.join("leaf-ready").is_file() && ready_start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if !root.join("leaf-ready").is_file() {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("Owned descendant did not complete its bounded startup handshake");
+        }
+        let identity = creation(child.as_raw_handle().cast()).unwrap();
+        write_json(
+            &root.join("descendant.json"),
+            &json!({"pid":child.id(), "creation":identity.to_string()}),
+        )
+        .unwrap();
+        // Keep the witnessed descendant live until the owning test's deadline.
+        child.wait().unwrap();
+    }
     #[test]
     fn exited_job_descendant_does_not_require_a_live_identity() {
         let root = std::env::temp_dir().join(format!(
@@ -523,19 +572,19 @@ mod tests {
             hex::encode(rand::random::<[u8; 8]>())
         ));
         fs::create_dir(&root).unwrap();
-        let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let marker = root.join("descendant.json");
-        let script=format!("$p = Start-Process -FilePath '{}' -ArgumentList '-NoProfile -Command Start-Sleep -Seconds 60' -PassThru -WindowStyle Hidden; @{{pid=$p.Id;creation=$p.StartTime.ToFileTimeUtc().ToString()}} | ConvertTo-Json -Compress | Set-Content -LiteralPath '{}' -Encoding ASCII; Start-Sleep -Seconds 60",shell.display(),marker.display());
+        fs::write(root.join(".byo-windows-child-fixture"), b"owned").unwrap();
         let argv = vec![
-            shell.display().to_string(),
-            "-NoProfile".into(),
-            "-NonInteractive".into(),
-            "-Command".into(),
-            script,
+            std::env::current_exe().unwrap().display().to_string(),
+            "code_analysis::process::platform::tests::deadline_parent_fixture".into(),
+            "--ignored".into(),
+            "--exact".into(),
+            "--test-threads=1".into(),
         ];
         let mut budget = Budget::new();
-        budget.configure(3.0).unwrap();
+        // The five-second child-ready handshake fits inside this bounded test
+        // request, including the unchanged production cleanup reserve.
+        budget.configure(10.0).unwrap();
         let mut events = Vec::new();
         let error = run_owned(
             &argv,
@@ -550,7 +599,8 @@ mod tests {
         assert_eq!(error.code, "analysis/timeout");
         assert_eq!(events.last().unwrap()["cleanup"], "confirmed");
         assert!(events[0]["creation_filetime"].as_u64().unwrap() > 0);
-        let descendant: Value = serde_json::from_slice(&fs::read(marker).unwrap()).unwrap();
+        let witness = fs::read(&marker).unwrap_or_else(|error| panic!("Missing descendant startup witness: {error}; events={events:?}; stdout={:?}; stderr={:?}", fs::read_to_string(root.join("owned-test.stdout.log")), fs::read_to_string(root.join("owned-test.stderr.log"))));
+        let descendant: Value = serde_json::from_slice(&witness).unwrap();
         let descendant_pid = descendant["pid"].as_u64().unwrap() as u32;
         assert!(events.last().unwrap()["descendants"]
             .as_array()
@@ -574,7 +624,7 @@ mod tests {
         {
             assert_eq!(unsafe { WaitForSingleObject(handle.0, 0) }, WAIT_OBJECT_0);
         }
-        assert!(budget.started.elapsed() < Duration::from_millis(3200));
+        assert!(budget.started.elapsed() < Duration::from_millis(10200));
         write_json(&root.join("owned-processes.json"), &events).unwrap();
     }
     #[test]
