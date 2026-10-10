@@ -67,14 +67,17 @@ jobs:
           if test "$RUNNER_OS" = Linux; then args+=(--public-key "$RUNNER_TEMP/byo-release-public.pem"); fi
           python "test-kit/release/scripts/clean_candidate.py" "${args[@]}"
 
-      - name: Check exact Windows analysis archive and PE imports
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: Check exact target analysis archive and native formats
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
         run: |
-          $archives = @(Get-ChildItem -LiteralPath candidate -Filter '*-windows-x86_64.zip' -File -Recurse)
-          if ($archives.Count -ne 1) { throw 'Expected exactly one Windows candidate archive' }
-          python test-kit/release/scripts/verify_build_output.py windows-analysis-archive --archive $archives[0].FullName --receipt evidence/windows-analysis-archive.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          suffix=zip
+          if test "$RUNNER_OS" = Linux; then suffix=tar.gz; fi
+          archive=$(python -c 'import pathlib,sys; paths=list(pathlib.Path("candidate").rglob(f"*-{sys.argv[1]}.{sys.argv[2]}")); assert len(paths)==1, paths; print(paths[0])' "$EXPECTED_TARGET" "$suffix")
+          python test-kit/release/scripts/verify_build_output.py analysis-archive \
+            --expected-target "$EXPECTED_TARGET" --archive "$archive" \
+            --receipt "evidence/$EXPECTED_TARGET-analysis-archive.json"
 
       - name: Upload clean-machine evidence
         if: always()

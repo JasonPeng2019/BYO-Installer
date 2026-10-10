@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - InstallerV1
+      - integration/portability/installer-20261010
 
 permissions:
   contents: read
@@ -76,7 +77,7 @@ jobs:
       - name: Install pinned build dependencies
         shell: bash
         run: |
-          rustup toolchain install 1.97.1 --profile minimal
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           if [ "$RUNNER_OS" = "Windows" ]; then
             export UV_PYTHON=3.12.13
           fi
@@ -104,30 +105,33 @@ jobs:
           python release/scripts/test_verify_build_output.py --windows-only
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Prepare pinned Windows analysis inputs
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: Prepare pinned analysis archives
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          $lock = Get-Content -LiteralPath 'release/analysis-tools.lock.json' -Raw | ConvertFrom-Json
-          $inputDir = Join-Path $env:RUNNER_TEMP 'byo-analysis-inputs'
-          New-Item -ItemType Directory -Path $inputDir -Force | Out-Null
-          foreach ($program in $lock.programs.PSObject.Properties) {
-            $source = $program.Value.source
-            $archive = Join-Path $inputDir $source.archive
-            Invoke-WebRequest -Uri $source.url -OutFile $archive
-            $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $source.sha256) { throw "Pinned $($program.Name) archive SHA-256 mismatch" }
-            Write-Host "$($program.Name): $($source.url) SHA256=$actual"
-          }
-          "BYO_ANALYSIS_INPUT_DIR=$inputDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          python release/scripts/acquire_analysis_inputs.py --expected-target "$EXPECTED_TARGET" --output "$RUNNER_TEMP/byo-analysis-inputs"
+          echo "BYO_ANALYSIS_INPUT_DIR=$RUNNER_TEMP/byo-analysis-inputs" >> "$GITHUB_ENV"
+
+      - name: Run launcher and analysis source contracts
+        shell: bash
+        run: |
+          cargo fmt --manifest-path launcher/Cargo.toml --check
+          cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path launcher/Cargo.toml --locked
+          python release/scripts/test_analysis_tools.py
+          python release/scripts/test_build_release.py
+          python release/scripts/test_verify_build_output.py
+          python release/scripts/test_analysis_portability.py
+          python release/scripts/test_acquire_analysis_inputs.py
+          python release/scripts/test_code_analysis_portable_smoke_controls.py
 
       - name: Build native launcher, sidecar, SBOM, and archive
         if: runner.os != 'Windows'
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
-        run: uv run --project "Firmware MCP New" python release/scripts/build_release.py --version "$VERSION"
+        run: uv run --project "Firmware MCP New" python release/scripts/build_release.py --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"
 
       - name: Build native Windows launcher, sidecar, SBOM, and archive
         if: runner.os == 'Windows'
@@ -237,13 +241,42 @@ jobs:
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           uv sync --project "Firmware MCP New" --locked --all-groups
 
+      - name: Prepare pinned Linux analyzer and GCC runtime inputs
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          input_dir="$RUNNER_TEMP/byo-analysis-inputs"
+          "$BYO_BUILD_PYTHON" release/scripts/acquire_analysis_inputs.py --expected-target linux-x86_64 --output "$input_dir"
+          compiler=$(readlink -f "$(command -v g++)")
+          package=$(rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$compiler")
+          source_rpm=$(rpm -qf --qf '%{SOURCERPM}' "$compiler")
+          gcc_package=$(rpm -qf --qf '%{NAME}' "$("$compiler" -print-file-name=libgcc.a)")
+          notice=$(rpm -ql "$gcc_package" | grep '/COPYING3$')
+          "$BYO_BUILD_PYTHON" release/scripts/prepare_gcc_runtime_inputs.py \
+            --compiler "$compiler" --notices "$(dirname "$notice")" \
+            --package "$package" --source "AlmaLinux 8 source RPM: $source_rpm" \
+            --output "$input_dir/gcc-runtime"
+          echo "BYO_ANALYSIS_INPUT_DIR=$input_dir" >> "$GITHUB_ENV"
+
+      - name: Run native Linux launcher and analysis source contracts
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          rustup component add --toolchain 1.97.1 rustfmt clippy
+          cargo fmt --manifest-path launcher/Cargo.toml --check
+          cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path launcher/Cargo.toml --locked
+          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
+            "$BYO_BUILD_PYTHON" "release/scripts/$script"
+          done
+
       - name: Build native launcher, sidecar, SBOM, and archive
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/build_release.py --version "$VERSION"
+          uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/build_release.py --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"
 
       - name: Check target and archive contract
         shell: bash

@@ -55,7 +55,8 @@ jobs:
             release/scripts/clean_candidate.py
             release/scripts/test_installed_e2e.py
             release/scripts/verify_build_output.py
-            release/scripts/analysis_tools.py
+            release/scripts/analysis_*.py
+            release/scripts/native_formats.py
             release/analysis-tools.lock.json
             release/source-lock.json
             release/scripts/verify_authenticode.ps1
@@ -137,6 +138,23 @@ jobs:
           uv sync --project "Firmware MCP New" --locked --all-groups
           if test "$RUNNER_OS" = Linux; then test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"; fi
 
+      - name: Prepare pinned native analysis inputs
+        shell: bash
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+          GCC_RUNTIME_INPUTS: ${{ vars.BYO_GCC_RUNTIME_INPUT_DIR }}
+        run: |
+          input_dir="$RUNNER_TEMP/byo-analysis-inputs"
+          python3 release/scripts/acquire_analysis_inputs.py --expected-target "$EXPECTED_TARGET" --output "$input_dir"
+          if test "$RUNNER_OS" = Linux; then
+            test -n "$GCC_RUNTIME_INPUTS"
+            mkdir "$input_dir/gcc-runtime"
+            for leaf in COPYING3 COPYING.RUNTIME provenance.json; do
+              cp "$GCC_RUNTIME_INPUTS/$leaf" "$input_dir/gcc-runtime/$leaf"
+            done
+          fi
+          echo "BYO_ANALYSIS_INPUT_DIR=$input_dir" >> "$GITHUB_ENV"
+
       - name: Mount protected product signing key
         shell: bash
         env:
@@ -168,7 +186,7 @@ jobs:
           VERSION: ${{ needs.authorize.outputs.version }}
           CODESIGN_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION }}
         run: |
-          args=(--production --channel canary --version "$VERSION")
+          args=(--production --channel canary --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR")
           if test "$RUNNER_OS" = macOS; then args+=(--codesign-identity "$CODESIGN_IDENTITY"); fi
           python3 release/scripts/build_release.py "${args[@]}"
 
@@ -273,21 +291,10 @@ jobs:
           "BYO_RELEASE_SIGNING_KEY=$env:RUNNER_TEMP\byo-release-key.pem" >> $env:GITHUB_ENV
 
       - name: Prepare pinned Windows analysis inputs
-        shell: pwsh
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          $lock = Get-Content -LiteralPath 'release/analysis-tools.lock.json' -Raw | ConvertFrom-Json
-          $inputDir = Join-Path $env:RUNNER_TEMP 'byo-analysis-inputs'
-          New-Item -ItemType Directory -Path $inputDir -Force | Out-Null
-          foreach ($program in $lock.programs.PSObject.Properties) {
-            $source = $program.Value.source
-            $archive = Join-Path $inputDir $source.archive
-            Invoke-WebRequest -Uri $source.url -OutFile $archive
-            $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actual -ne $source.sha256) { throw "Pinned $($program.Name) archive SHA-256 mismatch" }
-            Write-Host "$($program.Name): $($source.url) SHA256=$actual"
-          }
-          "BYO_ANALYSIS_INPUT_DIR=$inputDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          python release/scripts/acquire_analysis_inputs.py --expected-target windows-x86_64 --output "$RUNNER_TEMP/byo-analysis-inputs"
+          echo "BYO_ANALYSIS_INPUT_DIR=$RUNNER_TEMP/byo-analysis-inputs" >> "$GITHUB_ENV"
 
       - name: Prepare unsigned PE bundle
         shell: bash

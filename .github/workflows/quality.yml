@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - InstallerV1
+      - integration/portability/installer-20261010
 
 permissions:
   contents: read
@@ -55,6 +56,10 @@ jobs:
           python3 release/scripts/test_verify_build_output.py
           python3 release/scripts/test_build_release.py
           python3 release/scripts/test_e2e_harness.py
+          python3 release/scripts/test_analysis_tools.py
+          python3 release/scripts/test_analysis_portability.py
+          python3 release/scripts/test_acquire_analysis_inputs.py
+          python3 release/scripts/test_code_analysis_portable_smoke_controls.py
 
       - name: Validate shell bootstrap
         run: sh -n install.sh
