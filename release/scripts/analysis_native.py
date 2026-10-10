@@ -319,7 +319,9 @@ def stage_native(
         "make-identity",
     )
     with tempfile.TemporaryDirectory(prefix="byo-cppcheck-") as temporary:
-        work = Path(temporary)
+        # Canonicalize this owned root before deriving paths: macOS /var is a
+        # system alias. Keep no-follow validation on inputs and generated files.
+        work = Path(temporary).resolve(strict=True)
         source_dir, build_dir = work / "source", work / "build"
         source_dir.mkdir()
         prefix = lock["programs"]["cppcheck"]["source"]["archive_prefix"]
