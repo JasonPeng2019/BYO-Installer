@@ -26,6 +26,19 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def _existing_input(destination: Path, expected_sha256: str) -> bool:
+    if destination.is_symlink():
+        raise RuntimeError(f"Input archive must not be a symlink: {destination}")
+    if not destination.exists():
+        return False
+    if not destination.is_file() or digest(destination) != expected_sha256:
+        raise RuntimeError(
+            f"Existing input differs from its pin: {destination}; "
+            "choose a fresh input directory or replace it explicitly"
+        )
+    return True
+
+
 def acquire(target: str, output: Path) -> dict:
     """Reuse matching inputs; atomically publish only verified new downloads."""
     lock = analysis_tools.load_lock(target=target)
@@ -50,18 +63,14 @@ def acquire(target: str, output: Path) -> dict:
         raise RuntimeError(f"Input directory must not be a symlink: {output}")
     output.mkdir(parents=True, exist_ok=True)
     output = output.resolve(strict=True)
+    # Refuse any invalid existing input before starting acquisition of others.
+    for archive, source in sources.items():
+        _existing_input(output / archive, source["sha256"])
     receipts = []
     for archive, source in sources.items():
         destination = output / archive
-        if destination.is_symlink():
-            raise RuntimeError(f"Input archive must not be a symlink: {destination}")
-        if destination.exists():
-            if not destination.is_file() or digest(destination) != source["sha256"]:
-                raise RuntimeError(
-                    f"Existing input differs from its pin: {destination}; "
-                    "choose a fresh input directory or replace it explicitly"
-                )
-        else:
+        # Recheck at use time as well; preflight is not a receipt for later bytes.
+        if not _existing_input(destination, source["sha256"]):
             temporary = None
             try:
                 with tempfile.NamedTemporaryFile(

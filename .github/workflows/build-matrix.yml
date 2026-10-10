@@ -123,7 +123,7 @@ jobs:
         run: |
           result=0
           for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
-            if python "release/scripts/$script"; then
+            if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
               echo "PASS $script"
             else
               result=1
@@ -290,9 +290,10 @@ jobs:
         if: (success() || failure()) && steps.build-deps.outcome == 'success'
         shell: bash
         run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           result=0
           for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
-            if "$BYO_BUILD_PYTHON" "release/scripts/$script"; then
+            if uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "release/scripts/$script"; then
               echo "PASS $script"
             else
               result=1
