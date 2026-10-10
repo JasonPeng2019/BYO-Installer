@@ -338,7 +338,7 @@ class Pure(unittest.TestCase):
 
 
 class FakePs:
-    """psutil-shaped fake for unobservable/reused-PID branches."""
+    """psutil observations and wait outcomes, without process-policy logic."""
 
     class NoSuchProcess(Exception):
         pass
@@ -354,16 +354,26 @@ class FakePs:
 
     STATUS_ZOMBIE = "zombie"
 
-    def __init__(self, behaviour):
+    def __init__(
+        self, behaviour, *, at_kill_lookup=None, after_wait=None, timeout=False
+    ):
         self.behaviour = behaviour
+        self.at_kill_lookup = at_kill_lookup
+        self.after_wait = after_wait
+        self.timeout = timeout
+        self.lookups = []
         self.killed = []
+        self.waited = []
 
     def Process(self, pid):  # noqa: N802 - psutil API shape
         fake = self
-        mode = self.behaviour
+        self.lookups.append(pid)
+        if len(self.lookups) == 2 and self.at_kill_lookup is not None:
+            self.behaviour = self.at_kill_lookup
 
         class P:
             def create_time(self):
+                mode = fake.behaviour
                 if mode == "denied":
                     raise fake.AccessDenied()
                 if mode == "gone":
@@ -371,10 +381,20 @@ class FakePs:
                 return 200.0 if mode == "reused" else 100.0
 
             def status(self):
-                return "zombie" if mode == "zombie" else "running"
+                if fake.behaviour == "status-denied":
+                    raise fake.AccessDenied()
+                return "zombie" if fake.behaviour == "zombie" else "running"
 
             def kill(self):
                 fake.killed.append(pid)
+
+            def wait(self, timeout):
+                fake.waited.append((pid, timeout))
+                if fake.after_wait is not None:
+                    fake.behaviour = fake.after_wait
+                if fake.timeout:
+                    raise fake.TimeoutExpired()
+                return 0
 
         return P()
 
@@ -393,9 +413,85 @@ class Identity(unittest.TestCase):
         reused = FakePs("reused")
         self.assertTrue(smoke.Processes(reused).terminate_exact(identity))
         self.assertEqual(reused.killed, [])
-        denied = FakePs("denied")
-        self.assertIsNone(smoke.Processes(denied).terminate_exact(identity))
-        self.assertEqual(denied.killed, [])
+        for state in ("denied", "status-denied"):
+            with self.subTest(state=state):
+                denied = FakePs(state)
+                self.assertIsNone(smoke.Processes(denied).terminate_exact(identity))
+                self.assertEqual(denied.killed, [])
+                self.assertEqual(denied.waited, [])
+
+    def test_nonchild_timeout_then_zombie_confirms_exit_without_reaping(self):
+        # An orphan can remain a zombie under container PID 1 after SIGKILL.
+        # Its non-parent cannot reap it; wait timeout is not proof of liveness.
+        native = FakePs("live", after_wait="zombie", timeout=True)
+        self.assertIs(
+            smoke.Processes(native).terminate_exact({"pid": 7, "create_time": 100.0}),
+            True,
+        )
+        self.assertEqual(native.killed, [7])
+        self.assertEqual(native.waited, [(7, 5)])
+        self.assertEqual(native.Process(7).status(), native.STATUS_ZOMBIE)
+
+    def test_timeout_then_gone_or_reused_confirms_exact_identity_exit(self):
+        for state in ("gone", "reused"):
+            with self.subTest(state=state):
+                native = FakePs("live", after_wait=state, timeout=True)
+                self.assertIs(
+                    smoke.Processes(native).terminate_exact(
+                        {"pid": 7, "create_time": 100.0}
+                    ),
+                    True,
+                )
+                self.assertEqual(native.killed, [7])
+                self.assertEqual(native.waited, [(7, 5)])
+
+    def test_timeout_then_still_live_is_unconfirmed(self):
+        native = FakePs("live", after_wait="live", timeout=True)
+        self.assertIs(
+            smoke.Processes(native).terminate_exact({"pid": 7, "create_time": 100.0}),
+            False,
+        )
+        self.assertEqual(native.killed, [7])
+        self.assertEqual(native.waited, [(7, 5)])
+
+    def test_timeout_then_denied_observation_is_unknown(self):
+        for state in ("denied", "status-denied"):
+            with self.subTest(state=state):
+                native = FakePs("live", after_wait=state, timeout=True)
+                self.assertIsNone(
+                    smoke.Processes(native).terminate_exact(
+                        {"pid": 7, "create_time": 100.0}
+                    )
+                )
+                self.assertEqual(native.killed, [7])
+                self.assertEqual(native.waited, [(7, 5)])
+
+    def test_kill_rechecks_identity_and_never_signals_replacement_or_unknown(self):
+        for state, expected in (("reused", True), ("gone", True), ("denied", None)):
+            with self.subTest(state=state):
+                native = FakePs("live", at_kill_lookup=state)
+                self.assertIs(
+                    smoke.Processes(native).terminate_exact(
+                        {"pid": 7, "create_time": 100.0}
+                    ),
+                    expected,
+                )
+                self.assertEqual(native.lookups, [7, 7])
+                self.assertEqual(native.killed, [])
+                self.assertEqual(native.waited, [])
+
+    def test_successful_wait_still_requires_verified_exit(self):
+        for state, expected in (("gone", True), ("live", False), ("denied", None)):
+            with self.subTest(state=state):
+                native = FakePs("live", after_wait=state)
+                self.assertIs(
+                    smoke.Processes(native).terminate_exact(
+                        {"pid": 7, "create_time": 100.0}
+                    ),
+                    expected,
+                )
+                self.assertEqual(native.killed, [7])
+                self.assertEqual(native.waited, [(7, 5)])
 
 
 @unittest.skipIf(not hasattr(smoke, "Processes"), "smoke import failed")
