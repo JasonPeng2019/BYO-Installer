@@ -1,0 +1,34 @@
+name: ARM test input contracts
+
+on:
+  push:
+    branches: [integration/portability/installer-20261010]
+    paths:
+      - 'release/arm-test-toolchains.json'
+      - 'release/scripts/acquire_arm_test_toolchain.py'
+      - 'release/scripts/test_arm_test_toolchain.py'
+      - 'release/scripts/acquire_analysis_inputs.py'
+      - '.github/workflows/arm-test-input-contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-contracts:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: ARM test archive and compiler receipt contracts
+        run: python release/scripts/test_arm_test_toolchain.py
+      - name: Existing analyzer acquisition contracts
+        if: success() || failure()
+        run: python release/scripts/test_acquire_analysis_inputs.py
