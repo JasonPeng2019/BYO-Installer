@@ -211,40 +211,41 @@ Release assembly requires Rust, Python 3.12, `uv`, a native C toolchain, and
 clean AgentWorkspace and Firmware MCP checkouts at the exact commits in
 [`release/source-lock.json`](release/source-lock.json).
 
-Run the fast local quality checks:
+Local lightweight checks:
 
 ```sh
 cargo fmt --manifest-path launcher/Cargo.toml --check
-cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-cargo test --manifest-path launcher/Cargo.toml --locked
-python3 release/scripts/test_compile_workspace.py
-python3 release/scripts/test_verify_build_output.py
-python3 release/scripts/test_build_release.py
 sh -n install.sh
 ```
 
-Build the native launcher, compiled sidecar, workspace pack, SBOM, archive, and
-private symbols:
+Use GitHub Actions for compilation, test suites and complete native bundles:
 
 ```sh
-python3 release/scripts/build_release.py
+gh workflow run build-matrix.yml --repo JasonPeng2019/BYO-Installer \
+  --ref YOUR_TASK_BRANCH -f build_kind=contracts
+gh workflow run build-matrix.yml --repo JasonPeng2019/BYO-Installer \
+  --ref YOUR_TASK_BRANCH -f build_kind=bundle
 ```
 
 The native build matrix is authoritative for the four advertised targets and
 runs archive verification plus installed hardware-free end-to-end tests. Do not
 publish a development archive as a signed production release.
 
-Windows x86_64 code-analysis staging is integrated into the existing release
-builder against the accepted source pins and
+Code-analysis staging supports the existing Windows x86_64, macOS aarch64/x86_64
+and Linux x86_64 targets against the source pins and
 [`release/analysis-tools.lock.json`](release/analysis-tools.lock.json). Supply its
 local archives with `--analysis-input-dir` or `BYO_ANALYSIS_INPUT_DIR`; the builder
 rebuilds static Cppcheck and selects the exact clangd resources without downloads.
+Linux uses the pinned glibc 2.28 builder and measured GCC runtime inputs. macOS
+uses matching native ARM or Intel runners and ships thin native images.
+See [native analysis build and test instructions](docs/code-analysis-native-build.md)
+for inputs, commands, artifact verification and the two-runner smoke test.
 See the [pending analysis release notes](docs/code-analysis-release-notes.md) for
 mandatory target-aware Cppcheck configuration, saved-file semantic query scope,
-recovery steps and the measured Windows source-path limit. Input selection is
-verified; release build, installed Windows acceptance and independent review
-remain incomplete. Other platforms are unverified for this change, and the
-published preview remains unchanged.
+recovery steps and the measured Windows source-path limit. The previous Windows
+delivery has its own acceptance record. Native build and runtime results for this
+portability candidate must be established by its exact GitHub Actions receipts;
+source implementation alone does not establish a passing native build.
 
 ## Reference
 

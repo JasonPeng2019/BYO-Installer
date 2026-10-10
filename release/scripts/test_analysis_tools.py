@@ -201,7 +201,9 @@ class WindowsAnalysisTests(unittest.TestCase):
 
     def test_pinned_selection_counts_and_portable_recipe(self):
         lock = tools.load_lock(target="windows-x86_64")
-        self.assertEqual((lock["platform"], lock["architecture"]), ("windows", "x86_64"))
+        self.assertEqual(
+            (lock["platform"], lock["architecture"]), ("windows", "x86_64")
+        )
         cpp = lock["programs"]["cppcheck"]["selected_files"]
         clang = lock["programs"]["clangd"]["selected_files"]
         self.assertEqual(

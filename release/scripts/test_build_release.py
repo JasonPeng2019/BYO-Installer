@@ -217,15 +217,21 @@ def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
     # workflows): each archive build first runs the explicit target-pinned
     # acquisition CLI and passes exactly that directory to build_release.py.
     expected = {
-        ("build-matrix.yml", "build"): ({"macos-aarch64", "macos-x86_64", "windows-x86_64"}, 2),
+        ("build-matrix.yml", "build"): (
+            {"macos-aarch64", "macos-x86_64", "windows-x86_64"},
+            2,
+        ),
         ("build-matrix.yml", "linux-x86_64"): ({"linux-x86_64"}, 1),
-        ("release.yml", "build"): ({"macos-aarch64", "macos-x86_64", "linux-x86_64"}, 1),
+        ("release.yml", "build"): (
+            {"macos-aarch64", "macos-x86_64", "linux-x86_64"},
+            1,
+        ),
         ("release.yml", "windows"): ({"windows-x86_64"}, 2),
     }
     seen = set()
-    windows_python = analysis_tools.load_lock(target="windows-x86_64")["windows_native"][
-        "source"
-    ]["python_version"]
+    windows_python = analysis_tools.load_lock(target="windows-x86_64")[
+        "windows_native"
+    ]["source"]["python_version"]
     for filename in ("build-matrix.yml", "release.yml"):
         text, jobs = workflow_jobs(filename)
         # Inline lock parsing/downloads would bypass the hash-pinned CLI.
@@ -245,7 +251,10 @@ def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
             acquisition = acquisitions[0]
             target = acquisition[1]
             if target == '"$EXPECTED_TARGET"':
-                assert "EXPECTED_TARGET: ${{ matrix.target }}" in section[: acquisition.start()]
+                assert (
+                    "EXPECTED_TARGET: ${{ matrix.target }}"
+                    in section[: acquisition.start()]
+                )
                 matrix = set(re.findall(r"(?m)^ +- target: ([a-z0-9_-]+)$", section))
                 assert matrix == targets, (filename, job, matrix)
             else:
@@ -256,9 +265,14 @@ def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
             for line in builds:
                 if '"${args[@]}"' in line:
                     arrays = re.findall(r"(?m)^ +args=\((.*)\)$", section)
-                    assert any('--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in a for a in arrays)
+                    assert any(
+                        '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in a
+                        for a in arrays
+                    )
                 else:
-                    assert '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in line, line
+                    assert '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in line, (
+                        line
+                    )
             if "windows-x86_64" in targets:
                 assert windows_python in section, (
                     "Windows build Python must match pinned native inputs"
@@ -269,7 +283,13 @@ def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
                 staging = section[acquisition.end() : first_build]
                 assert "/gcc-runtime" in staging, (filename, job)
                 if "prepare_gcc_runtime_inputs.py" in staging:
-                    for flag in ("--compiler", "--notices", "--package", "--source", "--output"):
+                    for flag in (
+                        "--compiler",
+                        "--notices",
+                        "--package",
+                        "--source",
+                        "--output",
+                    ):
                         assert flag in staging, (filename, job, flag)
                     assert '--output "$input_dir/gcc-runtime"' in staging
                 else:

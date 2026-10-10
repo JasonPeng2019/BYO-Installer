@@ -472,13 +472,19 @@ def test_native_tar_and_zip_archives_bind_target_type_and_modes() -> None:
 
             other = "windows-x86_64" if platform != "windows" else "linux-x86_64"
             _expect_archive_error(
-                archive, kind, manifest, "differs from explicit target",
+                archive,
+                kind,
+                manifest,
+                "differs from explicit target",
                 expected_target=other,
             )
             sibling = {"aarch64": "x86_64", "x86_64": "aarch64"}[architecture]
             if platform == "macos":
                 _expect_archive_error(
-                    archive, kind, manifest, "differs from explicit target",
+                    archive,
+                    kind,
+                    manifest,
+                    "differs from explicit target",
                     expected_target=f"macos-{sibling}",
                 )
             _expect_archive_error(
@@ -505,9 +511,7 @@ def test_native_tar_and_zip_archives_bind_target_type_and_modes() -> None:
             _expect_archive_error(archive, kind, manifest, "metadata permissions")
             write(
                 archive,
-                _entries(
-                    manifest, {"byo-test/extra": (None, 0o755, tarfile.DIRTYPE)}
-                ),
+                _entries(manifest, {"byo-test/extra": (None, 0o755, tarfile.DIRTYPE)}),
             )
             _expect_archive_error(archive, kind, manifest, "misplaced directory")
             write(
@@ -546,7 +550,12 @@ def test_native_archives_reject_links_and_special_entries() -> None:
     manifest = _native_manifest("linux", "x86_64")
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / "byo-test.tar.gz"
-        for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE):
+        for kind in (
+            tarfile.SYMTYPE,
+            tarfile.LNKTYPE,
+            tarfile.FIFOTYPE,
+            tarfile.CHRTYPE,
+        ):
             _write_tar(
                 archive,
                 _entries(manifest, {"byo-test/bin/link": (None, 0o755, kind)}),
@@ -599,19 +608,19 @@ class _CommandLine:
 
     def run(self, *argv: str):
         output = io.StringIO()
-        with patch.object(vbo, "ROOT", self.root), patch.object(
-            vbo, "validate_archive"
-        ) as validated, patch.object(
-            analysis_tools, "load_lock", side_effect=self.load_lock
-        ), patch.object(
-            analysis_tools,
-            "validate_pe_closure",
-            return_value={"pe_closure": "checked"},
-        ) as pe, patch.dict(
-            sys.modules, {"native_formats": self.native}
-        ), patch.object(
-            sys, "argv", ["verify_build_output.py", *argv]
-        ), contextlib.redirect_stdout(output):
+        with (
+            patch.object(vbo, "ROOT", self.root),
+            patch.object(vbo, "validate_archive") as validated,
+            patch.object(analysis_tools, "load_lock", side_effect=self.load_lock),
+            patch.object(
+                analysis_tools,
+                "validate_pe_closure",
+                return_value={"pe_closure": "checked"},
+            ) as pe,
+            patch.dict(sys.modules, {"native_formats": self.native}),
+            patch.object(sys, "argv", ["verify_build_output.py", *argv]),
+            contextlib.redirect_stdout(output),
+        ):
             code = vbo.main()
         return code, validated, pe, output.getvalue()
 
@@ -640,15 +649,21 @@ def test_analysis_archive_cli_requires_target_and_writes_receipt() -> None:
             archive, manifest = _cli_archive(Path(temporary), platform, architecture)
             code, validated, pe, printed = cli.run(
                 "analysis-archive",
-                "--expected-target", spelled,
-                "--archive", str(archive),
-                "--receipt", str(cli.receipt),
+                "--expected-target",
+                spelled,
+                "--archive",
+                str(archive),
+                "--receipt",
+                str(cli.receipt),
             )
             assert code == 0, target
             assert validated.call_count == 1, target
             args, kwargs = validated.call_args
             assert (Path(args[0]), args[1], args[2], args[3]) == (
-                archive, kind, "byo-test", manifest
+                archive,
+                kind,
+                "byo-test",
+                manifest,
             ), target
             assert kwargs == {"expected_target": target}, target
             receipt = json.loads(cli.receipt.read_text())
@@ -668,13 +683,21 @@ def test_analysis_archive_cli_requires_target_and_writes_receipt() -> None:
                 assert receipt["native_closure"] == target
             native_on_windows = os.name == "nt" and platform != "windows"
             assert receipt["evidence_kind"].startswith(
-                "Windows-host platform-neutral" if native_on_windows else "static archive"
+                "Windows-host platform-neutral"
+                if native_on_windows
+                else "static archive"
             ), receipt["evidence_kind"]
 
             # The generic command has no implicit or host-derived target.
             cli.receipt.unlink()
             try:
-                cli.run("analysis-archive", "--archive", str(archive), "--receipt", str(cli.receipt))
+                cli.run(
+                    "analysis-archive",
+                    "--archive",
+                    str(archive),
+                    "--receipt",
+                    str(cli.receipt),
+                )
                 raise AssertionError("analysis-archive accepted a missing target")
             except SystemExit as exit_:
                 assert exit_.code == 2
@@ -686,7 +709,11 @@ def test_windows_analysis_archive_alias_is_retained_and_windows_only() -> None:
         cli = _CommandLine(temporary)
         archive, manifest = _cli_archive(Path(temporary), "windows", "x86_64")
         code, validated, pe, _ = cli.run(
-            "windows-analysis-archive", "--archive", str(archive), "--receipt", str(cli.receipt)
+            "windows-analysis-archive",
+            "--archive",
+            str(archive),
+            "--receipt",
+            str(cli.receipt),
         )
         assert code == 0 and pe.call_count == 1
         assert validated.call_args.kwargs == {"expected_target": "windows-x86_64"}
@@ -696,9 +723,12 @@ def test_windows_analysis_archive_alias_is_retained_and_windows_only() -> None:
             try:
                 cli.run(
                     "windows-analysis-archive",
-                    "--expected-target", other,
-                    "--archive", str(archive),
-                    "--receipt", str(cli.receipt),
+                    "--expected-target",
+                    other,
+                    "--archive",
+                    str(archive),
+                    "--receipt",
+                    str(cli.receipt),
                 )
                 raise AssertionError(f"alias accepted {other}")
             except RuntimeError as error:
@@ -718,9 +748,12 @@ def test_analysis_archive_cli_rejects_source_pin_and_root_manifest_drift() -> No
             try:
                 cli.run(
                     "analysis-archive",
-                    "--expected-target", "linux-x86_64",
-                    "--archive", str(archive),
-                    "--receipt", str(cli.receipt),
+                    "--expected-target",
+                    "linux-x86_64",
+                    "--archive",
+                    str(archive),
+                    "--receipt",
+                    str(cli.receipt),
                 )
                 raise AssertionError("source pin drift passed")
             except RuntimeError as error:
@@ -731,7 +764,9 @@ def test_analysis_archive_cli_rejects_source_pin_and_root_manifest_drift() -> No
         manifest = _native_manifest("macos", "aarch64")
         archive = Path(temporary) / "byo-test.zip"
         entries = _entries(manifest)
-        second = [(n.replace("byo-test", "byo-other", 1), d, m, k) for n, d, m, k in entries]
+        second = [
+            (n.replace("byo-test", "byo-other", 1), d, m, k) for n, d, m, k in entries
+        ]
         for layout in ([], entries + second):
             if layout:
                 _write_zip(archive, layout)
@@ -740,9 +775,12 @@ def test_analysis_archive_cli_rejects_source_pin_and_root_manifest_drift() -> No
             try:
                 cli.run(
                     "analysis-archive",
-                    "--expected-target", "macos-aarch64",
-                    "--archive", str(archive),
-                    "--receipt", str(cli.receipt),
+                    "--expected-target",
+                    "macos-aarch64",
+                    "--archive",
+                    str(archive),
+                    "--receipt",
+                    str(cli.receipt),
                 )
                 raise AssertionError("ambiguous root manifest passed")
             except RuntimeError as error:

@@ -99,7 +99,9 @@ def refuse_network(*args: object, **kwargs: object):
 def partials(directory: Path) -> list[str]:
     if not directory.exists():
         return []
-    return sorted(path.name for path in directory.iterdir() if path.name.endswith(".partial"))
+    return sorted(
+        path.name for path in directory.iterdir() if path.name.endswith(".partial")
+    )
 
 
 def symlink_or_skip(link: Path, target: Path, *, directory: bool) -> None:
@@ -140,20 +142,29 @@ class AcquisitionTests(unittest.TestCase):
         }
 
     def acquire(self, urlopen, target: str = "windows-x86_64") -> dict:
-        with mock.patch.object(acquire_inputs.urllib.request, "urlopen", side_effect=urlopen):
+        with mock.patch.object(
+            acquire_inputs.urllib.request, "urlopen", side_effect=urlopen
+        ):
             return acquire_inputs.acquire(target, self.output)
 
     def test_downloads_verify_and_publish_each_pinned_archive_once(self) -> None:
         urlopen, calls = serve(self.urls())
         receipt = self.acquire(urlopen)
         self.assertEqual(sorted(calls), sorted(self.urls()))
-        self.assertEqual((self.output / "cppcheck-src.tar.gz").read_bytes(), CPPCHECK_BYTES)
-        self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), CLANGD_BYTES)
+        self.assertEqual(
+            (self.output / "cppcheck-src.tar.gz").read_bytes(), CPPCHECK_BYTES
+        )
+        self.assertEqual(
+            (self.output / "clangd-windows.zip").read_bytes(), CLANGD_BYTES
+        )
         self.assertEqual(partials(self.output), [])
         self.assertEqual(receipt["target"], "windows-x86_64")
         self.assertEqual(Path(receipt["input_dir"]), self.output.resolve())
         self.assertEqual(
-            {item["archive"]: (item["sha256"], item["size"]) for item in receipt["archives"]},
+            {
+                item["archive"]: (item["sha256"], item["size"])
+                for item in receipt["archives"]
+            },
             {
                 "cppcheck-src.tar.gz": (sha256(CPPCHECK_BYTES), len(CPPCHECK_BYTES)),
                 "clangd-windows.zip": (sha256(CLANGD_BYTES), len(CLANGD_BYTES)),
@@ -168,7 +179,8 @@ class AcquisitionTests(unittest.TestCase):
         receipt = self.acquire(refuse_network)
         self.assertEqual(len(receipt["archives"]), 2)
         self.assertEqual(
-            {path.name: path.stat().st_mtime_ns for path in self.output.iterdir()}, before
+            {path.name: path.stat().st_mtime_ns for path in self.output.iterdir()},
+            before,
         )
 
     def test_partial_reuse_downloads_only_missing_archive(self) -> None:
@@ -177,14 +189,18 @@ class AcquisitionTests(unittest.TestCase):
         urlopen, calls = serve(self.urls())
         self.acquire(urlopen)
         self.assertEqual(calls, [self.lock["programs"]["clangd"]["source"]["url"]])
-        self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), CLANGD_BYTES)
+        self.assertEqual(
+            (self.output / "clangd-windows.zip").read_bytes(), CLANGD_BYTES
+        )
 
     def test_hash_mismatch_cannot_publish_and_cleans_temporary_file(self) -> None:
         payloads = self.urls()
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
         payloads[clangd_url] = CLANGD_BYTES + b"tampered"
         urlopen, _ = serve(payloads)
-        with self.assertRaisesRegex(RuntimeError, "SHA-256 mismatch for clangd-windows.zip"):
+        with self.assertRaisesRegex(
+            RuntimeError, "SHA-256 mismatch for clangd-windows.zip"
+        ):
             self.acquire(urlopen)
         self.assertFalse((self.output / "clangd-windows.zip").exists())
         self.assertEqual(partials(self.output), [])
@@ -193,14 +209,18 @@ class AcquisitionTests(unittest.TestCase):
         self.output.mkdir()
         foreign = b"user supplied different archive"
         (self.output / "clangd-windows.zip").write_bytes(foreign)
-        with self.assertRaisesRegex(RuntimeError, "Existing input differs from its pin"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Existing input differs from its pin"
+        ):
             self.acquire(refuse_network)
         self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), foreign)
         self.assertEqual(partials(self.output), [])
 
     def test_existing_directory_in_archive_slot_is_refused(self) -> None:
         (self.output / "clangd-windows.zip").mkdir(parents=True)
-        with self.assertRaisesRegex(RuntimeError, "Existing input differs from its pin"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Existing input differs from its pin"
+        ):
             self.acquire(refuse_network)
         self.assertTrue((self.output / "clangd-windows.zip").is_dir())
 
@@ -280,7 +300,9 @@ class AcquisitionTests(unittest.TestCase):
         urlopen, calls = serve(self.urls())
         receipt = self.acquire(urlopen)
         self.assertEqual(len(calls), 1)
-        self.assertEqual([item["archive"] for item in receipt["archives"]], ["cppcheck-src.tar.gz"])
+        self.assertEqual(
+            [item["archive"] for item in receipt["archives"]], ["cppcheck-src.tar.gz"]
+        )
 
     def test_symlinked_output_directory_is_refused(self) -> None:
         real = self.root / "real"
@@ -318,8 +340,11 @@ class AcquisitionTests(unittest.TestCase):
 class CommandLineTests(unittest.TestCase):
     def run_main(self, argv: list[str]) -> tuple[int, str, str]:
         stdout, stderr = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", ["acquire_analysis_inputs.py", *argv]), \
-                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with (
+            mock.patch.object(sys, "argv", ["acquire_analysis_inputs.py", *argv]),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
             try:
                 status = acquire_inputs.main()
             except SystemExit as exit_:
@@ -332,8 +357,14 @@ class CommandLineTests(unittest.TestCase):
     def test_cli_success_prints_receipt_and_routes_expected_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "inputs"
-            receipt = {"target": "linux-x86_64", "input_dir": str(output), "archives": []}
-            with mock.patch.object(acquire_inputs, "acquire", return_value=receipt) as called:
+            receipt = {
+                "target": "linux-x86_64",
+                "input_dir": str(output),
+                "archives": [],
+            }
+            with mock.patch.object(
+                acquire_inputs, "acquire", return_value=receipt
+            ) as called:
                 status, stdout, _ = self.run_main(
                     ["--expected-target", "linux-x86_64", "--output", str(output)]
                 )
@@ -343,14 +374,18 @@ class CommandLineTests(unittest.TestCase):
 
     def test_cli_acquisition_failure_exits_two_with_reason(self) -> None:
         with mock.patch.object(
-            acquire_inputs, "acquire", side_effect=RuntimeError("Pinned archive SHA-256 mismatch")
+            acquire_inputs,
+            "acquire",
+            side_effect=RuntimeError("Pinned archive SHA-256 mismatch"),
         ):
             status, stdout, stderr = self.run_main(
                 ["--expected-target", "macos-aarch64", "--output", "inputs"]
             )
         self.assertEqual(status, 2)
         self.assertEqual(stdout, "")
-        self.assertIn("Analyzer input acquisition failed: Pinned archive SHA-256 mismatch", stderr)
+        self.assertIn(
+            "Analyzer input acquisition failed: Pinned archive SHA-256 mismatch", stderr
+        )
 
     def test_cli_os_and_value_errors_also_exit_two(self) -> None:
         for error in (OSError("disk full"), ValueError("Unsafe relative path")):
@@ -371,7 +406,9 @@ class CommandLineTests(unittest.TestCase):
         )
         for argv in cases:
             with self.subTest(argv):
-                with mock.patch.object(acquire_inputs, "acquire", side_effect=AssertionError):
+                with mock.patch.object(
+                    acquire_inputs, "acquire", side_effect=AssertionError
+                ):
                     status, _, _ = self.run_main(argv)
                 self.assertEqual(status, 2)
 
@@ -392,12 +429,16 @@ class PinnedLockRoutingTests(unittest.TestCase):
                 output = Path(directory) / "inputs"
                 record = analysis_tools.load_lock(target=target)
                 expected = {
-                    program["source"]["archive"] for program in record["programs"].values()
+                    program["source"]["archive"]
+                    for program in record["programs"].values()
                 }
                 self.assertEqual(len(expected), 2, target)
-                with mock.patch.object(
-                    acquire_inputs.urllib.request, "urlopen", side_effect=urlopen
-                ), self.assertRaises(Attempted):
+                with (
+                    mock.patch.object(
+                        acquire_inputs.urllib.request, "urlopen", side_effect=urlopen
+                    ),
+                    self.assertRaises(Attempted),
+                ):
                     acquire_inputs.acquire(target, output)
                 self.assertEqual(sorted(path.name for path in output.iterdir()), [])
 
@@ -411,7 +452,13 @@ GCC_NOTICE_BYTES = {
     "COPYING3": b"fixture GPLv3 notice text\n",
     "COPYING.RUNTIME": b"fixture GCC runtime library exception text\n",
 }
-PROVENANCE_KEYS = {"schema_version", "compiler_sha256", "package", "source", "static_libraries"}
+PROVENANCE_KEYS = {
+    "schema_version",
+    "compiler_sha256",
+    "package",
+    "source",
+    "static_libraries",
+}
 
 
 class GccRuntimeInputPreparationTests(unittest.TestCase):
@@ -449,7 +496,9 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
             self.libraries[name] = path
         for name, data in GCC_NOTICE_BYTES.items():
             (self.notices / name).write_bytes(data)
-        self.answers: dict[str, str] = {name: str(path) for name, path in self.libraries.items()}
+        self.answers: dict[str, str] = {
+            name: str(path) for name, path in self.libraries.items()
+        }
         self.queries: list[tuple[list[str], dict]] = []
 
     def query(self, argv, **kwargs) -> str:
@@ -459,22 +508,43 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
         prefix = "-print-file-name="
         self.assertEqual(len(argv), 2)
         self.assertTrue(argv[1].startswith(prefix), argv)
-        answer = self.answers[argv[1][len(prefix):]]
+        answer = self.answers[argv[1][len(prefix) :]]
         if isinstance(answer, BaseException):
             raise answer
         return answer + "\n"
 
-    def run_prepare(self, *, platform: str = "linux", package: str = "gcc-toolset-12-gcc-c++-12.2.1-7.el8",
-                    source: str = "gcc-toolset-12-gcc-12.2.1-7.el8.src.rpm", compiler: Path | None = None):
-        with mock.patch.object(self.prep.sys, "platform", platform), \
-                mock.patch.object(self.prep.subprocess, "check_output", side_effect=self.query), \
-                mock.patch.object(self.prep.subprocess, "run", side_effect=AssertionError("no process may run")):
-            return self.prep.prepare(compiler or self.compiler, self.notices, package, source, self.output)
+    def run_prepare(
+        self,
+        *,
+        platform: str = "linux",
+        package: str = "gcc-toolset-12-gcc-c++-12.2.1-7.el8",
+        source: str = "gcc-toolset-12-gcc-12.2.1-7.el8.src.rpm",
+        compiler: Path | None = None,
+    ):
+        with (
+            mock.patch.object(self.prep.sys, "platform", platform),
+            mock.patch.object(
+                self.prep.subprocess, "check_output", side_effect=self.query
+            ),
+            mock.patch.object(
+                self.prep.subprocess,
+                "run",
+                side_effect=AssertionError("no process may run"),
+            ),
+        ):
+            return self.prep.prepare(
+                compiler or self.compiler, self.notices, package, source, self.output
+            )
 
     def assert_nothing_published(self) -> None:
-        self.assertFalse(self.output.exists(), "failed preparation must not create its output directory")
+        self.assertFalse(
+            self.output.exists(),
+            "failed preparation must not create its output directory",
+        )
 
-    def test_measures_selected_compiler_libraries_and_writes_inputs_as_supplied(self) -> None:
+    def test_measures_selected_compiler_libraries_and_writes_inputs_as_supplied(
+        self,
+    ) -> None:
         package = "gcc-toolset-12-gcc-c++ 12.2.1-7.el8 (x86_64)"
         source = "https://vault.example.invalid/gcc-toolset-12-gcc-12.2.1-7.el8.src.rpm"
         provenance = self.run_prepare(package=package, source=source)
@@ -483,12 +553,17 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
             "compiler_sha256": sha256(self.compiler.read_bytes()),
             "package": package,
             "source": source,
-            "static_libraries": {name: sha256(path.read_bytes()) for name, path in self.libraries.items()},
+            "static_libraries": {
+                name: sha256(path.read_bytes()) for name, path in self.libraries.items()
+            },
         }
         self.assertEqual(provenance, expected)
         self.assertEqual(set(provenance), PROVENANCE_KEYS)
         self.assertIs(type(provenance["schema_version"]), int)
-        self.assertEqual(sorted(path.name for path in self.output.iterdir()), sorted(["COPYING3", "COPYING.RUNTIME", "provenance.json"]))
+        self.assertEqual(
+            sorted(path.name for path in self.output.iterdir()),
+            sorted(["COPYING3", "COPYING.RUNTIME", "provenance.json"]),
+        )
         for name, data in GCC_NOTICE_BYTES.items():
             self.assertEqual((self.output / name).read_bytes(), data)
         written = (self.output / "provenance.json").read_bytes()
@@ -496,29 +571,47 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
         self.assertEqual(analysis_tools.strict_json(written), expected)
         self.assertEqual(
             [argv for argv, _ in self.queries],
-            [[str(self.compiler), f"-print-file-name={name}"] for name in GCC_LIBRARY_NAMES],
+            [
+                [str(self.compiler), f"-print-file-name={name}"]
+                for name in GCC_LIBRARY_NAMES
+            ],
         )
 
     def test_library_hashes_are_measured_from_the_reported_bytes(self) -> None:
         relocated = self.toolchain / "other" / "libgcc.a"
         relocated.parent.mkdir()
-        relocated.write_bytes(b"different libgcc.a bytes reported by the selected compiler\n")
+        relocated.write_bytes(
+            b"different libgcc.a bytes reported by the selected compiler\n"
+        )
         self.answers["libgcc.a"] = str(relocated)
         provenance = self.run_prepare()
-        self.assertEqual(provenance["static_libraries"]["libgcc.a"], sha256(relocated.read_bytes()))
-        self.assertNotEqual(provenance["static_libraries"]["libgcc.a"], sha256(self.libraries["libgcc.a"].read_bytes()))
-        self.assertEqual(provenance["static_libraries"]["libstdc++.a"], sha256(self.libraries["libstdc++.a"].read_bytes()))
+        self.assertEqual(
+            provenance["static_libraries"]["libgcc.a"], sha256(relocated.read_bytes())
+        )
+        self.assertNotEqual(
+            provenance["static_libraries"]["libgcc.a"],
+            sha256(self.libraries["libgcc.a"].read_bytes()),
+        )
+        self.assertEqual(
+            provenance["static_libraries"]["libstdc++.a"],
+            sha256(self.libraries["libstdc++.a"].read_bytes()),
+        )
 
     def test_compiler_identity_is_the_resolved_selected_file(self) -> None:
         link = self.toolchain / "c++"
         symlink_or_skip(link, self.compiler, directory=False)
         provenance = self.run_prepare(compiler=link)
-        self.assertEqual(provenance["compiler_sha256"], sha256(self.compiler.read_bytes()))
+        self.assertEqual(
+            provenance["compiler_sha256"], sha256(self.compiler.read_bytes())
+        )
         self.assertTrue(all(argv[0] == str(self.compiler) for argv, _ in self.queries))
 
     def test_native_linux_guard_runs_before_any_query_or_write(self) -> None:
         for platform in ("win32", "darwin", "cygwin", "linux2"):
-            with self.subTest(platform), self.assertRaisesRegex(RuntimeError, "requires native Linux"):
+            with (
+                self.subTest(platform),
+                self.assertRaisesRegex(RuntimeError, "requires native Linux"),
+            ):
                 self.run_prepare(platform=platform)
         self.assertEqual(self.queries, [])
         self.assert_nothing_published()
@@ -527,7 +620,9 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
         for field in ("package", "source"):
             for value in ("", "   ", "\t\n"):
                 with self.subTest(field=field, value=value):
-                    with self.assertRaisesRegex(RuntimeError, "compiler package and corresponding source"):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "compiler package and corresponding source"
+                    ):
                         self.run_prepare(**{field: value})
         self.assertEqual(self.queries, [])
         self.assert_nothing_published()
@@ -545,11 +640,15 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
             path = self.notices / name
             with self.subTest(case=f"missing {name}"):
                 path.unlink()
-                with self.assertRaisesRegex(RuntimeError, "Supply the selected toolchain notice"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Supply the selected toolchain notice"
+                ):
                     self.run_prepare()
             with self.subTest(case=f"directory {name}"):
                 path.mkdir()
-                with self.assertRaisesRegex(RuntimeError, "Supply the selected toolchain notice"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Supply the selected toolchain notice"
+                ):
                     self.run_prepare()
                 path.rmdir()
             with self.subTest(case=f"empty {name}"):
@@ -565,11 +664,15 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
         real.write_bytes(GCC_NOTICE_BYTES["COPYING3"])
         (self.notices / "COPYING3").unlink()
         symlink_or_skip(self.notices / "COPYING3", real, directory=False)
-        with self.assertRaisesRegex(RuntimeError, "Supply the selected toolchain notice"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Supply the selected toolchain notice"
+        ):
             self.run_prepare()
         self.assert_nothing_published()
 
-    def test_every_static_library_must_be_located_as_an_absolute_regular_file(self) -> None:
+    def test_every_static_library_must_be_located_as_an_absolute_regular_file(
+        self,
+    ) -> None:
         for name in GCC_LIBRARY_NAMES:
             # GCC echoes the bare name when it cannot find a library.
             cases = {
@@ -581,9 +684,13 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
             }
             for label, answer in cases.items():
                 with self.subTest(library=name, case=label):
-                    self.answers = {key: str(path) for key, path in self.libraries.items()}
+                    self.answers = {
+                        key: str(path) for key, path in self.libraries.items()
+                    }
                     self.answers[name] = answer
-                    with self.assertRaisesRegex(RuntimeError, f"Selected compiler cannot locate {name}"):
+                    with self.assertRaisesRegex(
+                        RuntimeError, f"Selected compiler cannot locate {name}"
+                    ):
                         self.run_prepare()
                     self.assert_nothing_published()
 
@@ -603,12 +710,17 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
 
     def test_existing_output_is_never_replaced(self) -> None:
         self.output.mkdir(parents=True)
-        accepted = {"COPYING3": b"accepted notice\n", "provenance.json": b'{"accepted": true}\n'}
+        accepted = {
+            "COPYING3": b"accepted notice\n",
+            "provenance.json": b'{"accepted": true}\n',
+        }
         for name, data in accepted.items():
             (self.output / name).write_bytes(data)
         with self.assertRaises(FileExistsError):
             self.run_prepare()
-        self.assertEqual({path.name: path.read_bytes() for path in self.output.iterdir()}, accepted)
+        self.assertEqual(
+            {path.name: path.read_bytes() for path in self.output.iterdir()}, accepted
+        )
         empty = self.output.parent / "empty"
         empty.mkdir()
         self.output = empty
@@ -624,13 +736,20 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
 
     def test_prepared_identity_matches_the_staging_input_schema(self) -> None:
         provenance = self.run_prepare()
-        document = analysis_tools.strict_json((self.output / "provenance.json").read_bytes())
+        document = analysis_tools.strict_json(
+            (self.output / "provenance.json").read_bytes()
+        )
         self.assertEqual(set(document), PROVENANCE_KEYS)
         self.assertIs(type(document["schema_version"]), int)
         self.assertEqual(document["schema_version"], 1)
-        self.assertLessEqual({"libstdc++.a", "libgcc.a"}, set(document["static_libraries"]))
+        self.assertLessEqual(
+            {"libstdc++.a", "libgcc.a"}, set(document["static_libraries"])
+        )
         self.assertLessEqual(set(document["static_libraries"]), set(GCC_LIBRARY_NAMES))
-        for value in [document["compiler_sha256"], *document["static_libraries"].values()]:
+        for value in [
+            document["compiler_sha256"],
+            *document["static_libraries"].values(),
+        ]:
             self.assertRegex(value, r"\A[0-9a-f]{64}\Z")
         self.assertEqual(document, provenance)
 
@@ -654,18 +773,26 @@ class GccRuntimeInputCommandLineTests(unittest.TestCase):
 
     ARGV = [
         "prepare_gcc_runtime_inputs.py",
-        "--compiler", "toolchain/g++",
-        "--notices", "notices",
-        "--package", "fixture package",
-        "--source", "fixture source",
-        "--output", "out/gcc-runtime",
+        "--compiler",
+        "toolchain/g++",
+        "--notices",
+        "notices",
+        "--package",
+        "fixture package",
+        "--source",
+        "fixture source",
+        "--output",
+        "out/gcc-runtime",
     ]
 
     def invoke(self, argv, behavior):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with mock.patch.object(sys, "argv", argv), \
-                mock.patch.object(self.prep, "prepare", side_effect=behavior) as prepared, \
-                contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.object(self.prep, "prepare", side_effect=behavior) as prepared,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
             try:
                 code = self.prep.main()
             except SystemExit as exit_:
@@ -679,7 +806,11 @@ class GccRuntimeInputCommandLineTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout), receipt)
         self.assertEqual(stderr, "")
         prepared.assert_called_once_with(
-            Path("toolchain/g++"), Path("notices"), "fixture package", "fixture source", Path("out/gcc-runtime")
+            Path("toolchain/g++"),
+            Path("notices"),
+            "fixture package",
+            "fixture source",
+            Path("out/gcc-runtime"),
         )
 
     def test_failures_exit_2_with_a_diagnostic_and_no_receipt(self) -> None:
@@ -694,14 +825,18 @@ class GccRuntimeInputCommandLineTests(unittest.TestCase):
                 code, stdout, stderr, _ = self.invoke(self.ARGV, error)
                 self.assertEqual(code, 2)
                 self.assertEqual(stdout, "")
-                self.assertTrue(stderr.startswith("GCC runtime input preparation failed: "), stderr)
+                self.assertTrue(
+                    stderr.startswith("GCC runtime input preparation failed: "), stderr
+                )
 
     def test_every_explicit_argument_is_required(self) -> None:
         for flag in ("--compiler", "--notices", "--package", "--source", "--output"):
             with self.subTest(flag):
                 index = self.ARGV.index(flag)
-                argv = self.ARGV[:index] + self.ARGV[index + 2:]
-                code, stdout, _, prepared = self.invoke(argv, AssertionError("must not prepare"))
+                argv = self.ARGV[:index] + self.ARGV[index + 2 :]
+                code, stdout, _, prepared = self.invoke(
+                    argv, AssertionError("must not prepare")
+                )
                 self.assertEqual(code, 2)
                 self.assertEqual(stdout, "")
                 prepared.assert_not_called()

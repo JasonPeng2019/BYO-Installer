@@ -12,7 +12,6 @@ on:
   push:
     branches:
       - InstallerV1
-      - integration/portability/installer-20261010
 
 permissions:
   contents: read
@@ -124,7 +123,7 @@ jobs:
         run: |
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked
+          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
           python release/scripts/test_analysis_tools.py
           python release/scripts/test_build_release.py
           python release/scripts/test_verify_build_output.py
@@ -275,7 +274,7 @@ jobs:
           rustup component add --toolchain 1.97.1 rustfmt clippy
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked
+          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
           for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
             "$BYO_BUILD_PYTHON" "release/scripts/$script"
           done
