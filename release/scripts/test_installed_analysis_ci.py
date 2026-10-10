@@ -80,7 +80,7 @@ class InstalledAnalysisCiContracts(unittest.TestCase):
         self.assertEqual(arguments.python_workspace, self.root / "workspace")
         self.assertEqual(arguments.scratch, self.root / "evidence/core")
         self.assertEqual(
-            json.loads((self.root / "evidence/arm-test-input.json").read_text()),
+            json.loads((self.root / "evidence/core.arm-test-input.json").read_text()),
             self.receipt,
         )
         self.assertFalse((self.root / "evidence/core").exists())

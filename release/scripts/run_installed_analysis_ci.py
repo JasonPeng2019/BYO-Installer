@@ -9,6 +9,7 @@ part of that evidence or the product. Smoke exit codes propagate unchanged.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -23,12 +24,18 @@ def run(args: argparse.Namespace) -> int:
         raise RuntimeError("Installed smoke requires a matching native host")
     if args.evidence.exists() or args.evidence.is_symlink():
         raise RuntimeError("Choose a fresh installed smoke evidence directory")
+    receipt_path = args.evidence.with_name(args.evidence.name + ".arm-test-input.json")
+    if receipt_path.exists() or receipt_path.is_symlink():
+        raise RuntimeError("Choose a fresh installed smoke ARM receipt path")
     if target == "windows-x86_64" and args.rustc is None:
         raise RuntimeError("Windows installed smoke requires the actual rustc path")
     archive = args.archive.resolve(strict=True)
     archive_sha256 = arm.inputs.digest(archive)
     receipt = arm.acquire(target, args.arm_input_dir)
-    analysis_tools.write_json(args.evidence.parent / "arm-test-input.json", receipt)
+    receipt_path.parent.mkdir(parents=True, exist_ok=True)
+    with receipt_path.open("x", encoding="utf-8") as stream:
+        json.dump(receipt, stream, indent=2, sort_keys=True)
+        stream.write("\n")
     arguments = [
         "--expected-target",
         target,
