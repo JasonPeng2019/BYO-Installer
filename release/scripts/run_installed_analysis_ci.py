@@ -11,6 +11,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import acquire_arm_test_toolchain as arm  # noqa: F401 - source-only acquisition stub
+import analysis_tools  # noqa: F401 - source-only host validation stub
+import test_code_analysis_portable_smoke as smoke  # noqa: F401 - source-only smoke stub
+
 
 def run(args: argparse.Namespace) -> int:
     raise NotImplementedError("Native CI input binding is not implemented")
