@@ -88,7 +88,7 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
         libc::proc_pidinfo(
             pid,
             libc::PROC_PIDTBSDINFO,
-            0,
+            1, // Include zombies so their exact start identity remains observable.
             (&mut info as *mut libc::proc_bsdinfo).cast(),
             length,
         )
@@ -98,7 +98,10 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
         return if read == 0 && matches!(e.raw_os_error(), Some(libc::ESRCH) | Some(libc::ENOENT)) {
             Ok(None)
         } else {
-            Err(e)
+            Err(std::io::Error::new(
+                e.kind(),
+                format!("proc_pidinfo({pid}, PROC_PIDTBSDINFO): {e}"),
+            ))
         };
     }
     let session = unsafe { libc::getsid(pid) };
@@ -106,7 +109,11 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
     if session < 0
         && !(zombie && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
     {
-        return Err(std::io::Error::last_os_error());
+        let error = std::io::Error::last_os_error();
+        return Err(std::io::Error::new(
+            error.kind(),
+            format!("getsid({pid}) during identity observation: {error}"),
+        ));
     }
     Ok(Some(Observation {
         pid,
@@ -120,8 +127,21 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
 fn same(a: &Observation, b: &Observation) -> bool {
     a.pid == b.pid && a.start == b.start
 }
-fn namespace(pid: i32) -> std::io::Result<(Option<i32>, Option<i32>)> {
-    let checked = |value| {
+fn namespace_with(
+    owner_session: i32,
+    session: impl FnOnce() -> std::io::Result<Option<i32>>,
+    group: impl FnOnce() -> std::io::Result<Option<i32>>,
+) -> std::io::Result<(Option<i32>, Option<i32>)> {
+    let session = session()?;
+    // A process group belongs to one session. A fresh different session proves
+    // this PID cannot be in our group; avoid an unnecessary denied group query.
+    if session.is_some_and(|session| session != owner_session) {
+        return Ok((None, session));
+    }
+    Ok((group()?, session))
+}
+fn namespace(pid: i32, owner_session: i32) -> std::io::Result<(Option<i32>, Option<i32>)> {
+    let checked = |value, call| {
         if value >= 0 {
             Ok(Some(value))
         } else {
@@ -129,13 +149,68 @@ fn namespace(pid: i32) -> std::io::Result<(Option<i32>, Option<i32>)> {
             if error.raw_os_error() == Some(libc::ESRCH) {
                 Ok(None)
             } else {
-                Err(error)
+                Err(std::io::Error::new(
+                    error.kind(),
+                    format!("{call}({pid}) namespace prefilter: {error}"),
+                ))
             }
         }
     };
-    let group = checked(unsafe { libc::getpgid(pid) })?;
-    let session = checked(unsafe { libc::getsid(pid) })?;
-    Ok((group, session))
+    namespace_with(
+        owner_session,
+        || checked(unsafe { libc::getsid(pid) }, "getsid"),
+        || checked(unsafe { libc::getpgid(pid) }, "getpgid"),
+    )
+}
+#[cfg(target_os = "macos")]
+fn native_group_members(group: i32, remaining: &impl Fn() -> Result<Duration>) -> Result<Vec<i32>> {
+    // Darwin sys/proc_info.h: PROC_PGRP_ONLY = 2. Query the kernel group list,
+    // including members sysinfo could not populate, before confirming cleanup.
+    let mut pids = vec![0i32; 32];
+    loop {
+        remaining()?;
+        let bytes = i32::try_from(pids.len() * std::mem::size_of::<i32>())
+            .map_err(|_| Problem::execution("cleanup-failed", "Native group list is too large"))?;
+        // libproc converts syscall failure to zero. Clear errno so an empty
+        // successful list cannot be confused with a denied/failed enumeration.
+        let read = unsafe {
+            *libc::__error() = 0;
+            libc::proc_listpids(2, group as u32, pids.as_mut_ptr().cast(), bytes)
+        };
+        let error = std::io::Error::last_os_error();
+        if read < 0 || (read == 0 && error.raw_os_error() != Some(0)) {
+            return Err(Problem::execution(
+                "cleanup-failed",
+                format!("proc_listpids(PROC_PGRP_ONLY, {group}): {}", error),
+            ));
+        }
+        if read % std::mem::size_of::<i32>() as i32 != 0 {
+            return Err(Problem::execution(
+                "cleanup-failed",
+                "Malformed native group list",
+            ));
+        }
+        if read < bytes {
+            pids.truncate(read as usize / std::mem::size_of::<i32>());
+            pids.retain(|pid| *pid > 0);
+            return Ok(pids);
+        }
+        pids.resize(pids.len() * 2, 0);
+    }
+}
+fn observe_candidates(
+    candidates: BTreeSet<i32>,
+    remaining: &impl Fn() -> Result<Duration>,
+    mut observation: impl FnMut(i32) -> Result<Option<Observation>>,
+) -> Result<Vec<Observation>> {
+    let mut values = Vec::new();
+    for pid in candidates {
+        remaining()?;
+        if let Some(value) = observation(pid)? {
+            values.push(value);
+        }
+    }
+    Ok(values)
 }
 fn candidate_pids(
     leader: &Observation,
@@ -194,23 +269,34 @@ fn table(
             )
         })
         .collect();
-    let candidates = candidate_pids(leader, owned, &parents, namespace, remaining)?;
-    let mut values = Vec::new();
-    for pid in candidates {
-        remaining()?;
+    let candidates = candidate_pids(
+        leader,
+        owned,
+        &parents,
+        |pid| namespace(pid, leader.session),
+        remaining,
+    )?;
+    #[cfg(target_os = "macos")]
+    let candidates = {
+        let mut candidates = candidates;
+        candidates.extend(native_group_members(leader.group, remaining)?);
+        candidates
+    };
+    observe_candidates(candidates, remaining, |pid| {
         if pid == leader.pid && exited(leader.pid)?.is_some() {
             let mut terminal = leader.clone();
             terminal.zombie = true;
-            values.push(terminal);
-            continue;
+            return Ok(Some(terminal));
         }
         // macOS can deny proc_pidinfo for unrelated protected processes. Only
         // inspect candidates, and never suppress a candidate's identity error.
-        if let Some(value) = observe(pid)? {
-            values.push(value);
-        }
-    }
-    Ok(values)
+        observe(pid).map_err(|error| {
+            Problem::execution(
+                "execution-failed",
+                format!("observe owned candidate PID {pid}: {error}"),
+            )
+        })
+    })
 }
 fn discover(
     leader: &Observation,
@@ -253,7 +339,13 @@ fn signal_exact(value: &Observation, signal: i32) -> Result<()> {
         {
             let e = std::io::Error::last_os_error();
             if e.raw_os_error() != Some(libc::ESRCH) {
-                return Err(e.into());
+                return Err(Problem::execution(
+                    "execution-failed",
+                    format!(
+                        "kill({}, {signal}) after exact identity {:?}: {e}",
+                        value.pid, value.start
+                    ),
+                ));
             }
         }
     }
@@ -296,7 +388,10 @@ fn exited(pid: i32) -> Result<Option<i64>> {
         return if e.raw_os_error() == Some(libc::EINTR) {
             Ok(None)
         } else {
-            Err(e.into())
+            Err(Problem::execution(
+                "execution-failed",
+                format!("waitid({pid}, WNOWAIT): {e}"),
+            ))
         };
     }
     if unsafe { info.si_pid() } == 0 {
@@ -536,14 +631,26 @@ pub(in crate::code_analysis) fn run_owned(
         }
     })();
     let cleanup_start = Instant::now();
+    let mut group_signal_errno = None;
+    let mut group_probe_errno = None;
     let cleanup = (|| -> Result<i64> {
         discover(&owned.leader, &mut owned.descendants, &remaining)?;
         // The leader remains an unreaped exact child, anchoring this group even
         // after normal exit. Detached descendants are signalled by start token.
-        if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0
-            && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-        {
-            return Err(std::io::Error::last_os_error().into());
+        if unsafe { libc::kill(-pid, libc::SIGKILL) } != 0 {
+            let error = std::io::Error::last_os_error();
+            group_signal_errno = error.raw_os_error();
+            // Darwin returns EPERM for a group containing only zombies. This
+            // is not exit proof: the loop still requires strict native group
+            // observations, every captured descendant and retained leader exit.
+            if error.raw_os_error() != Some(libc::ESRCH)
+                && !(cfg!(target_os = "macos") && error.raw_os_error() == Some(libc::EPERM))
+            {
+                return Err(Problem::execution(
+                    "cleanup-failed",
+                    format!("kill(-{pid}, SIGKILL): {error}"),
+                ));
+            }
         }
         loop {
             remaining()?;
@@ -574,11 +681,22 @@ pub(in crate::code_analysis) fn run_owned(
                     live |= same(value, &current) && !current.zombie;
                 }
             }
-            let group_exists = unsafe { libc::kill(-pid, 0) } == 0;
-            if !group_exists && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-            {
-                return Err(std::io::Error::last_os_error().into());
-            }
+            let group_exists = if unsafe { libc::kill(-pid, 0) } == 0 {
+                true
+            } else {
+                let error = std::io::Error::last_os_error();
+                group_probe_errno = error.raw_os_error();
+                match error.raw_os_error() {
+                    Some(libc::ESRCH) => false,
+                    Some(libc::EPERM) if cfg!(target_os = "macos") => true,
+                    _ => {
+                        return Err(Problem::execution(
+                            "cleanup-failed",
+                            format!("kill(-{pid}, 0): {error}"),
+                        ))
+                    }
+                }
+            };
             if group_exists && !values.iter().any(|value| value.group == pid) {
                 return Err(Problem::execution(
                     "cleanup-failed",
@@ -604,7 +722,7 @@ pub(in crate::code_analysis) fn run_owned(
         })
     })();
     let descendants:Vec<_>=owned.descendants.values().filter(|p|p.pid!=pid).map(|p|json!({"pid":p.pid,"start_identity":p.start,"process_group":p.group,"session":p.session,"cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"}})).collect();
-    events.push(json!({"phase":phase,"pid":pid,"start_identity":owned.leader.start,"process_group":pid,"session":pid,"ownership":"posix_session","cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"},"descendants":descendants,"process_exit_code":execution.as_ref().ok(),"terminal_exit_code":cleanup.as_ref().ok(),"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64()}));
+    events.push(json!({"phase":phase,"pid":pid,"start_identity":owned.leader.start,"process_group":pid,"session":pid,"ownership":"posix_session","cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"},"descendants":descendants,"process_exit_code":execution.as_ref().ok(),"terminal_exit_code":cleanup.as_ref().ok(),"group_signal_errno":group_signal_errno,"group_probe_errno":group_probe_errno,"execution_error":execution.as_ref().err().map(|error|&error.message),"cleanup_error":cleanup.as_ref().err().map(|error|&error.message),"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64()}));
     cleanup.map_err(|e| {
         Problem::execution(
             "cleanup-failed",
@@ -624,6 +742,95 @@ pub(in crate::code_analysis) fn run_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn retained_zombie_group_records_native_cleanup_call_evidence() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-posix-group-proof-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&root).unwrap();
+        let mut budget = Budget::new();
+        budget.configure(5.0).unwrap();
+        let mut events = Vec::new();
+        assert_eq!(
+            run_owned(
+                &["/bin/sh".into(), "-c".into(), "exit 0".into()],
+                &root,
+                &budget,
+                &root,
+                "analysis",
+                &mut events,
+                None
+            )
+            .unwrap(),
+            0
+        );
+        let proof = events.last().unwrap();
+        assert_eq!(proof["cleanup"], "confirmed");
+        assert_eq!(proof["terminal_exit_code"], 0);
+        assert_eq!(proof["ownership"], "posix_session");
+        assert!(proof["start_identity"].as_array().is_some());
+        eprintln!("native retained-group syscall receipt: {proof}");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn denied_unrelated_group_query_is_excluded_by_fresh_session_proof() {
+        let group_called = std::cell::Cell::new(false);
+        let result = namespace_with(
+            42,
+            || Ok(Some(99)),
+            || {
+                group_called.set(true);
+                Err(std::io::Error::from_raw_os_error(libc::EPERM))
+            },
+        )
+        .unwrap();
+        assert_eq!(result, (None, Some(99)));
+        assert!(!group_called.get());
+        // Without fresh different-session proof, denial must remain unknown.
+        assert!(namespace_with(
+            42,
+            || Ok(Some(42)),
+            || Err(std::io::Error::from_raw_os_error(libc::EPERM))
+        )
+        .is_err());
+    }
+    #[test]
+    fn captured_candidate_denied_identity_never_becomes_exit_proof() {
+        let leader = Observation {
+            pid: 42,
+            start: (1, 2),
+            parent: 1,
+            group: 42,
+            session: 42,
+            zombie: true,
+        };
+        let mut child = leader.clone();
+        child.pid = 55;
+        child.zombie = false;
+        let candidates = candidate_pids(
+            &leader,
+            &BTreeMap::from([(42, leader.clone()), (55, child)]),
+            &[],
+            |_| panic!("Captured identities must not depend on a namespace prefilter"),
+            &|| Ok(Duration::from_secs(1)),
+        )
+        .unwrap();
+        let error = observe_candidates(candidates, &|| Ok(Duration::from_secs(1)), |pid| {
+            if pid == 42 {
+                Ok(Some(leader.clone()))
+            } else {
+                Err(Problem::execution(
+                    "cleanup-failed",
+                    format!("proc_pidinfo({pid}): identity denied"),
+                ))
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error.code, "analysis/cleanup-failed");
+        assert!(error.message.contains("proc_pidinfo(55)"));
+    }
     #[test]
     fn candidates_keep_session_group_and_detached_ancestry_without_unrelated_pids() {
         let leader = Observation {
@@ -731,19 +938,19 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let mut events = Vec::new();
         let argv = vec![root.join("absent-analyzer").display().to_string()];
+        let error = run_owned(
+            &argv,
+            &root,
+            &Budget::new(),
+            &root,
+            "analysis",
+            &mut events,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(
-            run_owned(
-                &argv,
-                &root,
-                &Budget::new(),
-                &root,
-                "analysis",
-                &mut events,
-                None
-            )
-            .unwrap_err()
-            .code,
-            "analysis/execution-failed"
+            error.code, "analysis/execution-failed",
+            "{error:?}; events={events:?}"
         );
         assert_eq!(events.last().unwrap()["cleanup"], "confirmed");
         fs::remove_dir_all(root).unwrap();
