@@ -359,7 +359,8 @@ class WindowsProcesses:
 
     def identity(self, pid: int, *, image: bool = True) -> dict | None:
         # None ONLY when Win32 proves no such PID (ERROR_INVALID_PARAMETER).
-        # Access denied and every query failure is unobservable, never absence.
+        # A failed image query can race with exit. Only a creation time plus
+        # signalled wait on this SAME retained handle proves that boundary.
         handle = self.k.OpenProcess(0x1000 | 0x100000, False, pid)
         if not handle:
             error = ctypes.get_last_error()
@@ -376,20 +377,24 @@ class WindowsProcesses:
             created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
             buf = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(buf))
+            image_error = None
             if image and not self.k.QueryFullProcessImageNameW(
                 handle, 0, buf, ctypes.byref(size)
             ):
-                raise Setup(
-                    f"PID {pid} identity unobservable: QueryFullProcessImageNameW "
-                    f"error {ctypes.get_last_error()}"
-                )
+                image_error = ctypes.get_last_error()
             state = self.k.WaitForSingleObject(handle, 0)
             if state not in (0, 258):
                 raise Setup(f"PID {pid} liveness unobservable: wait result {state}")
+            if image_error is not None and state != 0:
+                raise Setup(
+                    f"PID {pid} identity unobservable: QueryFullProcessImageNameW "
+                    f"error {image_error}; retained handle wait {state}"
+                )
             return {
                 "pid": pid,
                 "creation_filetime": created,
-                "image": buf.value if image else None,
+                "image": buf.value if image and image_error is None else None,
+                "image_query_error": image_error,
                 "alive": state == 258,
             }
         finally:
@@ -630,7 +635,24 @@ class Evidence:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 forced = True
-            identities = owned.finish(forced)
+            try:
+                identities = owned.finish(forced)
+            except Setup as exc:
+                # Preserve facts already available when sampling failed. The
+                # known creation identities are captures, not cleanup proof;
+                # unavailable observations must never become alive_after=false.
+                record.update(
+                    exit=process.returncode,
+                    elapsed_seconds=time.monotonic() - started,
+                    timeout=forced,
+                    processes=[
+                        {**r, "alive_after": None} for r in owned.records.values()
+                    ],
+                    observation_failure=str(exc),
+                    setup_command=setup_command,
+                )
+                write_json(path / "command.json", record)
+                raise
             if forced:
                 process.wait(timeout=5)
             elif not setup_command:
@@ -1299,6 +1321,7 @@ def report_once(
                     r
                     for r in observed
                     if r["pid"] == event["pid"]
+                    and isinstance(r.get("image"), str)
                     and Path(r["image"]).resolve()
                     == reported_path(result["executable"])
                 ]
@@ -1654,7 +1677,8 @@ class Mcp:
         observations = [
             {**r, "alive_at_argv_observation": self.evidence.native.alive(r)}
             for r in list(self.owned.records.values())
-            if Path(r["image"]).name.casefold() == "clangd.exe"
+            if isinstance(r.get("image"), str)
+            and Path(r["image"]).name.casefold() == "clangd.exe"
         ]
         # Version probes and sessions replaced after database changes remain in
         # Owned for EOF cleanup. Only the current live session has inspectable argv.
@@ -3244,11 +3268,13 @@ class _FakeKernel:
         created=7,
         terminate=True,
         opened=True,
+        image_error=31,
     ):
         self.open_error, self.times, self.image = open_error, times, image
         self.wait, self.created = wait, created
         self.terminate, self.terminated = terminate, []
         self.opened = opened
+        self.image_error = image_error
 
     def OpenProcess(self, access, inherit, pid):
         ctypes.set_last_error(self.open_error)
@@ -3264,7 +3290,7 @@ class _FakeKernel:
 
     def QueryFullProcessImageNameW(self, handle, flags, buffer, size):
         if not self.image:
-            ctypes.set_last_error(31)
+            ctypes.set_last_error(self.image_error)
             return 0
         buffer.value = "C:/owned/analyzer.exe"
         return 1
@@ -3322,6 +3348,40 @@ def process_observer_checks(check, scratch: Path) -> dict:
         lambda: mocked(image=False).identity(4242),
         Setup,
     )
+    for error in (5, 31, 0):
+
+        def exited_image_unavailable(error=error):
+            observed = mocked(image=False, image_error=error, wait=0).identity(4242)
+            require(
+                observed["pid"] == 4242
+                and observed["creation_filetime"] == 7
+                and observed["alive"] is False
+                and observed["image"] is None
+                and observed["image_query_error"] == error,
+                "confirmed exit lost its creation identity or fabricated an image",
+            )
+
+        check(
+            f"observer-exited-image-unavailable-error-{error}", exited_image_unavailable
+        )
+        for state in (258, 0xFFFFFFFF):
+            check(
+                f"observer-image-error-{error}-unproved-exit-{state}",
+                lambda e=error, s=state: mocked(
+                    image=False, image_error=e, wait=s
+                ).identity(4242),
+                Setup,
+            )
+    for name, kernel in (
+        ("creation", {"times": False}),
+        ("open", {"open_error": 5}),
+        ("wait", {"wait": 0xFFFFFFFF}),
+    ):
+        check(
+            f"observer-unavailable-image-unknown-{name}-no-credit",
+            lambda k=kernel: mocked(image=False, **k).identity(4242),
+            Setup,
+        )
     check(
         "observer-win32-proved-no-pid",
         expect(lambda: mocked(open_error=87).identity(4242), None),
@@ -3436,6 +3496,10 @@ def process_observer_checks(check, scratch: Path) -> dict:
         receipt["probe_stdout"], receipt["probe_stderr"] = probe.communicate(timeout=30)
         receipt["probe_exit"] = probe.returncode
         receipt["probe_alive_after_natural_exit"] = native.alive(probe_identity)
+        receipt["probe_retained_handle_wait_after_exit"] = native.k.WaitForSingleObject(
+            wintypes.HANDLE(int(probe._handle)), 0
+        )
+        receipt["probe_identity_after_exit"] = native.identity(probe.pid)
         receipt["peer_exit"] = peer.wait(timeout=30)
         receipt["peer_alive_after_natural_exit"] = native.alive(peer_identity)
         receipt.update(target=target_identity, peer=peer_identity, probe=probe_identity)
@@ -3469,6 +3533,79 @@ def process_observer_checks(check, scratch: Path) -> dict:
             "owned target record still alive",
         ),
     )
+    check(
+        "observer-real-exited-image-boundary",
+        lambda: require(
+            receipt["probe_retained_handle_wait_after_exit"] == 0
+            and receipt["probe_identity_after_exit"]["pid"] == probe_identity["pid"]
+            and receipt["probe_identity_after_exit"]["creation_filetime"]
+            == probe_identity["creation_filetime"]
+            and receipt["probe_identity_after_exit"]["alive"] is False
+            and (
+                receipt["probe_identity_after_exit"]["image"] is not None
+                or receipt["probe_identity_after_exit"]["image_query_error"] is not None
+            ),
+            "natural exit lacks retained-handle/creation proof or honest image state",
+        ),
+    )
+
+    def unavailable_child_not_selected():
+        from types import SimpleNamespace
+
+        server = object.__new__(Mcp)
+        server.path = scratch / "unavailable-child"
+        server.path.mkdir()
+        server.evidence = SimpleNamespace(native=mocked())
+        server.owned = SimpleNamespace(records={(4242, 7): {**owned, "image": None}})
+        server.record_child_argv({})
+
+    check(
+        "observer-unknown-image-no-clangd-argv-credit",
+        unavailable_child_not_selected,
+        Red,
+    )
+
+    # Inject only the observation failure, after an actual owned command exits.
+    # Its exit/creation facts must survive while cleanup remains unobservable.
+    from unittest.mock import patch
+
+    failed_observation = Evidence(scratch / "failed-observation")
+    original_finish = Owned.finish
+
+    def unavailable_finish(tracker, forced=False):
+        tracker.error = Setup("controlled unavailable native image observation")
+        return original_finish(tracker, forced)
+
+    with patch.object(Owned, "finish", unavailable_finish):
+        check(
+            "observer-command-observation-failure-is-setup",
+            lambda: failed_observation.run(
+                "natural-exit",
+                command + ["import time; time.sleep(0.1)"],
+                dict(os.environ),
+                scratch.resolve(),
+            ),
+            Setup,
+        )
+    failed_path = failed_observation.root / "commands/001-natural-exit/command.json"
+    failed_record = read_json(failed_path)
+    check(
+        "observer-command-preserves-exit-without-cleanup-credit",
+        lambda: require(
+            failed_record.get("exit") == 0
+            and bool(failed_record.get("observation_failure"))
+            and bool(failed_record.get("processes"))
+            and all(
+                r.get("creation_filetime") and r.get("alive_after") is None
+                for r in failed_record["processes"]
+            ),
+            "observation failure lost exit facts or fabricated cleanup success",
+        ),
+    )
+    receipt["failed_observation_record"] = {
+        "path": str(failed_path),
+        "record": file_record(failed_path),
+    }
 
     # Exercise the actual command timeout boundary: successful emergency
     # termination is retained failure evidence and cannot become command PASS.
