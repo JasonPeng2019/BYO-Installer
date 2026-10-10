@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -17,10 +18,88 @@ from pathlib import Path
 from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parents[2]
+ANALYSIS_LOCK = ROOT / "release/analysis-tools.lock.json"
+# Release manifest (platform, architecture) -> analysis build-lock target IDs.
+LOCK_TARGETS = {
+    ("windows", "x86_64"): ("windows-x86_64",),
+    ("macos", "aarch64"): ("macos-aarch64",),
+    ("macos", "x86_64"): ("macos-x86_64",),
+    ("linux", "x86_64"): ("linux-x86_64", "linux-x86_64-glibc-2.28"),
+}
 
 
 class AcceptanceFailure(RuntimeError):
     pass
+
+
+def locked_analysis_resources(manifest: dict, lock_path: Path = ANALYSIS_LOCK) -> dict:
+    """Exact-target locked analyzer resource leaves: runtime path -> identity.
+
+    Reads the producer-owned build lock (version 1 single record or version 2
+    ``targets`` map). A missing exact-target record is a producer dependency and
+    never becomes an allowance.
+    """
+    identity = (manifest.get("platform"), manifest.get("architecture"))
+    lock = json.loads(lock_path.read_bytes())
+    if lock.get("schema_version") == 2 and isinstance(lock.get("targets"), dict):
+        records = [
+            lock["targets"][name]
+            for name in LOCK_TARGETS.get(identity, ())
+            if name in lock["targets"]
+        ]
+    else:
+        records = [lock]
+    records = [
+        record
+        for record in records
+        if (record.get("platform"), record.get("architecture")) == identity
+    ]
+    if len(records) != 1:
+        raise AcceptanceFailure(
+            f"producer dependency: {lock_path} has no exact {identity[0]}/{identity[1]} "
+            "analysis lock record (build-lock v2 targets map); leaked headers cannot "
+            "be classified as locked analyzer resources"
+        )
+    return {
+        leaf["runtime_path"]: {"sha256": leaf["sha256"], "size": leaf["size"]}
+        for program in records[0].get("programs", {}).values()
+        for leaf in program.get("selected_files", [])
+        if leaf.get("kind") == "analysis-resource"
+    }
+
+
+def unexpected_development_files(
+    bundle: Path, manifest: dict, leaked: list[str], lock_path: Path = ANALYSIS_LOCK
+) -> list[str]:
+    """Leaked paths that are not exact-target locked analyzer resource leaves.
+
+    A leaf is allowed only when the target lock selects it as ``analysis-resource``
+    and the manifest classifies it identically with matching bytes on disk.
+    """
+    if not leaked:
+        return []
+    resources = locked_analysis_resources(manifest, lock_path)
+    inventory = {leaf.get("path"): leaf for leaf in manifest.get("files", [])}
+    unexpected = []
+    for relative in leaked:
+        locked, entry, path = (
+            resources.get(relative),
+            inventory.get(relative),
+            bundle / relative,
+        )
+        if (
+            locked is None
+            or entry is None
+            or entry.get("kind") != "analysis-resource"
+            or entry.get("executable") is not False
+            or (entry.get("sha256"), entry.get("size"))
+            != (locked["sha256"], locked["size"])
+            or path.is_symlink()
+            or path.stat().st_size != locked["size"]
+            or hashlib.sha256(path.read_bytes()).hexdigest() != locked["sha256"]
+        ):
+            unexpected.append(relative)
+    return unexpected
 
 
 @dataclass
@@ -272,8 +351,12 @@ def main() -> int:
             or path.name in {"Cargo.toml", "pyproject.toml", "uv.lock"}
         )
     ]
-    if leaked and manifest.get("platform") != "windows":
-        raise AcceptanceFailure(f"bundle leaked source or development files: {leaked}")
+    if manifest.get("platform") != "windows":
+        unexpected = unexpected_development_files(bundle, manifest, leaked)
+        if unexpected:
+            raise AcceptanceFailure(
+                f"bundle leaked source or development files: {unexpected}"
+            )
 
     with tempfile.TemporaryDirectory(prefix="byo-installed-e2e-") as raw_root:
         root = Path(raw_root)
