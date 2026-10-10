@@ -1,0 +1,77 @@
+name: Native ARM test compiler inputs
+
+on:
+  push:
+    branches: [integration/portability/installer-20261010]
+    paths:
+      - '.github/workflows/arm-native-inputs.yml'
+      - 'release/scripts/check_arm_test_input.py'
+      - 'release/arm-test-toolchains.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-input:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: windows-x86_64
+          - os: macos-15
+            target: macos-aarch64
+          - os: macos-15-intel
+            target: macos-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Acquire and execute the measured native compiler
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          python -c "import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())"
+          python release/scripts/check_arm_test_input.py \
+            --expected-target '${{ matrix.target }}' \
+            --input-directory "$RUNNER_TEMP/arm-native-input" \
+            --evidence "$RUNNER_TEMP/arm-native-evidence"
+      - name: Retain compiler receipt and actual output
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: arm-native-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arm-native-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+  linux-baseline-input:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Acquire and execute compiler on the actual glibc build baseline
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git rev-parse HEAD
+          test "$(getconf GNU_LIBC_VERSION)" = 'glibc 2.28'
+          /opt/python/cp312-cp312/bin/python -c "import platform, sys; print(sys.version); print(platform.platform()); print(platform.machine())"
+          /opt/python/cp312-cp312/bin/python release/scripts/check_arm_test_input.py \
+            --expected-target linux-x86_64 \
+            --input-directory "$RUNNER_TEMP/arm-native-input" \
+            --evidence "$RUNNER_TEMP/arm-native-evidence"
+      - name: Retain baseline compiler receipt and actual output
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: arm-native-linux-glibc2.28-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/arm-native-evidence/
+          if-no-files-found: warn
+          retention-days: 90
