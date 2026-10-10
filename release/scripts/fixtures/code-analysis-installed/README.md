@@ -68,48 +68,40 @@ public response values. Success returns 3 with installed gates pending; failures
 return 1 or 2. `validator-contract.json` marks this evidence as having no installed
 credit. Synthetic second-oracle plumbing is not genuine version-update evidence.
 
-Availability v2 inputs contain existing passive fixture files, for example:
+Availability uses the committed v3 manifest
+`availability/manifest.json` (exact passive `.firm` bytes as base64 plus
+sha256/size, with case claims `{state, variant, profile, board_id, fixture}`).
+`availability/generate.py` produced it offline through the accepted server's
+public persistence classes only; its `generation_receipt` records the generator
+digest, accepted server commit/tree/clean status and every imported module
+digest. `availability/.gitattributes` keeps the bytes free of line-ending
+conversion. Pass it explicitly with `--availability-inputs` and an independently
+recorded `--availability-sha256`.
 
-```json
-{
-  "schema": "installed-analysis-availability/v2",
-  "cases": [{
-    "state": "setup_lite",
-    "profile": "personal",
-    "board_id": "existing_board",
-    "root": "C:/inputs/passive-board-fixture",
-    "files": {".firm/<actual fixture path>": {"sha256": "<64 hex>", "size": 123}}
-  }]
-}
-```
+Labels are claims, not evidence. Before any server launch, the validator checks
+the policy pointer, generation digest, canonical policy digest, tier/snapshot
+consistency and attachment cache with stdlib code, then derives the expected
+public values. `revoked_unvalidated` earns group credit only when both variants
+pass. **revoked:** a valid accepted cache record for the board with
+`confirmed=false`, an absolute `revoked_at` and stable probe/UART identities,
+beside a setup-full, setup-incomplete policy. Public `setup-full`,
+`setup-incomplete`, `not-asserted`, null capability. **unvalidated:** a committed
+setup-full policy, no cache and no live proof. Public `not-asserted`, null.
+`corrupt_policy` requires an undecodable pointer (tier null, `policy_status=corrupt`, null
+digest). The fixture decides the tier. Being setup-incomplete does not imply no-setup.
+The calls are `server_health_check` (`narrative_logging`: `enabled` for personal,
+`not_built` for professional) and `get_capabilities(board_id)`. All five analysis
+tools must answer, and their results are retained per variant. The protected bytes
+and manifest are rechecked after the queries.
 
-Use an independently hash-bound manifest with actual passive board/profile/policy
-artifacts; names and labels cannot substitute for state. The script never seeds
-policies through private APIs, injects hardware backends, or calls setup/unlock/
-probe tools. It calls **two** public read-only witnesses: `server_health_check`
-reports `narrative_logging=enabled` for personal or `not_built` for professional;
-`get_capabilities(board_id)` reports `no-setup`, `setup-lite`, `setup-full`, or null
-with `policy_status=corrupt`. Revoked/unvalidated is not a tier name. Its public
-`setup_incomplete` witness is checked, but it remains pending because that field
-alone does not prove attachment revocation. No-board needs an empty board fixture;
-other states need real passive files. Observed responses and archive/sidecar
-identities are retained even if subsequent semantic queries fail.
-
-`availability_cases` records all twelve pairs separately. Partial inputs run;
-missing pairs stay pending. Without inputs, a real fresh no-board server is
-exercised for the archive's expected profile. `--installed-profile personal`
-(default) describes the shipped personal ZIP. `--installed-profile professional`
-requires a **separately compiled professional archive** in a separate invocation;
-the public health response must be `not_built`. This option cannot change a
-compiled server's profile. Retain separate hash-bound reports for the two builds.
-A single personal archive cannot satisfy all twelve pairs; the aggregate gate
-stays pending. Source-level tests for both profiles, especially tests using
-private seams, remain separate evidence and earn no installed-pair credit.
-Named-board cases must inventory that board's actual `.firm/boards/<board_id>`
-profile or `.firm/capabilities/<board_id>/current.json` and referenced generations;
-unrelated files cannot establish a board fixture. Public capability resolution
-may initialize/migrate derived policy state in the private project; original
-fixture bytes remain protected and are rechecked.
+`availability_cases` records all twelve state/profile groups (with per-variant
+detail). A personal archive runs the personal cases; professional cases need a
+**separately compiled professional archive** and `--installed-profile
+professional` in a separate invocation. This option cannot change a compiled
+profile. Public capability resolution may initialize derived policy for the
+no-board case in the private project only. `--validator-contract-checks` runs
+the passive-byte, manifest, public-witness, tool-coverage, variant-ledger and
+protected-byte negatives over this manifest; that earns no installed credit.
 
 ROOT confirmed that the cross-runner gate compares the standalone public Python
 `bin/verify` source runner with installed Rust `byo workflow tool verify`. Python

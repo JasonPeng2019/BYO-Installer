@@ -34,19 +34,28 @@ compiled guidance/modes, not a public Python verify entrypoint. No private conte
 injection or guessed sidecar helper is used. This comparison does not claim that
 Python source scripts are shipped in the installed capsule.
 
-Availability input schema: {"schema":"installed-analysis-availability/v2",
-"cases":[{"state":"setup_lite","profile":"personal","board_id":"existing_board",
-"root":"...", "files":{".firm/...":{"sha256":"...","size":123}}}]}.
-Existing passive policy/profile files are copied without internal APIs. Separate
-public server_health_check and get_capabilities(board_id) calls observe profile
-(narrative_logging enabled/not_built) and tier. --installed-profile selects the
-expected COMPILED archive profile; it cannot change it. A professional invocation
-requires a separately compiled professional archive, never labels/private mocks.
-All twelve state/profile pairs are reported individually; missing cases stay
-pending while supplied cases run. Without fixture inputs, the fresh no-board case
-runs for this archive profile. Revoked/unvalidated remains pending without an
-additional public revocation witness. Source unit/contract profile checks are
-separate evidence. No policy creation, board unlock, probing or fake MCP backend.
+Availability input schema: installed-analysis-availability/v3 (committed at
+release/scripts/fixtures/code-analysis-installed/availability/manifest.json, bound
+by an explicit --availability-sha256). "fixtures" maps a name to exact passive
+.firm files as {sha256,size,base64}; each case is {state, variant, profile,
+board_id, fixture}. revoked_unvalidated needs BOTH variants "revoked" and
+"unvalidated"; other states use variant null. Duplicate/unknown labels, fields,
+variants or fixtures are setup failure. Before launch, independent stdlib checks
+validate the policy pointer/generation/digests and attachment cache (schema,
+board, confirmed=false with an absolute revoked_at, stable identities, no
+persisted authority) and DERIVE the expected public tier, policy_status,
+setup_incomplete, policy_digest and identity from the bytes; a label that the
+bytes do not support is setup failure. Bytes are written into the private
+project after public init. Public server_health_check (narrative_logging
+enabled/not_built) and get_capabilities(board_id) must equal the derivation; all
+five analysis tools must answer; their results are retained per variant in
+availability-<state>[-<variant>]-<profile>.json. Protected project bytes and the
+manifest are rechecked after the queries. A group passes only when every
+required variant passes. --installed-profile selects the expected COMPILED
+archive profile; it cannot change it. A professional invocation requires a
+separately compiled professional archive. Without inputs, the fresh no-board
+case runs for this archive profile. No policy creation, board unlock, probing,
+connection or fake MCP backend.
 
 --cppcheck-sha256 is mandatory, including archive-only preparation. Establish it
 independently before inspecting the bundle (e.g. reviewed build-byte receipt or
@@ -1464,6 +1473,8 @@ class Mcp:
         self.inbox = queue.Queue()
         self.next_id = 0
         self.closed = False
+        # Validated public results per tool, retained in availability reports.
+        self.results: dict[str, list] = {}
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
         try:
@@ -1595,6 +1606,9 @@ class Mcp:
                     isinstance(value["source"]["document_version"], int),
                     "MCP result lacks synchronized document version",
                 )
+        self.results.setdefault(name, []).append(
+            {"arguments": arguments, "result": value}
+        )
         return value
 
     def record_child_argv(self, env: dict) -> None:
@@ -1890,48 +1904,220 @@ def semantic_queries(server: Mcp, runtime: Path, env: dict, *, full: bool) -> No
     server.record_child_argv(env)
 
 
-def check_availability_witnesses(case: dict, health: dict, capabilities: dict) -> None:
-    """Check real public values, including states that are not tier names."""
-    expected_profile = {"personal": "enabled", "professional": "not_built"}[
-        case["profile"]
-    ]
-    require(
-        health.get("narrative_logging") == expected_profile,
-        f"compiled profile witness mismatch: narrative_logging={health.get('narrative_logging')!r}",
-    )
-    tiers = {
-        "no_board": "no-setup",
-        "no_setup": "no-setup",
-        "setup_lite": "setup-lite",
-        "setup_full": "setup-full",
-        "revoked_unvalidated": "no-setup",
-        "corrupt_policy": None,
+AVAILABILITY_SCHEMA = "installed-analysis-availability/v3"
+VARIANTS = {"revoked_unvalidated": ("revoked", "unvalidated")}
+# Independent stdlib copy of the accepted server's persisted-authority denylist
+# (firmstore/store.py PERSISTED_AUTHORITY_KEYS at server ade75ef2).
+AUTHORITY_KEYS = frozenset(
+    {
+        "active_gate",
+        "active_permission",
+        "active_plan",
+        "gate",
+        "gate_open",
+        "gate_state",
+        "gates",
+        "permission",
+        "permission_grant",
+        "permission_state",
+        "permissions",
+        "plan",
+        "plan_grant",
+        "plans",
+        "remaining_calls",
+        "unlocked_tools",
     }
-    require(
-        capabilities.get("tier") == tiers[case["state"]],
-        f"public tier witness mismatch: {capabilities.get('tier')!r}",
-    )
-    require(
-        capabilities.get("board_id") == case["board_id"],
-        "public witness names a different board",
-    )
-    if case["state"] == "corrupt_policy":
-        require(
-            capabilities.get("policy_status") == "corrupt",
-            "corrupt policy was not observed",
-        )
-    if case["state"] == "revoked_unvalidated":
-        require(
-            capabilities.get("setup_incomplete") is True,
-            "revoked/unvalidated setup was not observed",
-        )
-        # A tier response alone cannot prove the attachment revocation facts.
-        raise Pending(
-            "revoked attachment identity needs an additional public witness; no tier-only installed credit"
-        )
+)
+ATTACHMENTS = ".firm/cache/attachments.json"
 
 
-def check_passive_case(case: dict) -> None:
+def canonical_digest(value) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def is_hex(value: object, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(c in "0123456789abcdef" for c in value)
+    )
+
+
+def absolute_timestamp(value: object, field: str) -> None:
+    from datetime import datetime
+
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise Setup(f"attachment {field} is not an absolute timestamp") from exc
+    if not isinstance(value, str) or parsed.utcoffset() is None:
+        raise Setup(f"attachment {field} must carry an explicit timezone")
+
+
+def no_authority(value, location: str) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).strip().lower().replace("-", "_") in AUTHORITY_KEYS:
+                raise Setup(f"{location} persists run-scoped authority {key!r}")
+            no_authority(item, f"{location}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            no_authority(item, f"{location}[{index}]")
+
+
+def attachment_records(raw: bytes) -> list[dict]:
+    """Accepted AttachmentCache.load_records schema/semantics, reimplemented."""
+    try:
+        document = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise Setup(f"attachment cache is malformed: {exc}") from exc
+    no_authority(document, "attachment cache")
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or set(document) != {"schema_version", "records"}
+        or not isinstance(document["records"], list)
+    ):
+        raise Setup("attachment cache must be schema_version 1 with only records")
+    fields = {
+        "board_id",
+        "probe_family",
+        "probe_usb_serial",
+        "uart_usb_serial",
+        "uart_vid",
+        "uart_pid",
+        "confirmed",
+        "confirmed_at",
+        "revoked_at",
+    }
+    for record in document["records"]:
+        if not isinstance(record, dict) or not set(record) <= fields:
+            raise Setup("attachment record has unknown fields")
+        if (fields - {"revoked_at"}) - set(record):
+            raise Setup("attachment record misses required fields")
+        board = record["board_id"]
+        if (
+            not isinstance(board, str)
+            or not board
+            or len(board) > 64
+            or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789_" for c in board)
+        ):
+            raise Setup("attachment record board_id is invalid")
+        for field in ("probe_family", "probe_usb_serial", "uart_usb_serial"):
+            if not isinstance(record[field], str) or not record[field].strip():
+                raise Setup(f"attachment {field} is not a stable identity")
+        for field in ("uart_vid", "uart_pid"):
+            value = record[field]
+            if type(value) is not int or not 0 <= value <= 0xFFFF:
+                raise Setup(f"attachment {field} is not a USB identifier")
+        if type(record["confirmed"]) is not bool:
+            raise Setup("attachment confirmed must be boolean")
+        absolute_timestamp(record["confirmed_at"], "confirmed_at")
+        revoked = record.get("revoked_at")
+        if revoked is not None:
+            absolute_timestamp(revoked, "revoked_at")
+        if record["confirmed"] == (revoked is not None):
+            raise Setup(
+                "confirmed records must not have revoked_at; unconfirmed records need revoked_at"
+            )
+    return document["records"]
+
+
+def policy_state(board: str, files: dict, data: dict) -> dict:
+    """Independently validate the passive pointer/generation (accepted v1 contract)."""
+    prefix = f".firm/capabilities/{board}/"
+    pointer_path = prefix + "current.json"
+    if pointer_path not in files:
+        raise Setup("named board lacks its passive policy pointer")
+    try:
+        pointer = json.loads(data[pointer_path].decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise Setup(f"policy pointer is malformed: {exc}") from exc
+    if not isinstance(pointer, dict) or set(pointer) != {
+        "schema_version",
+        "board_id",
+        "generation_id",
+        "generation_digest",
+    }:
+        raise Setup("policy pointer fields are invalid")
+    if pointer["schema_version"] != 1 or pointer["board_id"] != board:
+        raise Setup("policy pointer names another board or schema")
+    if not is_hex(pointer["generation_id"], 32):
+        raise Setup("policy pointer generation id is invalid")
+    generation_path = f"{prefix}generations/{pointer['generation_id']}.json"
+    if generation_path not in files:
+        raise Setup("committed policy generation is absent from the fixture")
+    raw = data[generation_path]
+    if hashlib.sha256(raw).hexdigest() != pointer["generation_digest"]:
+        raise Setup("policy generation bytes differ from the pointer digest")
+    document = json.loads(raw.decode("utf-8"))
+    keys = {
+        "schema_version",
+        "board_id",
+        "tier",
+        "setup_incomplete",
+        "profile_snapshot",
+        "map_snapshot",
+        "evidence",
+        "retained_generations",
+        "legacy_migrated",
+        "policy_digest",
+    }
+    if not isinstance(document, dict) or set(document) != keys:
+        raise Setup("policy generation fields are invalid")
+    if document["schema_version"] != 1 or document["board_id"] != board:
+        raise Setup("policy generation names another board or schema")
+    material = {k: v for k, v in document.items() if k != "policy_digest"}
+    if document["policy_digest"] != canonical_digest(material):
+        raise Setup("policy digest does not match its generation")
+    tier = document["tier"]
+    if tier not in ("no-setup", "setup-lite", "setup-full"):
+        raise Setup("policy tier is invalid")
+    if type(document["setup_incomplete"]) is not bool or document["legacy_migrated"]:
+        raise Setup("policy flags are invalid or migrated")
+    if (tier == "no-setup") != (document["map_snapshot"] is None):
+        raise Setup("policy map snapshot contradicts its tier")
+    if tier == "setup-full" and not isinstance(document["profile_snapshot"], dict):
+        raise Setup("setup-full policy lacks its profile snapshot")
+    for snapshot in ("profile_snapshot", "map_snapshot"):
+        value = document[snapshot]
+        if isinstance(value, dict) and value.get("board_id") != board:
+            raise Setup(f"policy {snapshot} names another board")
+    if not isinstance(document["retained_generations"], list) or not all(
+        is_hex(item, 32) for item in document["retained_generations"]
+    ):
+        raise Setup("policy retained generations are malformed")
+    return {
+        "tier": tier,
+        "policy_status": "setup-incomplete"
+        if document["setup_incomplete"]
+        else "committed",
+        "setup_incomplete": document["setup_incomplete"],
+        "policy_digest": document["policy_digest"],
+    }
+
+
+def expected_identity(tier: str | None) -> dict | None:
+    if tier is None:
+        return {"assertion": None, "capability": None}
+    if tier == "setup-full":
+        # No live connection: public discovery cannot prove identity.
+        return {
+            "assertion": "not-asserted",
+            "capability": None,
+            "proof_required": "exact-or-compatible",
+        }
+    if tier == "setup-lite":
+        return {"assertion": "trusted-not-proven", "capability": None}
+    return {"assertion": "not-asserted", "capability": None}
+
+
+def check_passive_case(case: dict) -> dict:
+    """Derive expected public values from validated fixture BYTES, never labels."""
     board = case.get("board_id")
     if (
         not isinstance(board, str)
@@ -1940,21 +2126,229 @@ def check_passive_case(case: dict) -> None:
     ):
         raise Setup("availability board_id must be a real safe board identifier")
     files = case.get("files")
-    if not isinstance(files, dict) or any(not p.startswith(".firm/") for p in files):
+    if not isinstance(files, dict) or any(
+        not isinstance(p, str) or not p.startswith(".firm/") for p in files
+    ):
         raise Setup("availability inputs must contain only passive .firm fixture files")
-    if case["state"] == "no_board":
+    state, variant = case.get("state"), case.get("variant")
+    if variant not in VARIANTS.get(state, (None,)):
+        raise Setup(f"unrecognized variant {variant!r} for state {state!r}")
+    if state == "no_board":
         if files:
             raise Setup("no-board case cannot contain board/policy fixtures")
-    elif not any(
-        p in files
-        for p in (
-            f".firm/capabilities/{board}/current.json",
-            *(f".firm/boards/{board}{suffix}" for suffix in (".json", ".yaml", ".yml")),
+        return {
+            "tier": "no-setup",
+            "policy_status": "committed",
+            "setup_incomplete": False,
+            "policy_digest": None,
+            "identity": expected_identity("no-setup"),
+            "attachment": None,
+        }
+    allowed = (f".firm/capabilities/{board}/", ATTACHMENTS)
+    unrelated = [p for p in files if not p.startswith(allowed)]
+    if unrelated:
+        raise Setup(f"unrelated fixture files cannot establish state: {unrelated}")
+    data = case.get("data")
+    if not isinstance(data, dict) or set(data) != set(files):
+        raise Setup("passive fixture bytes do not match the declared file set")
+    for relative, record in files.items():
+        below(Path("."), relative)
+        raw = data[relative]
+        if not isinstance(raw, bytes) or {
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "size": len(raw),
+        } != {"sha256": record.get("sha256"), "size": record.get("size")}:
+            raise Setup(f"passive fixture bytes differ from their record: {relative}")
+    if state == "corrupt_policy":
+        # Only an undecodable pointer is a corruption the product must report.
+        pointer = data.get(f".firm/capabilities/{board}/current.json")
+        try:
+            json.loads(pointer.decode("utf-8"))
+        except (AttributeError, UnicodeError, ValueError):
+            pass
+        else:
+            raise Setup("corrupt_policy fixture needs an undecodable policy pointer")
+        if ATTACHMENTS in files:
+            raise Setup("corrupt_policy fixture must not carry attachment state")
+        return {
+            "tier": None,
+            "policy_status": "corrupt",
+            "setup_incomplete": False,
+            "policy_digest": None,
+            "identity": expected_identity(None),
+            "attachment": None,
+        }
+    try:
+        expected = policy_state(board, files, data)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise Setup(f"passive policy is malformed: {exc!r}") from exc
+    attachment = None
+    if ATTACHMENTS in files:
+        records = attachment_records(data[ATTACHMENTS])
+        mine = [r for r in records if r["board_id"] == board]
+        if variant != "revoked":
+            raise Setup("only the revoked variant may carry attachment cache state")
+        if not mine or any(r["confirmed"] for r in mine):
+            raise Setup("revoked variant needs only unconfirmed records for this board")
+        attachment = mine
+    tier, incomplete = expected["tier"], expected["setup_incomplete"]
+    required = {
+        "no_setup": tier == "no-setup" and not incomplete,
+        "setup_lite": tier == "setup-lite" and not incomplete,
+        "setup_full": tier == "setup-full" and not incomplete,
+        "revoked_unvalidated": attachment is not None
+        if variant == "revoked"
+        else tier == "setup-full" and attachment is None,
+    }[state]
+    if not required:
+        raise Setup(
+            f"validated fixture ({tier}, setup_incomplete={incomplete}, "
+            f"revoked_attachment={attachment is not None}) is not {state}/{variant}"
         )
-    ):
-        raise Pending(
-            "named board needs its actual hash-bound passive policy/profile, not unrelated fixture files"
+    return {**expected, "identity": expected_identity(tier), "attachment": attachment}
+
+
+def check_availability_witnesses(
+    case: dict, expected: dict, health: dict, capabilities: dict
+) -> None:
+    """Compare real public values with the fixture-derived expectation."""
+    expected_profile = {"personal": "enabled", "professional": "not_built"}[
+        case["profile"]
+    ]
+    require(
+        health.get("narrative_logging") == expected_profile,
+        f"compiled profile witness mismatch: narrative_logging={health.get('narrative_logging')!r}",
+    )
+    require(
+        capabilities.get("board_id") == case["board_id"],
+        "public witness names a different board",
+    )
+    for field in ("tier", "policy_status", "setup_incomplete"):
+        require(
+            capabilities.get(field) == expected[field],
+            f"public {field} witness mismatch: {capabilities.get(field)!r} != {expected[field]!r}",
         )
+    if expected["policy_digest"] is None:
+        require(
+            expected["tier"] is None
+            and capabilities.get("policy_digest") is None
+            or expected["tier"] is not None
+            and is_hex(capabilities.get("policy_digest"), 64),
+            "public policy digest witness is invalid",
+        )
+    else:
+        require(
+            capabilities.get("policy_digest") == expected["policy_digest"],
+            "public policy digest differs from the passive generation",
+        )
+    require(
+        capabilities.get("identity") == expected["identity"],
+        f"public identity witness mismatch: {capabilities.get('identity')!r}",
+    )
+
+
+def check_tool_coverage(results: dict) -> None:
+    missing = [name for name in TOOLS if not results.get(name)]
+    require(not missing, f"availability case did not exercise tools: {missing}")
+
+
+def case_label(case: dict) -> str:
+    variant = case.get("variant")
+    return "-".join(
+        part for part in (case["state"], variant, case["profile"]) if part is not None
+    )
+
+
+def load_availability_inputs(path: Path, sha256: str) -> list[dict]:
+    if digest(path) != sha256:
+        raise Setup("availability input manifest differs from explicit digest")
+    try:
+        inputs = json.loads(path.read_bytes().decode("utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        raise Setup(f"availability input manifest is malformed: {exc}") from exc
+    return parse_availability_inputs(inputs)
+
+
+def parse_availability_inputs(inputs) -> list[dict]:
+    """Resolve the v3 manifest: exact base64 passive bytes plus case claims."""
+    import base64
+    import binascii
+
+    if not isinstance(inputs, dict) or inputs.get("schema") != AVAILABILITY_SCHEMA:
+        raise Setup(f"availability inputs must use {AVAILABILITY_SCHEMA}")
+    if not set(inputs) <= {"schema", "generation_receipt", "fixtures", "cases"}:
+        raise Setup("availability manifest has unrecognized fields")
+    fixtures = inputs.get("fixtures")
+    if not isinstance(fixtures, dict):
+        raise Setup("availability manifest needs a fixtures object")
+    decoded = {}
+    for name, entries in fixtures.items():
+        if not isinstance(entries, dict):
+            raise Setup(f"availability fixture {name!r} is not a file map")
+        files, data = {}, {}
+        for relative, entry in entries.items():
+            if not isinstance(entry, dict) or set(entry) != {
+                "sha256",
+                "size",
+                "base64",
+            }:
+                raise Setup(f"fixture file record is invalid: {name}/{relative}")
+            try:
+                raw = base64.b64decode(entry["base64"], validate=True)
+            except (binascii.Error, TypeError, ValueError) as exc:
+                raise Setup(f"fixture bytes are not base64: {name}/{relative}") from exc
+            files[relative] = {"sha256": entry["sha256"], "size": entry["size"]}
+            data[relative] = raw
+        decoded[name] = (files, data)
+    cases = inputs.get("cases")
+    if not isinstance(cases, list) or not cases:
+        raise Setup("availability inputs need a non-empty case list")
+    seen = set()
+    resolved = []
+    for case in cases:
+        if not isinstance(case, dict) or set(case) != {
+            "state",
+            "variant",
+            "profile",
+            "board_id",
+            "fixture",
+        }:
+            raise Setup("availability case has missing or unrecognized fields")
+        state, variant, profile = case["state"], case["variant"], case["profile"]
+        if state not in STATES or profile not in ("personal", "professional"):
+            raise Setup(
+                f"unrecognized availability state/profile {state!r}/{profile!r}"
+            )
+        if variant not in VARIANTS.get(state, (None,)):
+            raise Setup(f"unrecognized variant {variant!r} for state {state!r}")
+        key = (state, variant, profile)
+        if key in seen:
+            raise Setup(f"duplicate availability case {key}")
+        seen.add(key)
+        if case["fixture"] not in decoded:
+            raise Setup(
+                f"availability case names an absent fixture {case['fixture']!r}"
+            )
+        files, data = decoded[case["fixture"]]
+        resolved.append({**case, "files": dict(files), "data": dict(data)})
+    return resolved
+
+
+def group_status(state: str, variants: dict) -> dict:
+    """A revoked_unvalidated group earns credit only from both variant reports."""
+    needed = VARIANTS.get(state, (None,))
+    statuses = [variants.get(v, {}).get("status", "PENDING") for v in needed]
+    for status in ("RED", "SETUP_FAILURE", "PENDING"):
+        if status in statuses:
+            missing = [v for v in needed if v not in variants]
+            return {
+                "status": status,
+                "reason": f"variants {dict(zip(needed, statuses))}; missing {missing}"
+                if state in VARIANTS
+                else variants.get(None, {}).get("reason", "not exercised"),
+                "variants": variants,
+            }
+    return {"status": "PASS", "variants": variants}
 
 
 def availability_gate(
@@ -1974,54 +2368,59 @@ def availability_gate(
         cases = [
             {
                 "state": "no_board",
+                "variant": None,
                 "profile": args.installed_profile,
                 "board_id": "installed_no_board",
+                "fixture": None,
                 "files": {},
+                "data": {},
+                "manifest": None,
             }
         ]
     else:
-        if digest(args.availability_inputs) != args.availability_sha256:
-            raise Setup("availability input manifest differs from explicit digest")
-        inputs = read_json(args.availability_inputs)
-        if inputs.get("schema") != "installed-analysis-availability/v2":
-            raise Setup(
-                "use availability/v2 with a board_id and separate public witnesses"
+        manifest = (args.availability_inputs, file_record(args.availability_inputs))
+        cases = [
+            {**case, "manifest": manifest}
+            for case in load_availability_inputs(
+                args.availability_inputs, args.availability_sha256
             )
-        cases = inputs["cases"]
+        ]
         evidence.report["availability_inputs"] = file_record(args.availability_inputs)
         evidence.report["read_only_inputs"][str(args.availability_inputs)] = (
             file_record(args.availability_inputs)
         )
-    actual = [(c["state"], c["profile"]) for c in cases]
-    if len(set(actual)) != len(actual) or any(
-        f"{s}-{p}" not in results for s, p in actual
-    ):
-        raise Setup("unknown or duplicate state/profile availability cases")
+    observed: dict[str, dict] = {}
     for case in cases:
-        label = f"{case['state']}-{case['profile']}"
+        group = f"{case['state']}-{case['profile']}"
+        variants = observed.setdefault(group, {})
         if case["profile"] != args.installed_profile:
-            results[label]["reason"] = (
-                "requires a separate compiled archive and invocation for this profile"
-            )
+            variants[case["variant"]] = {
+                "status": "PENDING",
+                "reason": "requires a separate compiled archive and invocation for this profile",
+            }
             continue
+        label = case_label(case)
         try:
             availability_case(
                 case, evidence, lab, base_project, byo, env, runtime, version
             )
         except (Red, Setup, Pending, KeyError, TypeError, ValueError) as exc:
-            results[label] = {
+            variants[case["variant"]] = {
                 "status": "PENDING"
                 if isinstance(exc, Pending)
                 else "SETUP_FAILURE"
                 if isinstance(exc, Setup)
                 else "RED",
                 "reason": str(exc),
+                "evidence": str(evidence.root / f"availability-{label}.json"),
             }
         else:
-            results[label] = {
+            variants[case["variant"]] = {
                 "status": "PASS",
                 "evidence": str(evidence.root / f"availability-{label}.json"),
             }
+    for group, variants in observed.items():
+        results[group] = group_status(group.rsplit("-", 1)[0], variants)
     statuses = [r["status"] for r in results.values()]
     for status, error in (("RED", Red), ("SETUP_FAILURE", Setup), ("PENDING", Pending)):
         if status in statuses:
@@ -2031,8 +2430,9 @@ def availability_gate(
 
 
 def availability_case(case, evidence, lab, base_project, byo, env, runtime, version):
-    label = f"{case['state']}-{case['profile']}"
-    check_passive_case(case)
+    label = case_label(case)
+    # Validate passive bytes before any server launch; labels are not evidence.
+    expected = check_passive_case(case)
     project = lab / f"availability {label} µ"
     shutil.copytree(
         base_project,
@@ -2058,44 +2458,61 @@ def availability_case(case, evidence, lab, base_project, byo, env, runtime, vers
     evidence.run(
         f"init-{label}", [str(byo), "init", "--project", str(project)], env, lab
     )
-    for relative, record in case["files"].items():
-        source = below(Path(case["root"]), relative)
-        verify_file(source, record)
-        evidence.report["read_only_inputs"][str(source)] = record
+    for relative in case["files"]:
         target = below(project, relative)
+        require(
+            not target.exists(),
+            f"public init pre-created passive fixture path {relative}",
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        target.write_bytes(case["data"][relative])
     protected = {p: file_record(below(project, p)) for p in case["files"]}
+    require(
+        protected == {p: dict(r) for p, r in case["files"].items()},
+        "copied passive bytes differ from the fixture manifest",
+    )
+    report_path = evidence.root / f"availability-{label}.json"
+    record = {
+        "case": {k: case[k] for k in ("state", "variant", "profile", "board_id")},
+        "fixture": case["fixture"],
+        "manifest": None
+        if case["manifest"] is None
+        else {"path": str(case["manifest"][0]), **case["manifest"][1]},
+        "expected_from_fixture": expected,
+        "fixture_files": case["files"],
+        "archive_sha256": evidence.report["artifact"]["sha256"],
+        "source": evidence.report["artifact"]["source"],
+        "sidecar": file_record(runtime / "sidecar/byo-mcp-sidecar.exe"),
+        "installed_credit": False,
+    }
     server = Mcp(evidence, byo, project, env, version, label)
     try:
         health = server.tool("server_health_check", {}, analysis=False)
         capabilities = server.tool(
             "get_capabilities", {"board_id": case["board_id"]}, analysis=False
         )
-        write_json(
-            evidence.root / f"availability-{label}.json",
-            {
-                "public_witnesses": {
-                    "server_health_check": health,
-                    "get_capabilities": capabilities,
-                },
-                "fixture_files": case["files"],
-                "preserved": protected,
-                "archive_sha256": evidence.report["artifact"]["sha256"],
-                "source": evidence.report["artifact"]["source"],
-                "sidecar": file_record(runtime / "sidecar/byo-mcp-sidecar.exe"),
-                "installed_credit": False,
-            },
-        )
-        check_availability_witnesses(case, health, capabilities)
-        semantic_queries(server, runtime, env, full=False)
+        record["public_witnesses"] = {
+            "server_health_check": health,
+            "get_capabilities": capabilities,
+        }
+        write_json(report_path, record)
+        check_availability_witnesses(case, expected, health, capabilities)
+        try:
+            semantic_queries(server, runtime, env, full=False)
+        finally:
+            record["tool_results"] = {n: server.results.get(n, []) for n in TOOLS}
+            write_json(report_path, record)
+        check_tool_coverage(server.results)
     finally:
         server.close()
-    for relative, record in protected.items():
-        verify_file(below(project, relative), record, product=True)
-    record = read_json(evidence.root / f"availability-{label}.json")
+    # Protected bytes are rechecked in the private project AND the read-only manifest.
+    for relative, item in protected.items():
+        verify_file(below(project, relative), item, product=True)
+    if case["manifest"] is not None:
+        verify_file(*case["manifest"])
+    record["preserved"] = protected
     record["installed_credit"] = True
-    write_json(evidence.root / f"availability-{label}.json", record)
+    write_json(report_path, record)
 
 
 def negative_runtime_gate(
@@ -2215,6 +2632,327 @@ def doctor_gate(
         reported_path(result["runtime_root"]) == runtime.resolve(),
         "static report managed root differs",
     )
+
+
+def availability_contract_checks(check, path: Path, sha256: str, scratch: Path) -> dict:
+    """Passive-state/public-witness negatives over the real v3 fixture bytes."""
+    import copy
+
+    cases = load_availability_inputs(path, sha256)
+    by_label = {case_label(c): c for c in cases}
+    expected = {}
+    for label, case in by_label.items():
+        check(
+            f"fixture-{label}",
+            lambda c=case, n=label: expected.update({n: check_passive_case(c)}),
+        )
+
+    def record_of(raw: bytes) -> dict:
+        return {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+
+    def edited(label, relative, change=None, *, drop=False):
+        case = copy.deepcopy(by_label[label])
+        if drop:
+            case["files"].pop(relative)
+            case["data"].pop(relative)
+        else:
+            raw = change(case["data"].get(relative))
+            case["data"][relative] = raw
+            case["files"][relative] = record_of(raw)
+        return case
+
+    def cache(transform):
+        def change(raw):
+            document = json.loads(raw)
+            transform(document, document["records"][0])
+            return json.dumps(document).encode("utf-8")
+
+        return change
+
+    def relabel(label, **fields):
+        return {**copy.deepcopy(by_label[label]), **fields}
+
+    revoked = "revoked_unvalidated-revoked-personal"
+    unvalidated = "revoked_unvalidated-unvalidated-personal"
+    full = "setup_full-personal"
+    negatives = {
+        "revocation-missing-revoked-at": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.pop("revoked_at"))
+        ),
+        "revocation-null-revoked-at": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(revoked_at=None))
+        ),
+        "revocation-naive-timestamp": edited(
+            revoked,
+            ATTACHMENTS,
+            cache(lambda d, r: r.update(revoked_at="2026-02-01T00:00:00")),
+        ),
+        "revocation-invalid-timestamp": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(revoked_at="revoked"))
+        ),
+        "revocation-cache-missing": edited(revoked, ATTACHMENTS, drop=True),
+        "revocation-wrong-board": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(board_id="other_board"))
+        ),
+        "revocation-confirmed-and-revoked": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(confirmed=True))
+        ),
+        "revocation-active-attachment": edited(
+            revoked,
+            ATTACHMENTS,
+            cache(lambda d, r: (r.update(confirmed=True), r.pop("revoked_at"))),
+        ),
+        "revocation-unstable-probe-identity": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(probe_usb_serial=" "))
+        ),
+        "revocation-boolean-usb-id": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(uart_vid=True))
+        ),
+        "revocation-cache-schema": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: d.update(schema_version=2))
+        ),
+        "revocation-persisted-authority": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(permission="granted"))
+        ),
+        "revocation-unknown-field": edited(
+            revoked, ATTACHMENTS, cache(lambda d, r: r.update(extra=1))
+        ),
+        "revocation-malformed-json": edited(revoked, ATTACHMENTS, lambda raw: b"{"),
+        "unvalidated-with-cache": edited(
+            unvalidated,
+            ATTACHMENTS,
+            lambda raw: by_label[revoked]["data"][ATTACHMENTS],
+        ),
+        "unvalidated-label-on-lite": relabel(
+            "setup_lite-personal", state="revoked_unvalidated", variant="unvalidated"
+        ),
+        "unvalidated-label-on-no-setup": relabel(
+            "no_setup-personal", state="revoked_unvalidated", variant="unvalidated"
+        ),
+        "setup-full-label-on-no-setup": relabel(
+            "no_setup-personal", state="setup_full"
+        ),
+        "no-setup-label-on-full": relabel(full, state="no_setup"),
+        "setup-lite-label-on-full": relabel(full, state="setup_lite"),
+        "setup-full-label-on-incomplete": relabel(
+            revoked, state="setup_full", variant=None
+        ),
+        "corrupt-label-on-valid-policy": relabel(full, state="corrupt_policy"),
+        "full-label-on-corrupt-policy": relabel(
+            "corrupt_policy-personal", state="setup_full"
+        ),
+        "wrong-board": relabel(full, board_id="other_board"),
+        "unrelated-fixture-file": edited(
+            full, ".firm/unrelated.json", lambda raw: b"{}\n"
+        ),
+        "non-passive-fixture-file": edited(full, "bin/verify", lambda raw: b"x"),
+        "fixture-bytes-differ-from-record": relabel(
+            full, data={k: v + b" " for k, v in by_label[full]["data"].items()}
+        ),
+        "no-board-with-policy": relabel(full, state="no_board"),
+        "invalid-board-identifier": relabel("no_board-personal", board_id="../fixture"),
+        "unrecognized-variant": relabel(revoked, variant="stale"),
+        "missing-variant": relabel(revoked, variant=None),
+    }
+    pointer_path = ".firm/capabilities/legacy_full/current.json"
+    pointer = json.loads(by_label[full]["data"][pointer_path])
+    generation_path = (
+        f".firm/capabilities/legacy_full/generations/{pointer['generation_id']}.json"
+    )
+
+    def canonical(value) -> bytes:
+        return (
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+
+    def retiered(move_pointer: bool) -> dict:
+        case = copy.deepcopy(by_label[full])
+        document = json.loads(case["data"][generation_path])
+        document["tier"] = "setup-lite"
+        raw = canonical(document)
+        case["data"][generation_path] = raw
+        case["files"][generation_path] = record_of(raw)
+        if move_pointer:
+            moved = canonical(
+                {**pointer, "generation_digest": record_of(raw)["sha256"]}
+            )
+            case["data"][pointer_path] = moved
+            case["files"][pointer_path] = record_of(moved)
+        return case
+
+    negatives["generation-differs-from-pointer"] = retiered(False)
+    negatives["policy-digest-stale"] = retiered(True)
+    negatives["pointer-schema"] = edited(
+        full, pointer_path, lambda raw: canonical({**pointer, "schema_version": 2})
+    )
+    negatives["pointer-board"] = edited(
+        full,
+        pointer_path,
+        lambda raw: canonical({**pointer, "board_id": "other_board"}),
+    )
+    negatives["generation-missing"] = edited(full, generation_path, drop=True)
+    for label, case in negatives.items():
+        check(f"passive-{label}", lambda c=case: check_passive_case(c), Setup)
+
+    original = json.loads(path.read_bytes().decode("utf-8"))
+
+    def parse(mutate):
+        document = copy.deepcopy(original)
+        mutate(document)
+        return lambda: parse_availability_inputs(document)
+
+    def bad_base64(document):
+        entry = next(iter(document["fixtures"]["setup_full"].values()))
+        entry["base64"] = "***"
+
+    manifest_negatives = {
+        "old-schema": lambda d: d.update(schema="installed-analysis-availability/v2"),
+        "duplicate-case": lambda d: d["cases"].append(dict(d["cases"][0])),
+        "unknown-state": lambda d: d["cases"][0].update(state="revoked"),
+        "unknown-profile": lambda d: d["cases"][0].update(profile="enterprise"),
+        "variant-on-plain-state": lambda d: d["cases"][0].update(variant="revoked"),
+        "missing-variant-field": lambda d: d["cases"][4].pop("variant"),
+        "unknown-case-field": lambda d: d["cases"][0].update(root="states"),
+        "absent-fixture": lambda d: d["cases"][0].update(fixture="missing"),
+        "bad-base64": bad_base64,
+        "unknown-manifest-field": lambda d: d.update(credit=True),
+        "empty-cases": lambda d: d.update(cases=[]),
+    }
+    for label, mutate in manifest_negatives.items():
+        check(f"manifest-{label}", parse(mutate), Setup)
+    check(
+        "manifest-explicit-digest",
+        lambda: load_availability_inputs(path, "0" * 64),
+        Setup,
+    )
+
+    profiles = {"personal": "enabled", "professional": "not_built"}
+    for label, case in by_label.items():
+        values = expected[label]
+        health = {"narrative_logging": profiles[case["profile"]]}
+        other = "not_built" if case["profile"] == "personal" else "enabled"
+        payload = {
+            "board_id": case["board_id"],
+            "tier": values["tier"],
+            "policy_status": values["policy_status"],
+            "setup_incomplete": values["setup_incomplete"],
+            "policy_digest": values["policy_digest"]
+            or (None if values["tier"] is None else "a" * 64),
+            "identity": copy.deepcopy(values["identity"]),
+        }
+        check(
+            f"public-{label}",
+            lambda c=case, v=values, h=health, p=payload: check_availability_witnesses(
+                c, v, h, p
+            ),
+        )
+        identity = payload["identity"]
+        wrong = {
+            "profile-label-only": ({"narrative_logging": case["profile"]}, payload),
+            "other-profile": ({"narrative_logging": other}, payload),
+            "board": (health, {**payload, "board_id": "other_board"}),
+            "tier": (
+                health,
+                {
+                    **payload,
+                    "tier": "setup-full"
+                    if values["tier"] == "setup-lite"
+                    else "setup-lite",
+                },
+            ),
+            "policy-status": (health, {**payload, "policy_status": "legacy-migrated"}),
+            "setup-incomplete": (
+                health,
+                {**payload, "setup_incomplete": not payload["setup_incomplete"]},
+            ),
+            "policy-digest": (health, {**payload, "policy_digest": "b" * 63 + "x"}),
+            "identity-proven": (
+                health,
+                {**payload, "identity": {**identity, "assertion": "proven"}},
+            ),
+            "identity-capability": (
+                health,
+                {**payload, "identity": {**identity, "capability": "exact"}},
+            ),
+        }
+        if values["policy_digest"] is not None:
+            wrong["policy-digest-other"] = (
+                health,
+                {**payload, "policy_digest": "c" * 64},
+            )
+        if values["tier"] is None:
+            wrong["corrupt-with-digest"] = (
+                health,
+                {**payload, "policy_digest": "d" * 64},
+            )
+        for name, (h, p) in wrong.items():
+            check(
+                f"public-{label}-wrong-{name}",
+                lambda c=case, v=values, h=h, p=p: check_availability_witnesses(
+                    c, v, h, p
+                ),
+                Red,
+            )
+
+    complete = {name: [{"result": {}}] for name in TOOLS}
+    check("tool-coverage-complete", lambda: check_tool_coverage(complete))
+    for name in TOOLS:
+        partial = {k: v for k, v in complete.items() if k != name}
+        check(
+            f"tool-coverage-missing-{name}",
+            lambda p=partial: check_tool_coverage(p),
+            Red,
+        )
+    check(
+        "tool-coverage-empty-results",
+        lambda: check_tool_coverage({**complete, TOOLS[-1]: []}),
+        Red,
+    )
+
+    def aggregate(state, variants, status):
+        def action():
+            observed = group_status(state, variants)["status"]
+            require(observed == status, f"group aggregated {observed}, not {status}")
+
+        return action
+
+    passed = {"status": "PASS"}
+    both = "revoked_unvalidated"
+    for name, state, variants, status in (
+        ("both-variants", both, {"revoked": passed, "unvalidated": passed}, "PASS"),
+        ("revoked-only", both, {"revoked": passed}, "PENDING"),
+        ("unvalidated-only", both, {"unvalidated": passed}, "PENDING"),
+        (
+            "variant-red",
+            both,
+            {"revoked": passed, "unvalidated": {"status": "RED"}},
+            "RED",
+        ),
+        ("label-without-variant", both, {None: passed}, "PENDING"),
+        ("plain-state", "setup_full", {None: passed}, "PASS"),
+        ("plain-state-missing", "setup_full", {}, "PENDING"),
+    ):
+        check(f"variant-ledger-{name}", aggregate(state, variants, status))
+
+    protected = scratch / "protected-attachments.json"
+    protected.parent.mkdir(parents=True, exist_ok=True)
+    protected.write_bytes(by_label[revoked]["data"][ATTACHMENTS])
+    record = file_record(protected)
+    check(
+        "protected-bytes-unchanged",
+        lambda: verify_file(protected, record, product=True),
+    )
+    protected.write_bytes(protected.read_bytes().replace(b"REVOKED", b"ACTIVE!"))
+    check(
+        "protected-bytes-changed",
+        lambda: verify_file(protected, record, product=True),
+        Red,
+    )
+    return {
+        "manifest": file_record(path),
+        "cases": sorted(by_label),
+        "expected_from_fixture": expected,
+    }
 
 
 def validator_contract_checks(args, evidence: Evidence) -> None:
@@ -2346,88 +3084,21 @@ def validator_contract_checks(args, evidence: Evidence) -> None:
             lambda: program_identity(bundle, inventory, mapping, other_expected),
             Red,
         )
-    for profile, value in (("personal", "enabled"), ("professional", "not_built")):
-        case = {"profile": profile, "state": "setup_lite", "board_id": "fixture"}
-        capabilities = {"tier": "setup-lite", "board_id": "fixture"}
-        check(
-            f"public-values-{profile}",
-            lambda: check_availability_witnesses(
-                case, {"narrative_logging": value}, capabilities
-            ),
+    if args.availability_inputs is not None and args.availability_sha256 is not None:
+        availability_path = args.availability_inputs
+        availability_sha = args.availability_sha256
+        binding = "explicit --availability-inputs/--availability-sha256"
+    else:
+        availability_path = (
+            Path(__file__).resolve().parent
+            / "fixtures/code-analysis-installed/availability/manifest.json"
         )
-        check(
-            f"profile-label-only-{profile}",
-            lambda: check_availability_witnesses(
-                case, {"narrative_logging": profile}, capabilities
-            ),
-            Red,
-        )
-        check(
-            f"wrong-tier-{profile}",
-            lambda: check_availability_witnesses(
-                case, {"narrative_logging": value}, {**capabilities, "tier": "no-setup"}
-            ),
-            Red,
-        )
-    check(
-        "corrupt-policy-public-values",
-        lambda: check_availability_witnesses(
-            {"profile": "personal", "state": "corrupt_policy", "board_id": "fixture"},
-            {"narrative_logging": "enabled"},
-            {"tier": None, "policy_status": "corrupt", "board_id": "fixture"},
-        ),
+        availability_sha = digest(availability_path)
+        binding = "script-relative committed fixture (self-digest, no oracle credit)"
+    availability = availability_contract_checks(
+        check, availability_path, availability_sha, evidence.root / "contract-scratch"
     )
-    check(
-        "revocation-tier-only-pending",
-        lambda: check_availability_witnesses(
-            {
-                "profile": "personal",
-                "state": "revoked_unvalidated",
-                "board_id": "fixture",
-            },
-            {"narrative_logging": "enabled"},
-            {"tier": "no-setup", "setup_incomplete": True, "board_id": "fixture"},
-        ),
-        Pending,
-    )
-    check(
-        "no-board-passive-fixture",
-        lambda: check_passive_case(
-            {"state": "no_board", "board_id": "fixture", "files": {}}
-        ),
-    )
-    check(
-        "state-label-only-pending",
-        lambda: check_passive_case(
-            {"state": "no_setup", "board_id": "fixture", "files": {}}
-        ),
-        Pending,
-    )
-    check(
-        "unrelated-fixture-pending",
-        lambda: check_passive_case(
-            {
-                "state": "no_setup",
-                "board_id": "fixture",
-                "files": {".firm/unrelated.json": {}},
-            }
-        ),
-        Pending,
-    )
-    check(
-        "non-passive-fixture-rejected",
-        lambda: check_passive_case(
-            {"state": "no_setup", "board_id": "fixture", "files": {"bin/verify": {}}}
-        ),
-        Setup,
-    )
-    check(
-        "invalid-board-identifier",
-        lambda: check_passive_case(
-            {"state": "no_board", "board_id": "../fixture", "files": {}}
-        ),
-        Setup,
-    )
+    availability["binding"] = binding
     write_json(
         evidence.root / "validator-contract.json",
         {
@@ -2435,6 +3106,7 @@ def validator_contract_checks(args, evidence: Evidence) -> None:
             "script": file_record(Path(__file__)),
             "archive": file_record(args.archive),
             "expected_cppcheck_sha256": expected,
+            "availability": availability,
             "installed_credit": False,
         },
     )
