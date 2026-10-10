@@ -111,6 +111,25 @@ class ArmInputContracts(unittest.TestCase):
         self.assertFalse((output / "toolchain").exists())
         self.assertEqual(list(output.glob("*.partial")), [])
 
+    def test_flat_windows_vendor_zip_is_wrapped_in_the_owned_vendor_root(self):
+        source, _ = source_and_archive("windows-x86_64")
+        source["archive_layout"] = "flat"
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w") as archive:
+            archive.writestr(".version", b"vendor version metadata")
+            archive.writestr(source["compiler"], COMPILER)
+        payload = data.getvalue()
+        source["sha256"] = hashlib.sha256(payload).hexdigest()
+        receipt, _ = self.acquire_fixture(
+            "windows-x86_64", source, payload, self.root / "flat-windows"
+        )
+        vendor_root = Path(receipt["root"])
+        self.assertEqual(
+            (vendor_root / ".version").read_bytes(), b"vendor version metadata"
+        )
+        self.assertEqual(Path(receipt["compiler"]).read_bytes(), COMPILER)
+        self.assertEqual(vendor_root.name, source["directory"])
+
     def test_existing_extraction_is_refused_before_network_and_is_preserved(self):
         source, payload = source_and_archive("linux-x86_64")
         output = self.root / "inputs"
