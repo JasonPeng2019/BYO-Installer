@@ -115,7 +115,7 @@ jobs:
         run: |
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
+          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Run analysis Python source contracts
         if: (success() || failure()) && steps.build-deps.outcome == 'success'
@@ -293,7 +293,7 @@ jobs:
           rustup component add --toolchain 1.97.1 rustfmt clippy
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
+          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Run native Linux analysis Python source contracts
         if: (success() || failure()) && steps.build-deps.outcome == 'success'
