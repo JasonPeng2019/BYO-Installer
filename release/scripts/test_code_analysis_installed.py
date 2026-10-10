@@ -324,6 +324,11 @@ def program_identity(
 class WindowsProcesses:
     """Independent native process observations; no image-name termination."""
 
+    # Owned native --version traces measured image loss before signalling at
+    # exit (under 1.1 ms). This wait applies only after a failed image query,
+    # never before descendant sampling, and cannot accept an unreadable live PID.
+    IMAGE_EXIT_WAIT_MS = 5
+
     def __init__(self):
         self.k = ctypes.WinDLL("kernel32", use_last_error=True)
         self.k.OpenProcess.restype = wintypes.HANDLE
@@ -375,6 +380,8 @@ class WindowsProcesses:
                     f"{ctypes.get_last_error()}"
                 )
             created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            if not created:
+                raise Setup(f"PID {pid} creation identity unobservable: zero FILETIME")
             buf = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(buf))
             image_error = None
@@ -385,16 +392,44 @@ class WindowsProcesses:
             state = self.k.WaitForSingleObject(handle, 0)
             if state not in (0, 258):
                 raise Setup(f"PID {pid} liveness unobservable: wait result {state}")
+            transition = None
+            if image_error is not None and state == 258:
+                started = time.monotonic()
+                state = self.k.WaitForSingleObject(handle, self.IMAGE_EXIT_WAIT_MS)
+                transition = {
+                    "initial_wait": 258,
+                    "image_error": image_error,
+                    "creation_before": created,
+                    "wait_timeout_ms": self.IMAGE_EXIT_WAIT_MS,
+                    "final_wait": state,
+                    "elapsed_ms": (time.monotonic() - started) * 1000,
+                }
+                if state == 0:
+                    if not self.k.GetProcessTimes(
+                        handle, *[ctypes.byref(t) for t in times]
+                    ):
+                        raise Setup(
+                            f"PID {pid} exit creation unobservable: GetProcessTimes "
+                            f"error {ctypes.get_last_error()}; {transition}"
+                        )
+                    after = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+                    transition["creation_after"] = after
+                    if after != created:
+                        raise Setup(
+                            f"PID {pid} retained creation changed: {transition}"
+                        )
             if image_error is not None and state != 0:
                 raise Setup(
                     f"PID {pid} identity unobservable: QueryFullProcessImageNameW "
-                    f"error {image_error}; retained handle wait {state}"
+                    f"error {image_error}; retained handle wait {state}; "
+                    f"creation {created}; transition {transition}"
                 )
             return {
                 "pid": pid,
                 "creation_filetime": created,
                 "image": buf.value if image and image_error is None else None,
                 "image_query_error": image_error,
+                "image_exit_transition": transition,
                 "alive": state == 258,
             }
         finally:
@@ -3382,6 +3417,80 @@ def process_observer_checks(check, scratch: Path) -> dict:
             lambda k=kernel: mocked(image=False, **k).identity(4242),
             Setup,
         )
+
+    class TransitionKernel(_FakeKernel):
+        def __init__(self, final_wait=0, final_creation=7, final_times=True, **kwargs):
+            super().__init__(image=False, **kwargs)
+            self.final_wait = final_wait
+            self.final_creation, self.final_times = final_creation, final_times
+            self.wait_calls, self.time_calls, self.open_calls = [], 0, []
+
+        def OpenProcess(self, access, inherit, pid):
+            self.open_calls.append((access, pid))
+            return super().OpenProcess(access, inherit, pid)
+
+        def WaitForSingleObject(self, handle, timeout):
+            self.wait_calls.append((handle, timeout))
+            return 258 if len(self.wait_calls) == 1 else self.final_wait
+
+        def GetProcessTimes(self, handle, created, *rest):
+            self.time_calls += 1
+            if self.time_calls > 1:
+                self.created, self.times = self.final_creation, self.final_times
+            return super().GetProcessTimes(handle, created, *rest)
+
+    for error in (5, 31, 0):
+
+        def transition_exit(error=error):
+            native = object.__new__(WindowsProcesses)
+            native.k = TransitionKernel(image_error=error)
+            result = native.identity(4242)
+            trace = result["image_exit_transition"]
+            require(
+                result["creation_filetime"] == 7
+                and result["alive"] is False
+                and result["image"] is None
+                and trace["initial_wait"] == 258
+                and trace["final_wait"] == 0
+                and trace["creation_before"] == trace["creation_after"] == 7
+                and trace["image_error"] == error
+                and native.k.wait_calls == [(1, 0), (1, 5)]
+                and len(native.k.open_calls) == 1,
+                "image-loss transition lacks bounded same-handle creation/exit proof",
+            )
+
+        check(
+            f"observer-unsignalled-image-error-{error}-exact-transition",
+            transition_exit,
+        )
+
+    for name, kernel in (
+        ("persistent-live", {"final_wait": 258}),
+        ("failed-wait", {"final_wait": 0xFFFFFFFF}),
+        ("unknown-wait", {"final_wait": 128}),
+        ("creation-recheck-failed", {"final_times": False}),
+        ("creation-changed", {"final_creation": 8}),
+    ):
+
+        def rejected_transition(kernel=kernel):
+            native = object.__new__(WindowsProcesses)
+            native.k = TransitionKernel(**kernel)
+            try:
+                native.identity(4242)
+            except Setup:
+                require(
+                    native.k.wait_calls == [(1, 0), (1, 5)]
+                    and len(native.k.open_calls) == 1,
+                    "unobservable transition exceeded its single finite retained wait",
+                )
+                raise
+
+        check(f"observer-image-transition-{name}-no-credit", rejected_transition, Setup)
+    check(
+        "observer-zero-creation-no-credit",
+        lambda: mocked(created=0).identity(4242),
+        Setup,
+    )
     check(
         "observer-win32-proved-no-pid",
         expect(lambda: mocked(open_error=87).identity(4242), None),
