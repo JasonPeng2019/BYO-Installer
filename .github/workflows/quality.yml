@@ -32,6 +32,28 @@ jobs:
           path: AgentWorkspace
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
+      - name: Read locked Firmware MCP commit
+        id: firmware-source
+        shell: bash
+        run: |
+          echo "commit=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Check out locked Firmware MCP for release test dependencies
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.firmware-source.outputs.commit }}
+          path: Firmware MCP New
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          enable-cache: false
+
+      - name: Install locked release test dependencies
+        id: test-deps
+        run: uv sync --project "Firmware MCP New" --locked --all-groups
+
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
@@ -42,7 +64,7 @@ jobs:
         run: cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
 
       - name: Rust tests
-        run: cargo test --manifest-path launcher/Cargo.toml --locked
+        run: cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
 
       - name: Validate release Python
         run: |
@@ -51,15 +73,18 @@ jobs:
           pipx run ruff==0.15.21 format --check release/scripts hil
 
       - name: Release script unit tests
+        if: (success() || failure()) && steps.test-deps.outcome == 'success'
         run: |
-          python3 release/scripts/test_compile_workspace.py
-          python3 release/scripts/test_verify_build_output.py
-          python3 release/scripts/test_build_release.py
-          python3 release/scripts/test_e2e_harness.py
-          python3 release/scripts/test_analysis_tools.py
-          python3 release/scripts/test_analysis_portability.py
-          python3 release/scripts/test_acquire_analysis_inputs.py
-          python3 release/scripts/test_code_analysis_portable_smoke_controls.py
+          result=0
+          for script in test_compile_workspace.py test_verify_build_output.py test_build_release.py test_e2e_harness.py test_analysis_tools.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
+            if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
+              echo "PASS $script"
+            else
+              result=1
+              echo "FAIL $script"
+            fi
+          done
+          exit "$result"
 
       - name: Validate shell bootstrap
         run: sh -n install.sh

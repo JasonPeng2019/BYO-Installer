@@ -171,6 +171,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Retain native analysis build evidence
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: byo-analysis-evidence-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/analysis-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
       # Retain the stripped dSYM/PDB/.debug separately from the shipped bundle,
       # keyed by build (per-target, per-commit run) and kept longer, so a crash
       # from a shipped build can still be symbolicated. GitHub artifacts cap at
@@ -338,6 +347,15 @@ jobs:
             release/dist/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Retain native analysis build evidence
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: byo-analysis-evidence-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/analysis-evidence/
+          if-no-files-found: warn
+          retention-days: 90
 
       # See the note in the build job: retain stripped symbols separately, keyed
       # by build, kept longer for crash symbolication.

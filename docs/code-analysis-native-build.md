@@ -132,7 +132,13 @@ python3 release/scripts/test_code_analysis_portable_smoke.py \
   --evidence /absolute/new/smoke-evidence --artifact-label YOUR_RUN_ID
 ```
 
-On Windows, use the `.exe` toolchain executable. Install the smoke script's
+On Windows, use the `.exe` ARM toolchain executable and add
+`--rustc C:/absolute/path/to/rustc.exe` to the command. Supply the actual toolchain
+compiler rather than the rustup proxy; its bundled `rust-lld` must be available
+to link the Windows override fixture. For a rustup installation,
+`rustup which rustc` reports that compiler path.
+
+Install the smoke script's
 Python test dependency `psutil` in an isolated test environment. Keep its
 `report.json`, evidence manifest and captured output even on failure. Exit 0 is
 the bounded core smoke pass; exits 1, 2 and 3 distinguish a failed assertion,

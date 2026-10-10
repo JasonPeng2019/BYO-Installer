@@ -30,7 +30,8 @@ Required inputs (all explicit; a missing/invalid one exits 2 before any launch):
   --artifact-label TEXT   recorded verbatim (e.g. existing-windows-artifact,
                           candidate-<commit>)
 
-Optional: --arm-gcc PATH (defaults to the arm-none-eabi-gcc sibling), --rustc PATH
+Optional: --arm-gcc PATH (defaults to the arm-none-eabi-gcc sibling).
+Windows requires --rustc PATH (the actual compiler with its bundled rust-lld).
 (Windows setup input: compiles the native build override; POSIX uses /bin/sh),
 --archive-sha256 HEX (independent archive digest), --install-timeout SECONDS.
 
@@ -2061,7 +2062,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--arm-gxx", required=True, type=Path)
     p.add_argument("--arm-gxx-sha256", required=True)
     p.add_argument("--arm-gcc", type=Path)
-    p.add_argument("--rustc", type=Path)
+    p.add_argument(
+        "--rustc",
+        type=Path,
+        help="Required on Windows: actual rustc with bundled rust-lld",
+    )
     p.add_argument("--artifact-label", required=True)
     p.add_argument("--install-timeout", type=float, default=300)
     return p
