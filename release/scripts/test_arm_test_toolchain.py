@@ -27,6 +27,7 @@ COMPILER = b"synthetic compiler bytes; never executable proof\n"
 def source_and_archive(target, *, member=None, contents=COMPILER):
     is_windows = target == "windows-x86_64"
     source = {
+        "archive_layout": "flat" if is_windows else "rooted",
         "version": "1.0.rel1",
         "archive": "fixture.zip" if is_windows else "fixture.tar.xz",
         "url": "https://example.invalid/fixture.zip"
@@ -40,7 +41,9 @@ def source_and_archive(target, *, member=None, contents=COMPILER):
         else "bin/arm-none-eabi-g++",
     }
     data = io.BytesIO()
-    name = member or f"fixture/{source['compiler']}"
+    name = member or (
+        source["compiler"] if is_windows else f"fixture/{source['compiler']}"
+    )
     if is_windows:
         with zipfile.ZipFile(data, "w") as archive:
             archive.writestr(name, contents)

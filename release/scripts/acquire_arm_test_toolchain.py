@@ -47,6 +47,7 @@ def load_source(target: str) -> dict:
             "sha256",
             "directory",
             "compiler",
+            "archive_layout",
         }
         or not all(isinstance(value, str) and value for value in source.values())
         or not re.fullmatch(r"[0-9a-f]{64}", source["sha256"])
@@ -61,6 +62,8 @@ def load_source(target: str) -> dict:
         )
         or source["compiler"]
         != ("bin/arm-none-eabi-g++" + (".exe" if target == "windows-x86_64" else ""))
+        or source["archive_layout"]
+        != ("flat" if target == "windows-x86_64" else "rooted")
     ):
         raise ValueError("Invalid pinned ARM test toolchain source")
     try:
@@ -72,7 +75,7 @@ def load_source(target: str) -> dict:
     return source
 
 
-def _member_name(name: str, directory: str) -> None:
+def _member_name(name: str, directory: str | None) -> None:
     path = PurePosixPath(name)
     if (
         not name
@@ -81,17 +84,19 @@ def _member_name(name: str, directory: str) -> None:
         or path.is_absolute()
         or ".." in path.parts
         or not path.parts
-        or path.parts[0] != directory
+        or (directory is not None and path.parts[0] != directory)
     ):
         raise RuntimeError(f"Unexpected ARM test archive member: {name!r}")
 
 
 def _expand(archive: Path, output: Path, source: dict) -> None:
     if archive.suffix == ".zip":
+        flat = source["archive_layout"] == "flat"
+        destination = output / source["directory"] if flat else output
         with zipfile.ZipFile(archive) as handle:
             seen = set()
             for member in handle.infolist():
-                _member_name(member.filename, source["directory"])
+                _member_name(member.filename, None if flat else source["directory"])
                 key = member.filename.rstrip("/").casefold()
                 if key in seen or stat.S_IFMT(member.external_attr >> 16) not in {
                     0,
@@ -100,7 +105,9 @@ def _expand(archive: Path, output: Path, source: dict) -> None:
                 }:
                     raise RuntimeError("Duplicate or special ARM ZIP member")
                 seen.add(key)
-            handle.extractall(output)
+            if flat:
+                destination.mkdir()
+            handle.extractall(destination)
     else:
         with tarfile.open(archive, "r:xz") as handle:
 
@@ -147,6 +154,7 @@ def acquire(target: str, output: Path) -> dict:
         "schema": "arm-test-toolchain-input/v1",
         "target": target,
         "version": source["version"],
+        "archive_layout": source["archive_layout"],
         "archive": archive,
         "root": str(expanded / source["directory"]),
         "compiler": str(compiler),
