@@ -3,19 +3,29 @@ use super::*;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
-use std::os::windows::fs::OpenOptionsExt;
-use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+#[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct Identity {
-    volume: u32,
+    volume: u64,
     index: u64,
     size: u64,
     modified: u64,
+    #[cfg(unix)]
+    mode: u32,
+    #[cfg(unix)]
+    modified_ns: i64,
+    #[cfg(unix)]
+    changed: i64,
+    #[cfg(unix)]
+    changed_ns: i64,
 }
+#[cfg(windows)]
 pub(super) fn identity(path: &Path) -> std::io::Result<Identity> {
     let file = fs::OpenOptions::new()
         .read(true)
@@ -27,11 +37,26 @@ pub(super) fn identity(path: &Path) -> std::io::Result<Identity> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(Identity {
-        volume: info.dwVolumeSerialNumber,
+        volume: u64::from(info.dwVolumeSerialNumber),
         index: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
         size: (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow),
         modified: (u64::from(info.ftLastWriteTime.dwHighDateTime) << 32)
             | u64::from(info.ftLastWriteTime.dwLowDateTime),
+    })
+}
+#[cfg(unix)]
+pub(super) fn identity(path: &Path) -> std::io::Result<Identity> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path)?;
+    Ok(Identity {
+        volume: metadata.dev(),
+        index: metadata.ino(),
+        size: metadata.size(),
+        modified: metadata.mtime() as u64,
+        mode: metadata.mode(),
+        modified_ns: metadata.mtime_nsec(),
+        changed: metadata.ctime(),
+        changed_ns: metadata.ctime_nsec(),
     })
 }
 pub(super) fn same_file(first: &Path, second: &Path) -> std::io::Result<bool> {
@@ -538,7 +563,7 @@ pub(super) fn load_config(root: &Path, budget: &mut Budget) -> Result<Config> {
                     "Export the selected native build.",
                 )
             })?;
-        let mut sources: BTreeMap<(u32, u64), Entry> = BTreeMap::new();
+        let mut sources: BTreeMap<(u64, u64), Entry> = BTreeMap::new();
         for (i, record) in records.iter().enumerate() {
             budget.remaining()?;
             let label = format!("compilation_database[{i}]");

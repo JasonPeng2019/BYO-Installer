@@ -1,5 +1,4 @@
 mod cli;
-#[cfg(windows)]
 mod code_analysis;
 mod error;
 mod install;
@@ -105,9 +104,7 @@ fn doctor_after_activation(paths: &ProductPaths) -> Result<()> {
 fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     let (_, runtime) = manifest::load_current(paths)?;
     let release = manifest::verify_runtime(&runtime)?;
-    #[cfg(windows)]
     let _lease = lease::RuntimeLeaseGuard::acquire(paths, &release.version, "global-doctor")?;
-    #[cfg(windows)]
     let analysis = managed_analysis_status(&runtime, &release)?;
     install::sidecar_self_test(&runtime)?;
     let pack = pack::WorkspacePack::load(&runtime.join("workflow/workspace.pack"))?;
@@ -130,7 +127,6 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     let leases = lease::inspect(paths, true)?;
     let live_lease_count = leases.iter().filter(|status| status.live).count();
     let stale_lease_count = leases.len() - live_lease_count;
-    #[allow(unused_mut)]
     let mut checks = vec![
         Check {
             id: "runtime.manifest.integrity".to_string(),
@@ -181,7 +177,6 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
             identity: None,
         },
     ];
-    #[cfg(windows)]
     if analysis["status"] == "ready" {
         for name in ["cppcheck", "clangd"] {
             checks.push(Check {
@@ -204,7 +199,6 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
     Ok(checks)
 }
 
-#[cfg(windows)]
 fn managed_analysis_status(
     root: &std::path::Path,
     release: &manifest::ReleaseManifest,
@@ -218,7 +212,14 @@ fn managed_analysis_status(
             serde_json::json!({"status":"unavailable","reason":"This older runtime has no managed analysis payload."}),
         );
     }
-    code_analysis::runtime_status(root, release)
+    Ok(match code_analysis::runtime_status(root, release) {
+        Ok(status) => status,
+        Err(error) => serde_json::json!({
+            "status":"unavailable", "reason":error.to_string(),
+            "runtime_root":root, "runtime_manifest_sha256":null,
+            "analysis_mapping_sha256":null, "programs":{"cppcheck":null,"clangd":null}
+        }),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -560,9 +561,7 @@ fn run() -> Result<i32> {
                 manifest::verify_runtime(&runtime),
                 ExitCategory::RuntimeIntegrity,
             )?;
-            #[cfg(windows)]
             let _lease = lease::RuntimeLeaseGuard::acquire(&paths, &release.version, "status")?;
-            #[cfg(windows)]
             let analysis = categorize(
                 managed_analysis_status(&runtime, &release),
                 ExitCategory::RuntimeIntegrity,
@@ -582,17 +581,13 @@ fn run() -> Result<i32> {
                     Ok::<_, anyhow::Error>(project.display().to_string())
                 })
                 .transpose()?;
-            #[allow(unused_mut)]
             let mut status = serde_json::json!({
                 "runtime_version": release.version,
                 "runtime_root": runtime,
                 "project": project_status,
                 "development_unsigned": release.development_unsigned
             });
-            #[cfg(windows)]
-            {
-                status["analysis"] = analysis;
-            }
+            status["analysis"] = analysis;
             println!("{}", serde_json::to_string_pretty(&status)?);
         }
         Command::Init(arguments) => {

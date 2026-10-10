@@ -1,6 +1,7 @@
-//! Required selected-build Cppcheck verification for the managed Windows runtime.
+//! Required selected-build Cppcheck verification for the managed native runtime.
 
 mod config;
+mod native_format;
 mod process;
 pub(crate) mod runtime;
 mod xml;
@@ -128,27 +129,41 @@ impl Budget {
 
 fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     let path = path.canonicalize()?;
-    let text = path.to_string_lossy();
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        Ok(PathBuf::from(format!(r"\\{rest}")))
-    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
-        Ok(PathBuf::from(rest))
-    } else {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            Ok(PathBuf::from(format!(r"\\{rest}")))
+        } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+            Ok(PathBuf::from(rest))
+        } else {
+            Ok(path)
+        }
+    }
+    #[cfg(not(windows))]
+    {
         Ok(path)
     }
 }
 fn native(path: &Path) -> String {
-    // Verbatim Windows paths do not normalize forward slashes, including those
-    // preserved by Path::join. Normalize before adding or retaining the prefix.
-    let text = path.to_string_lossy().replace('/', r"\");
-    if text.encode_utf16().count() >= 260 && !text.starts_with(r"\\?\") {
-        if let Some(rest) = text.strip_prefix(r"\\") {
-            format!(r"\\?\UNC\{rest}")
+    #[cfg(windows)]
+    {
+        // Verbatim Windows paths do not normalize forward slashes, including those
+        // preserved by Path::join. Normalize before adding or retaining the prefix.
+        let text = path.to_string_lossy().replace('/', r"\");
+        if text.encode_utf16().count() >= 260 && !text.starts_with(r"\\?\") {
+            if let Some(rest) = text.strip_prefix(r"\\") {
+                format!(r"\\?\UNC\{rest}")
+            } else {
+                format!(r"\\?\{text}")
+            }
         } else {
-            format!(r"\\?\{text}")
+            text
         }
-    } else {
-        text
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
     }
 }
 fn read(path: &Path, budget: &Budget) -> Result<Vec<u8>> {
@@ -185,6 +200,9 @@ fn report_invalid(message: impl Into<String>) -> Problem {
     Problem::execution("report-invalid", message)
 }
 fn extract_xml(data: &[u8]) -> Result<Vec<u8>> {
+    let original = data;
+    let text = xml::decode(data).map_err(report_invalid)?;
+    let data = text.as_bytes();
     let find = |needle: &[u8]| data.windows(needle.len()).position(|part| part == needle);
     let start = find(b"<?xml")
         .or_else(|| find(b"<results"))
@@ -200,7 +218,8 @@ fn extract_xml(data: &[u8]) -> Result<Vec<u8>> {
     {
         return Err(report_invalid("Unexplained stderr outside the XML report."));
     }
-    Ok(data[start..end].to_vec())
+    // Keep report bytes and encoding evidence intact after checking the framing.
+    Ok(original.to_vec())
 }
 fn parse_report(data: &[u8], root: &Path, entries: &[Entry]) -> Result<Report> {
     let document = xml::parse(data).map_err(report_invalid)?;
@@ -441,7 +460,7 @@ fn probe(
     events: &mut Vec<Value>,
 ) -> Result<String> {
     let probe_started = Instant::now();
-    let argv = vec![program.executable.display().to_string(), "--version".into()];
+    let argv = vec![native(&program.executable), "--version".into()];
     let code = process::run_owned(
         &argv,
         root,
@@ -517,6 +536,8 @@ pub(crate) fn runtime_status(
     let budget = Budget::new();
     let program = runtime::resolve(root, release, &budget)
         .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
+    let clangd = runtime::resolve_selected(root, release, &budget, "clangd")
+        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
     let mut status = program
         .status(release)
         .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
@@ -526,9 +547,10 @@ pub(crate) fn runtime_status(
     ));
     fs::create_dir(&directory)?;
     let checked = (|| -> Result<()> {
+        clangd.recheck(&budget)?;
         let mut events = Vec::new();
         probe(&program, root, &budget, &directory, &mut events)?;
-        status["programs"]["cppcheck"]["version_probe"] = json!({"argv":[program.executable,"--version"],"exit_code":0,"stdout":String::from_utf8_lossy(&read(&directory.join("version.stdout.log"), &budget)?),"stderr":String::from_utf8_lossy(&read(&directory.join("version.stderr.log"), &budget)?)});
+        status["programs"]["cppcheck"]["version_probe"] = json!({"argv":[native(&program.executable),"--version"],"exit_code":0,"stdout":String::from_utf8_lossy(&read(&directory.join("version.stdout.log"), &budget)?),"stderr":String::from_utf8_lossy(&read(&directory.join("version.stderr.log"), &budget)?)});
         let executable =
             PathBuf::from(status["programs"]["clangd"]["executable"].as_str().unwrap());
         let (snapshot, _) = config::Snapshot::capture(&executable, &budget)?;
@@ -543,7 +565,7 @@ pub(crate) fn runtime_status(
                 "Restore the complete immutable runtime and relaunch.",
             ));
         }
-        let argv = vec![executable.display().to_string(), "--version".into()];
+        let argv = vec![native(&executable), "--version".into()];
         let code = process::run_owned(
             &argv,
             root,
@@ -572,6 +594,7 @@ pub(crate) fn runtime_status(
         }
         status["programs"]["clangd"]["version_probe"] = json!({"argv":argv,"exit_code":code,"stdout":output,"stderr":String::from_utf8_lossy(&read(&directory.join("clangd-version.stderr.log"), &budget)?)});
         snapshot.recheck(&budget)?;
+        clangd.recheck(&budget)?;
         program.recheck(&budget)
     })();
     // Only this fresh, exact owned directory is removed after run_owned has
@@ -664,7 +687,7 @@ fn run_with_runtime(
             if config.style { ",style" } else { "" }
         );
         let mut argv = vec![
-            program.executable.display().to_string(),
+            native(&program.executable),
             format!("--enable={enable}"),
             "--error-exitcode=1".into(),
             "--xml".into(),
@@ -854,6 +877,7 @@ mod owner_tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/code-analysis")
     }
 
+    #[cfg(windows)]
     #[test]
     fn native_long_joined_file_arguments_are_readable() {
         let root = std::env::temp_dir().join(format!(
@@ -874,6 +898,7 @@ mod owner_tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
     #[test]
     fn native_long_unc_file_arguments_preserve_the_share() {
         let path = PathBuf::from(format!(r"\\server\share\{}/platform.xml", "x".repeat(240)));
@@ -881,6 +906,16 @@ mod owner_tests {
             native(&path),
             format!(r"\\?\UNC\server\share\{}\platform.xml", "x".repeat(240))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_paths_preserve_posix_separators_and_canonical_identity() {
+        let root = canonical(&fixtures()).unwrap();
+        let path = root.join("project/config/platform.xml");
+        assert_eq!(native(&path), path.to_str().unwrap());
+        assert!(fs::read(native(&path)).is_ok());
+        assert_eq!(canonical(&root.join("project/..")).unwrap(), root);
     }
 
     #[test]
@@ -1032,6 +1067,35 @@ mod owner_tests {
                 "{data:?}"
             );
         }
+    }
+
+    #[test]
+    fn utf16_report_framing_keeps_original_bytes_and_rejects_namespace_results() {
+        let text = "<?xml version='1.0' encoding='UTF-16'?><results version='2'><cppcheck version='2.22'/><errors/></results>";
+        for little in [true, false] {
+            let mut bytes = if little {
+                vec![0xff, 0xfe]
+            } else {
+                vec![0xfe, 0xff]
+            };
+            for unit in text.encode_utf16() {
+                bytes.extend(if little {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                });
+            }
+            let framed = extract_xml(&bytes).unwrap();
+            assert_eq!(framed, bytes);
+            assert!(parse_report(&framed, &fixtures(), &[]).is_ok());
+        }
+        assert!(parse_report(
+            b"<results xmlns='urn:x' version='2'><cppcheck version='2.22'/><errors/></results>",
+            &fixtures(),
+            &[]
+        )
+        .is_err());
+        assert!(parse_report(b"<results version='2'><cppcheck version='2.22'/><errors><error xmlns:a='urn:a' a:id='x' severity='warning' msg='x'/></errors></results>", &fixtures(), &[]).is_err());
     }
 
     #[test]
@@ -1265,6 +1329,7 @@ mod owner_tests {
 
     /// Explicit source smoke inputs, staged by the lane's read-only input
     /// receipt script. This is intentionally not an installed-product test.
+    #[cfg(windows)]
     #[test]
     #[ignore = "requires explicitly staged pinned Windows ARM development inputs"]
     fn pinned_native_arm_and_failure_smoke() {

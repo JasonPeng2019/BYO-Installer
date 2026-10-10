@@ -494,7 +494,6 @@ fn forbidden_structure_path(path: &Path, patterns: &[String]) -> bool {
     })
 }
 
-#[cfg(windows)]
 fn firmware_checks(build: impl FnOnce() -> Result<bool>, analysis: impl FnOnce() -> bool) -> bool {
     let built = match build() {
         Ok(passed) => passed,
@@ -507,7 +506,7 @@ fn firmware_checks(build: impl FnOnce() -> Result<bool>, analysis: impl FnOnce()
     built && analyzed
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod firmware_order_tests {
     use super::*;
     use std::cell::RefCell;
@@ -586,50 +585,43 @@ fn tool_verify(project: &Path, paths: &ProductPaths, arguments: &[String]) -> Re
         .join("bin")
         .join(format!("verify-{}-local", mode.verify.backend));
     let mut substantive = false;
-    if cfg!(windows) && mode.verify.backend == "firmware" {
-        #[cfg(windows)]
-        {
-            let project_id = crate::project::project_id(project)?;
-            let _lease = crate::lease::RuntimeLeaseGuard::acquire(
-                paths,
-                &runtime.release.version,
-                &project_id,
-            )?;
-            substantive = true;
-            passed &= firmware_checks(
-                || {
-                    if override_path.is_file() {
-                        run_check(
-                            project,
-                            override_path.to_string_lossy().as_ref(),
-                            &[target.display().to_string()],
-                        )
-                    } else if project.join("build").is_dir()
-                        && project.join("CMakeLists.txt").is_file()
-                    {
-                        run_check(
-                            project,
-                            "cmake",
-                            &["--build".to_string(), "build".to_string()],
-                        )
-                    } else if project.join("Makefile").is_file() {
-                        run_check(project, "make", &[])
-                    } else {
-                        eprintln!("VERIFY: firmware project needs a configured CMake build, Makefile, or bin/verify-firmware-local");
-                        Ok(false)
-                    }
-                },
-                || {
-                    let analysis = crate::code_analysis::run_cppcheck(
+    if mode.verify.backend == "firmware" {
+        let project_id = crate::project::project_id(project)?;
+        let _lease =
+            crate::lease::RuntimeLeaseGuard::acquire(paths, &runtime.release.version, &project_id)?;
+        substantive = true;
+        passed &= firmware_checks(
+            || {
+                if override_path.is_file() {
+                    run_check(
                         project,
-                        positional.first().map(String::as_str).unwrap_or("."),
-                        &runtime,
-                    );
-                    eprintln!("{}", crate::code_analysis::render_analysis(&analysis));
-                    analysis["status"] == "pass"
-                },
-            );
-        }
+                        override_path.to_string_lossy().as_ref(),
+                        &[target.display().to_string()],
+                    )
+                } else if project.join("build").is_dir() && project.join("CMakeLists.txt").is_file()
+                {
+                    run_check(
+                        project,
+                        "cmake",
+                        &["--build".to_string(), "build".to_string()],
+                    )
+                } else if project.join("Makefile").is_file() {
+                    run_check(project, "make", &[])
+                } else {
+                    eprintln!("VERIFY: firmware project needs a configured CMake build, Makefile, or bin/verify-firmware-local");
+                    Ok(false)
+                }
+            },
+            || {
+                let analysis = crate::code_analysis::run_cppcheck(
+                    project,
+                    positional.first().map(String::as_str).unwrap_or("."),
+                    &runtime,
+                );
+                eprintln!("{}", crate::code_analysis::render_analysis(&analysis));
+                analysis["status"] == "pass"
+            },
+        );
     } else if override_path.is_file() {
         substantive = true;
         passed &= run_check(
@@ -670,34 +662,6 @@ fn tool_verify(project: &Path, paths: &ProductPaths, arguments: &[String]) -> Re
         } else {
             eprintln!("VERIFY: basedpyright or pyright is required");
             passed = false;
-        }
-    } else if mode.verify.backend == "firmware" {
-        if project.join("build").is_dir() && project.join("CMakeLists.txt").is_file() {
-            substantive = true;
-            passed &= run_check(
-                project,
-                "cmake",
-                &["--build".to_string(), "build".to_string()],
-            )?;
-        } else if project.join("Makefile").is_file() {
-            substantive = true;
-            passed &= run_check(project, "make", &[])?;
-        } else {
-            eprintln!(
-                "VERIFY: firmware project needs a configured CMake build, Makefile, or bin/verify-firmware-local"
-            );
-            passed = false;
-        }
-        if program_available("cppcheck") {
-            substantive = true;
-            passed &= run_check(
-                project,
-                "cppcheck",
-                &[
-                    "--enable=warning,style,performance,portability".to_string(),
-                    target.display().to_string(),
-                ],
-            )?;
         }
     } else {
         bail!(
