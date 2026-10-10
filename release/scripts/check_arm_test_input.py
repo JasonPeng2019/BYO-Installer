@@ -36,6 +36,7 @@ def main() -> int:
         if arm.inputs.digest(compiler) != receipt["compiler_sha256"]:
             raise RuntimeError("Compiler bytes changed before native execution")
         arguments = [str(compiler), "--version"]
+        result.update(arguments=arguments, exit_code=None)
         completed = subprocess.run(arguments, capture_output=True, timeout=30)
         result.update(arguments=arguments, exit_code=completed.returncode)
         (args.evidence / "compiler.stdout").write_bytes(completed.stdout)
@@ -47,6 +48,11 @@ def main() -> int:
         if arm.inputs.digest(compiler) != receipt["compiler_sha256"]:
             raise RuntimeError("Compiler bytes changed during native execution")
         result["confirmed"] = True
+    except subprocess.TimeoutExpired as error:
+        (args.evidence / "compiler.stdout").write_bytes(error.output or b"")
+        (args.evidence / "compiler.stderr").write_bytes(error.stderr or b"")
+        result["error"] = f"{type(error).__name__}: {error}"
+        print(result["error"])
     except Exception as error:
         result["error"] = f"{type(error).__name__}: {error}"
         print(result["error"])

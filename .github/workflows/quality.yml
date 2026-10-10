@@ -76,7 +76,7 @@ jobs:
         if: (success() || failure()) && steps.test-deps.outcome == 'success'
         run: |
           result=0
-          for script in test_compile_workspace.py test_verify_build_output.py test_build_release.py test_e2e_harness.py test_analysis_tools.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
+          for script in test_compile_workspace.py test_verify_build_output.py test_build_release.py test_e2e_harness.py test_analysis_tools.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_arm_native_input.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
             if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
               echo "PASS $script"
             else
