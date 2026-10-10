@@ -437,9 +437,8 @@ fn extract_zip(payload: &[u8], destination: &Path) -> Result<()> {
         let mut entry = archive
             .by_index(index)
             .context("update ZIP entry is invalid or encrypted")?;
-        // Validate the original ZIP name before Windows path reconstruction
-        // changes its separators or removes a drive prefix.
-        #[cfg(windows)]
+        // Validate the original ZIP name on every host before enclosed_name
+        // normalizes separators or removes a drive prefix.
         safe_archive_path(Path::new(entry.name()))?;
         let path = entry
             .enclosed_name()
