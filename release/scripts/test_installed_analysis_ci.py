@@ -69,7 +69,7 @@ class InstalledAnalysisCiContracts(unittest.TestCase):
         acquire.assert_called_once_with("linux-x86_64", self.root / "arm-inputs")
         arguments = ci.smoke.parser().parse_args(smoke.call_args.args[0])
         self.assertEqual(arguments.platform, "linux-x86_64")
-        self.assertEqual(arguments.archive, self.archive)
+        self.assertEqual(arguments.archive, self.archive.resolve(strict=True))
         self.assertEqual(
             arguments.archive_sha256,
             hashlib.sha256(self.archive.read_bytes()).hexdigest(),
