@@ -357,26 +357,40 @@ class WindowsProcesses:
         self.k.GetSystemTimePreciseAsFileTime(ctypes.byref(current))
         return (current.dwHighDateTime << 32) | current.dwLowDateTime
 
-    def identity(self, pid: int) -> dict | None:
+    def identity(self, pid: int, *, image: bool = True) -> dict | None:
+        # None ONLY when Win32 proves no such PID (ERROR_INVALID_PARAMETER).
+        # Access denied and every query failure is unobservable, never absence.
         handle = self.k.OpenProcess(0x1000 | 0x100000, False, pid)
         if not handle:
-            return None
+            error = ctypes.get_last_error()
+            if error == 87:
+                return None
+            raise Setup(f"PID {pid} identity unobservable: OpenProcess error {error}")
         try:
             times = [wintypes.FILETIME() for _ in range(4)]
             if not self.k.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
-                return None
+                raise Setup(
+                    f"PID {pid} identity unobservable: GetProcessTimes error "
+                    f"{ctypes.get_last_error()}"
+                )
             created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
             buf = ctypes.create_unicode_buffer(32768)
             size = wintypes.DWORD(len(buf))
-            if not self.k.QueryFullProcessImageNameW(
+            if image and not self.k.QueryFullProcessImageNameW(
                 handle, 0, buf, ctypes.byref(size)
             ):
-                return None
+                raise Setup(
+                    f"PID {pid} identity unobservable: QueryFullProcessImageNameW "
+                    f"error {ctypes.get_last_error()}"
+                )
+            state = self.k.WaitForSingleObject(handle, 0)
+            if state not in (0, 258):
+                raise Setup(f"PID {pid} liveness unobservable: wait result {state}")
             return {
                 "pid": pid,
                 "creation_filetime": created,
-                "image": buf.value,
-                "alive": self.k.WaitForSingleObject(handle, 0) == 258,
+                "image": buf.value if image else None,
+                "alive": state == 258,
             }
         finally:
             self.k.CloseHandle(handle)
@@ -410,7 +424,10 @@ class WindowsProcesses:
             offset += step
 
     def alive(self, identity: dict) -> bool:
-        current = self.identity(identity["pid"])
+        # False only for proven absence: no PID, a later creation time on a
+        # reused PID, or the exact PID+creation signalled exited. Unobservable
+        # states raise Setup and can never earn cleanup credit.
+        current = self.identity(identity["pid"], image=False)
         return bool(
             current
             and current["alive"]
@@ -421,17 +438,37 @@ class WindowsProcesses:
         # Query and terminate through the SAME retained handle after checking time.
         handle = self.k.OpenProcess(0x1000 | 0x100000 | 1, False, identity["pid"])
         if not handle:
-            return
+            error = ctypes.get_last_error()
+            if error == 87:
+                return
+            raise Setup(
+                f"PID {identity['pid']} termination unobservable: OpenProcess error {error}"
+            )
         try:
             times = [wintypes.FILETIME() for _ in range(4)]
-            if self.k.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
-                created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
-                if created == identity["creation_filetime"]:
-                    self.k.TerminateProcess(handle, 99)
-                    require(
-                        self.k.WaitForSingleObject(handle, 5000) == 0,
-                        f"owned PID {identity['pid']} cleanup unconfirmed",
-                    )
+            if not self.k.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+                raise Setup(
+                    f"PID {identity['pid']} termination identity unobservable: "
+                    f"GetProcessTimes error {ctypes.get_last_error()}"
+                )
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            if created != identity["creation_filetime"]:
+                return
+            state = self.k.WaitForSingleObject(handle, 0)
+            if state == 0:
+                return
+            if state != 258:
+                raise Setup(
+                    f"PID {identity['pid']} termination liveness unobservable: {state}"
+                )
+            if not self.k.TerminateProcess(handle, 99):
+                raise Setup(
+                    f"PID {identity['pid']} TerminateProcess failed: {ctypes.get_last_error()}"
+                )
+            require(
+                self.k.WaitForSingleObject(handle, 5000) == 0,
+                f"owned PID {identity['pid']} cleanup unconfirmed",
+            )
         finally:
             self.k.CloseHandle(handle)
 
@@ -489,15 +526,17 @@ class Owned:
             while not self.stop.wait(0.005):
                 self.sample_once()
         except Exception as exc:
-            self.error = repr(exc)
+            self.error = exc
 
     def finish(self, forced: bool = False) -> list[dict]:
         self.stop.set()
         self.thread.join(timeout=5)
         require(not self.thread.is_alive(), "owned process sampler did not stop")
+        if isinstance(getattr(self, "error", None), Setup):
+            raise Setup(f"process sampling unobservable: {self.error}")
         require(
             not hasattr(self, "error"),
-            f"process sampling failed: {getattr(self, 'error', '')}",
+            f"process sampling failed: {getattr(self, 'error', '')!r}",
         )
         if forced:
             for record in reversed(list(self.records.values())):
@@ -2027,6 +2066,82 @@ def attachment_records(raw: bytes) -> list[dict]:
     return document["records"]
 
 
+# Exact accepted snapshot procedure: the only full/lite snapshots these passive
+# fixtures may carry are the ones accepted server ade75ef2 validated through
+# CapabilityPolicyRepository.commit (SafetyMapDocument schema, semantic profile
+# digest, lite normalization) when generating the committed manifest; see its
+# generation_receipt. Canonical digests of (profile, map) / lite map. Structural
+# links are also checked independently below; no product API runs here.
+# The independently accepted manifest is SHA256
+# 606e37a51e17a765b1e8042204fe5ee56758e478b6eccb39f767adf606b0b734.
+# Its setup_full/unvalidated and historical revoked snapshots share the full
+# pair; revoked's current no-setup generation has null snapshots. setup_lite
+# uses the lite digest. New snapshots need independent validation and new pins.
+# These pins also independently match the handwritten accepted source fixtures
+# tests/tiered_acceptance_fixtures/legacy_full_v2.json (profile/memory_map) and
+# lite_confirmation.json (board_id="lite_board", regions/flash); they are not
+# learned from the candidate manifest at validation time.
+ACCEPTED_FULL_SNAPSHOTS = {
+    (
+        "d66e62f266d2c2f1be3c51efbc4e127fac3da51da7630751656eb7c16f197c40",
+        "8b6862503f7abe05e260a6a2d3e76743d2f0f4fefdab0b63c9702c476756e5d1",
+    )
+}
+ACCEPTED_LITE_MAPS = {
+    "ff3d4c987d3acca37d05ab81b277d5a9d9d6b84aa16ddf6bb49abed9ac51bc3a"
+}
+
+
+def check_snapshots(board: str, tier: str, profile, memory_map) -> None:
+    """Accepted _validate_full/_validate_lite_snapshot links plus exact binding."""
+    if tier == "no-setup":
+        if profile is not None or memory_map is not None:
+            raise Setup("no-setup policy carries an active profile or map snapshot")
+        return
+    if not isinstance(memory_map, dict):
+        raise Setup(f"{tier} policy map snapshot is not an object")
+    if memory_map.get("board_id") != board:
+        raise Setup(f"{tier} policy map snapshot names another board")
+    if tier == "setup-lite":
+        if profile is not None:
+            raise Setup("setup-lite passive fixture carries an unvalidated profile")
+        if set(memory_map) not in (
+            {"board_id", "regions", "flash"},
+            {"board_id", "regions", "flash", "recovery"},
+        ):
+            raise Setup("setup-lite map snapshot fields are invalid")
+        if canonical_digest(memory_map) not in ACCEPTED_LITE_MAPS:
+            raise Setup("setup-lite map snapshot is not an accepted validated snapshot")
+        return
+    if not isinstance(profile, dict):
+        raise Setup("setup-full policy profile snapshot is not an object")
+    identity, sources = memory_map.get("identity"), memory_map.get("source_digests")
+    if (
+        type(profile.get("schema_version")) is not int
+        or profile["schema_version"] != 2
+        or profile.get("board_id") != board
+        or profile.get("safety_ref") != f".firm/safety/{board}/memory_map.yaml"
+    ):
+        raise Setup("setup-full profile snapshot is not this board's schema-v2 profile")
+    if type(memory_map.get("schema_version")) is not int or memory_map[
+        "schema_version"
+    ] not in (2, 3):
+        raise Setup("setup-full map snapshot has an unsupported authority schema")
+    if (
+        not isinstance(identity, dict)
+        or identity.get("mcu_part_number") != profile.get("mcu_part_number")
+        or identity.get("pyocd_target") != profile.get("pyocd_target")
+        or not isinstance(identity.get("pyocd_target"), str)
+    ):
+        raise Setup("setup-full profile/map target identity is contradictory")
+    if not isinstance(sources, dict) or not is_hex(sources.get("semantic_profile"), 64):
+        raise Setup("setup-full map lacks its semantic profile digest link")
+    if (canonical_digest(profile), canonical_digest(memory_map)) not in (
+        ACCEPTED_FULL_SNAPSHOTS
+    ):
+        raise Setup("setup-full snapshots are not an accepted validated snapshot pair")
+
+
 def policy_state(board: str, files: dict, data: dict) -> dict:
     """Independently validate the passive pointer/generation (accepted v1 contract)."""
     prefix = f".firm/capabilities/{board}/"
@@ -2077,16 +2192,13 @@ def policy_state(board: str, files: dict, data: dict) -> dict:
     tier = document["tier"]
     if tier not in ("no-setup", "setup-lite", "setup-full"):
         raise Setup("policy tier is invalid")
-    if type(document["setup_incomplete"]) is not bool or document["legacy_migrated"]:
-        raise Setup("policy flags are invalid or migrated")
-    if (tier == "no-setup") != (document["map_snapshot"] is None):
-        raise Setup("policy map snapshot contradicts its tier")
-    if tier == "setup-full" and not isinstance(document["profile_snapshot"], dict):
-        raise Setup("setup-full policy lacks its profile snapshot")
-    for snapshot in ("profile_snapshot", "map_snapshot"):
-        value = document[snapshot]
-        if isinstance(value, dict) and value.get("board_id") != board:
-            raise Setup(f"policy {snapshot} names another board")
+    if (
+        type(document["setup_incomplete"]) is not bool
+        or type(document["legacy_migrated"]) is not bool
+        or document["legacy_migrated"]
+    ):
+        raise Setup("policy flags are not JSON booleans or are migrated")
+    check_snapshots(board, tier, document["profile_snapshot"], document["map_snapshot"])
     if not isinstance(document["retained_generations"], list) or not all(
         is_hex(item, 32) for item in document["retained_generations"]
     ):
@@ -2160,16 +2272,19 @@ def check_passive_case(case: dict) -> dict:
         } != {"sha256": record.get("sha256"), "size": record.get("size")}:
             raise Setup(f"passive fixture bytes differ from their record: {relative}")
     if state == "corrupt_policy":
-        # Only an undecodable pointer is a corruption the product must report.
-        pointer = data.get(f".firm/capabilities/{board}/current.json")
+        # Only an ACTUAL undecodable pointer is a corruption the product must
+        # report; an absent pointer is a fresh no-setup board, not corruption.
+        pointer_path = f".firm/capabilities/{board}/current.json"
+        if set(files) != {pointer_path}:
+            raise Setup(
+                "corrupt_policy fixture must hold exactly its malformed pointer"
+            )
         try:
-            json.loads(pointer.decode("utf-8"))
-        except (AttributeError, UnicodeError, ValueError):
+            json.loads(data[pointer_path].decode("utf-8"))
+        except (UnicodeError, ValueError):
             pass
         else:
             raise Setup("corrupt_policy fixture needs an undecodable policy pointer")
-        if ATTACHMENTS in files:
-            raise Setup("corrupt_policy fixture must not carry attachment state")
         return {
             "tier": None,
             "policy_status": "corrupt",
@@ -2211,40 +2326,79 @@ def check_passive_case(case: dict) -> dict:
 def check_availability_witnesses(
     case: dict, expected: dict, health: dict, capabilities: dict
 ) -> None:
-    """Compare real public values with the fixture-derived expectation."""
+    """Compare real public values with the fixture-derived expectation.
+
+    Every witness key must be explicitly present (a valid null is explicit) and
+    compare with exact JSON types, so 0 never stands in for false.
+    """
     expected_profile = {"personal": "enabled", "professional": "not_built"}[
         case["profile"]
     ]
     require(
-        health.get("narrative_logging") == expected_profile,
-        f"compiled profile witness mismatch: narrative_logging={health.get('narrative_logging')!r}",
+        isinstance(health, dict)
+        and "narrative_logging" in health
+        and strict_equal(health["narrative_logging"], expected_profile),
+        f"compiled profile witness mismatch: narrative_logging={health.get('narrative_logging')!r}"
+        if isinstance(health, dict)
+        else "health witness is not an object",
+    )
+    require(isinstance(capabilities, dict), "capabilities witness is not an object")
+    fields = (
+        "board_id",
+        "tier",
+        "policy_status",
+        "setup_incomplete",
+        "policy_digest",
+        "identity",
+    )
+    missing = [field for field in fields if field not in capabilities]
+    require(not missing, f"public witness omits required keys: {missing}")
+    require(
+        strict_equal(capabilities["board_id"], case["board_id"]),
+        "public witness names a different board",
     )
     require(
-        capabilities.get("board_id") == case["board_id"],
-        "public witness names a different board",
+        type(capabilities["setup_incomplete"]) is bool,
+        f"public setup_incomplete is not a JSON boolean: {capabilities['setup_incomplete']!r}",
     )
     for field in ("tier", "policy_status", "setup_incomplete"):
         require(
-            capabilities.get(field) == expected[field],
-            f"public {field} witness mismatch: {capabilities.get(field)!r} != {expected[field]!r}",
+            strict_equal(capabilities[field], expected[field]),
+            f"public {field} witness mismatch: {capabilities[field]!r} != {expected[field]!r}",
         )
+    actual_digest = capabilities["policy_digest"]
     if expected["policy_digest"] is None:
         require(
             expected["tier"] is None
-            and capabilities.get("policy_digest") is None
+            and actual_digest is None
             or expected["tier"] is not None
-            and is_hex(capabilities.get("policy_digest"), 64),
+            and is_hex(actual_digest, 64),
             "public policy digest witness is invalid",
         )
     else:
         require(
-            capabilities.get("policy_digest") == expected["policy_digest"],
+            strict_equal(actual_digest, expected["policy_digest"]),
             "public policy digest differs from the passive generation",
         )
     require(
-        capabilities.get("identity") == expected["identity"],
-        f"public identity witness mismatch: {capabilities.get('identity')!r}",
+        strict_equal(capabilities["identity"], expected["identity"]),
+        f"public identity witness mismatch: {capabilities['identity']!r}",
     )
+
+
+def strict_equal(actual, expected) -> bool:
+    """JSON equality with exact types (bool is not int, dict keys must match)."""
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            strict_equal(actual[key], value) for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            strict_equal(a, e) for a, e in zip(actual, expected)
+        )
+    return actual == expected
 
 
 def check_tool_coverage(results: dict) -> None:
@@ -2791,6 +2945,100 @@ def availability_contract_checks(check, path: Path, sha256: str, scratch: Path) 
         lambda raw: canonical({**pointer, "board_id": "other_board"}),
     )
     negatives["generation-missing"] = edited(full, generation_path, drop=True)
+
+    def regenerated(label, mutate) -> dict:
+        # Self-consistent semantic mutation: recompute the canonical policy
+        # digest, generation file hash, pointer digest and every file record.
+        case = copy.deepcopy(by_label[label])
+        prefix = f".firm/capabilities/{case['board_id']}/"
+        current = json.loads(case["data"][prefix + "current.json"])
+        target = f"{prefix}generations/{current['generation_id']}.json"
+        document = json.loads(case["data"][target])
+        mutate(document)
+        document["policy_digest"] = canonical_digest(
+            {k: v for k, v in document.items() if k != "policy_digest"}
+        )
+        raw = canonical(document)
+        moved = canonical({**current, "generation_digest": record_of(raw)["sha256"]})
+        for relative, value in ((target, raw), (prefix + "current.json", moved)):
+            case["data"][relative] = value
+            case["files"][relative] = record_of(value)
+        return case
+
+    def profile_edit(**fields):
+        return lambda d: d["profile_snapshot"].update(fields)
+
+    def map_edit(change):
+        return lambda d: change(d["map_snapshot"])
+
+    semantic = {
+        "full-nonobject-map": lambda d: d.update(map_snapshot="memory_map"),
+        "full-invalid-profile-schema": profile_edit(schema_version=1),
+        "full-boolean-profile-schema": profile_edit(schema_version=True),
+        "full-mismatched-profile-target": profile_edit(pyocd_target="stm32f103rc"),
+        "full-mismatched-profile-mcu": profile_edit(mcu_part_number="STM32F103RC"),
+        "full-profile-other-board": profile_edit(board_id="other_board"),
+        "full-profile-other-safety-ref": profile_edit(
+            safety_ref=".firm/safety/other_board/memory_map.yaml"
+        ),
+        "full-nonobject-profile": lambda d: d.update(profile_snapshot=[]),
+        "full-map-unsupported-schema": map_edit(lambda m: m.update(schema_version=1)),
+        "full-map-other-board": map_edit(lambda m: m.update(board_id="other_board")),
+        "full-map-missing-semantic-link": map_edit(
+            lambda m: m["source_digests"].pop("semantic_profile")
+        ),
+        "full-map-forged-semantic-link": map_edit(
+            lambda m: m["source_digests"].update(semantic_profile="a" * 64)
+        ),
+        "full-map-empty-regions": map_edit(lambda m: m.update(regions=[])),
+        "full-map-nonobject-identity": map_edit(lambda m: m.update(identity="nrf")),
+        "full-linked-but-unaccepted-snapshot": profile_edit(display_name="edited"),
+        "policy-nonboolean-legacy-flag": lambda d: d.update(legacy_migrated=0),
+        "policy-migrated-legacy-flag": lambda d: d.update(legacy_migrated=True),
+        "policy-nonboolean-setup-incomplete": lambda d: d.update(setup_incomplete=0),
+        "no-setup-stray-profile": lambda d: d.update(
+            tier="no-setup", map_snapshot=None
+        ),
+    }
+    lite_semantic = {
+        "lite-nonobject-map": lambda d: d.update(map_snapshot=["regions"]),
+        "lite-invalid-map-fields": map_edit(lambda m: m.update(identity={})),
+        "lite-map-other-board": map_edit(lambda m: m.update(board_id="other_board")),
+        "lite-unaccepted-map": map_edit(lambda m: m.update(regions=[])),
+        "lite-with-unvalidated-profile": lambda d: d.update(
+            profile_snapshot={"board_id": "lite_board", "schema_version": 2}
+        ),
+        "lite-nonboolean-legacy-flag": lambda d: d.update(legacy_migrated=0),
+        "no-setup-active-map": lambda d: d.update(
+            tier="no-setup", profile_snapshot=None
+        ),
+    }
+    corrupt_pointer = ".firm/capabilities/corrupt_board/current.json"
+    for profile in ("personal", "professional"):
+        for name, base, mutations in (
+            ("full", f"setup_full-{profile}", semantic),
+            ("unvalidated", f"revoked_unvalidated-unvalidated-{profile}", semantic),
+            ("lite", f"setup_lite-{profile}", lite_semantic),
+        ):
+            check(
+                f"passive-{name}-recomputed-identity-{profile}",
+                lambda b=base: check_passive_case(regenerated(b, lambda d: None)),
+            )
+            for label, mutate in mutations.items():
+                suffix = f"unvalidated-{profile}" if name == "unvalidated" else profile
+                negatives[f"{label}-{suffix}"] = regenerated(base, mutate)
+        corrupt_label = f"corrupt_policy-{profile}"
+        negatives[f"corrupt-missing-pointer-{profile}"] = edited(
+            corrupt_label, corrupt_pointer, drop=True
+        )
+        negatives[f"corrupt-valid-json-pointer-{profile}"] = edited(
+            corrupt_label, corrupt_pointer, lambda raw: b"{}\n"
+        )
+        negatives[f"corrupt-with-attachment-cache-{profile}"] = edited(
+            corrupt_label,
+            ATTACHMENTS,
+            lambda raw: by_label[revoked]["data"][ATTACHMENTS],
+        )
     for label, case in negatives.items():
         check(f"passive-{label}", lambda c=case: check_passive_case(c), Setup)
 
@@ -2885,6 +3133,35 @@ def availability_contract_checks(check, path: Path, sha256: str, scratch: Path) 
                 health,
                 {**payload, "policy_digest": "d" * 64},
             )
+        for field in payload:
+            wrong[f"missing-{field}"] = (
+                health,
+                {k: v for k, v in payload.items() if k != field},
+            )
+        wrong["setup-incomplete-as-int"] = (
+            health,
+            {**payload, "setup_incomplete": int(payload["setup_incomplete"])},
+        )
+        wrong["tier-wrong-type"] = (health, {**payload, "tier": 0})
+        wrong["policy-status-wrong-type"] = (health, {**payload, "policy_status": None})
+        wrong["policy-digest-wrong-type"] = (health, {**payload, "policy_digest": 0})
+        wrong["identity-wrong-type"] = (health, {**payload, "identity": []})
+        wrong["identity-null-as-false"] = (
+            health,
+            {
+                **payload,
+                "identity": {
+                    k: (False if v is None else v) for k, v in identity.items()
+                },
+            },
+        )
+        wrong["board-wrong-type"] = (
+            health,
+            {**payload, "board_id": [case["board_id"]]},
+        )
+        wrong["health-missing-profile"] = ({}, payload)
+        wrong["health-not-object"] = ([], payload)
+        wrong["capabilities-not-object"] = (health, [payload])
         for name, (h, p) in wrong.items():
             check(
                 f"public-{label}-wrong-{name}",
@@ -2953,6 +3230,283 @@ def availability_contract_checks(check, path: Path, sha256: str, scratch: Path) 
         "cases": sorted(by_label),
         "expected_from_fixture": expected,
     }
+
+
+class _FakeKernel:
+    """Mocked kernel32 observation failures; no OS process is queried."""
+
+    def __init__(
+        self,
+        open_error=0,
+        times=True,
+        image=True,
+        wait=258,
+        created=7,
+        terminate=True,
+        opened=True,
+    ):
+        self.open_error, self.times, self.image = open_error, times, image
+        self.wait, self.created = wait, created
+        self.terminate, self.terminated = terminate, []
+        self.opened = opened
+
+    def OpenProcess(self, access, inherit, pid):
+        ctypes.set_last_error(self.open_error)
+        return 0 if self.open_error or not self.opened else 1
+
+    def GetProcessTimes(self, handle, created, *rest):
+        if not self.times:
+            ctypes.set_last_error(5)
+            return 0
+        created._obj.dwHighDateTime = 0
+        created._obj.dwLowDateTime = self.created
+        return 1
+
+    def QueryFullProcessImageNameW(self, handle, flags, buffer, size):
+        if not self.image:
+            ctypes.set_last_error(31)
+            return 0
+        buffer.value = "C:/owned/analyzer.exe"
+        return 1
+
+    def WaitForSingleObject(self, handle, timeout):
+        return self.wait
+
+    def CloseHandle(self, handle):
+        return 1
+
+    def TerminateProcess(self, handle, code):
+        self.terminated.append((handle, code))
+        if not self.terminate:
+            ctypes.set_last_error(5)
+            return 0
+        self.wait = 0
+        return 1
+
+
+def process_observer_checks(check, scratch: Path) -> dict:
+    """Unobservable identity never earns absence; real exact owned cleanup."""
+    owned = {"pid": 4242, "creation_filetime": 7}
+
+    def mocked(**kernel):
+        native = object.__new__(WindowsProcesses)
+        native.k = _FakeKernel(**kernel)
+        return native
+
+    def expect(action, value):
+        def run():
+            observed = action()
+            require(observed == value, f"observed {observed!r}, expected {value!r}")
+
+        return run
+
+    for name, kernel in (
+        ("open-access-denied", {"open_error": 5}),
+        ("open-unknown-error", {"open_error": 6}),
+        ("open-no-error-reported", {"opened": False}),
+        ("get-process-times-failed", {"times": False}),
+        ("wait-failed", {"wait": 0xFFFFFFFF}),
+    ):
+        check(
+            f"observer-{name}-identity",
+            lambda k=kernel: mocked(**k).identity(4242),
+            Setup,
+        )
+        check(
+            f"observer-{name}-alive",
+            lambda k=kernel: mocked(**k).alive(owned),
+            Setup,
+        )
+    check(
+        "observer-image-query-failed-identity",
+        lambda: mocked(image=False).identity(4242),
+        Setup,
+    )
+    check(
+        "observer-win32-proved-no-pid",
+        expect(lambda: mocked(open_error=87).identity(4242), None),
+    )
+    check(
+        "observer-win32-proved-no-pid-absent",
+        expect(lambda: mocked(open_error=87).alive(owned), False),
+    )
+    check("observer-exact-alive", expect(lambda: mocked().alive(owned), True))
+    check("observer-exact-exited", expect(lambda: mocked(wait=0).alive(owned), False))
+    check(
+        "observer-pid-reused-later-creation",
+        expect(lambda: mocked(created=9).alive(owned), False),
+    )
+
+    def stopped(native):
+        tracker = object.__new__(Owned)
+        tracker.native = native
+        tracker.records = {(4242, 7): {**owned, "image": "x"}}
+        tracker.stop = threading.Event()
+        tracker.thread = threading.Thread(target=lambda: None)
+        tracker.thread.start()
+        tracker.thread.join()
+        return tracker
+
+    check(
+        "observer-cleanup-access-denied-no-credit",
+        lambda: stopped(mocked(open_error=5)).finish(),
+        Setup,
+    )
+
+    def sampler_unobservable():
+        tracker = stopped(mocked(open_error=87))
+        tracker.error = Setup("PID 4242 identity unobservable: OpenProcess error 5")
+        tracker.finish()
+
+    check("observer-sampler-unobservable-is-setup", sampler_unobservable, Setup)
+
+    for name, kernel in (
+        ("access-denied", {"open_error": 5}),
+        ("times-failed", {"times": False}),
+        ("wait-failed", {"wait": 0xFFFFFFFF}),
+        ("terminate-failed", {"terminate": False}),
+    ):
+        check(
+            f"observer-termination-{name}-no-credit",
+            lambda k=kernel: mocked(**k).terminate(owned),
+            Setup,
+        )
+
+    def termination_guard(**kernel):
+        native = mocked(**kernel)
+        native.terminate(owned)
+        require(not native.k.terminated, "terminated a reused or exited identity")
+
+    check(
+        "observer-termination-reused-pid-untouched",
+        lambda: termination_guard(created=9),
+    )
+    check("observer-termination-exited-untouched", lambda: termination_guard(wait=0))
+
+    def mocked_exact_termination():
+        native = mocked()
+        native.terminate(owned)
+        require(native.k.terminated == [(1, 99)], "exact termination was not attempted")
+        require(not native.alive(owned), "exact termination exit was not observed")
+
+    check("observer-termination-exact-exit", mocked_exact_termination)
+
+    # Actual exact owned processes: a target terminated through its retained
+    # PID+creation handle, an unaffected same-image peer and a naturally
+    # completing version probe. Nothing is selected by name.
+    native = WindowsProcesses()
+    command = [sys.executable, "-I", "-c"]
+    target_argv = command + ["import time; time.sleep(60)"]
+    peer_argv = command + ["import time; time.sleep(3)"]
+    probe_argv = [sys.executable, "-I", "--version"]
+    receipt = {
+        "python": file_record(Path(sys.executable)),
+        "argv": {"target": target_argv, "peer": peer_argv, "probe": probe_argv},
+        "installed_credit": False,
+        "compiled_credit": False,
+    }
+    target = subprocess.Popen(target_argv)
+    peer = subprocess.Popen(peer_argv)
+    probe = subprocess.Popen(
+        probe_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    tracker = None
+    try:
+        tracker = Owned(target, native)
+        target_identity = native.identity(target.pid)
+        peer_identity = native.identity(peer.pid)
+        probe_identity = native.identity(probe.pid)
+        require(
+            all((peer_identity, probe_identity, target_identity)),
+            "owned process identity unavailable",
+        )
+        require(
+            Path(peer_identity["image"]) == Path(target_identity["image"]),
+            "peer is not a same-image process",
+        )
+        reused = {**target_identity, "creation_filetime": 1}
+        receipt["pid_reuse_identity_alive"] = native.alive(reused)
+        receipt["target_alive_before"] = native.alive(target_identity)
+        native.terminate(target_identity)
+        receipt["target_alive_after_exact_termination"] = native.alive(target_identity)
+        receipt["target_exit"] = target.wait(timeout=10)
+        receipt["peer_alive_after_target_termination"] = native.alive(peer_identity)
+        receipt["owned_records"] = tracker.finish()
+        tracker = None
+        receipt["probe_stdout"], receipt["probe_stderr"] = probe.communicate(timeout=30)
+        receipt["probe_exit"] = probe.returncode
+        receipt["probe_alive_after_natural_exit"] = native.alive(probe_identity)
+        receipt["peer_exit"] = peer.wait(timeout=30)
+        receipt["peer_alive_after_natural_exit"] = native.alive(peer_identity)
+        receipt.update(target=target_identity, peer=peer_identity, probe=probe_identity)
+    finally:
+        if tracker is not None:
+            tracker.stop.set()
+        for process in (target, peer, probe):
+            if process.poll() is None:
+                # Only processes launched here, through their retained handle.
+                process.kill()
+                process.wait(timeout=10)
+    scratch.mkdir(parents=True, exist_ok=True)
+    write_json(scratch / "process-observer.json", receipt)
+    for key, value in {
+        "pid_reuse_identity_alive": False,
+        "target_alive_before": True,
+        "target_alive_after_exact_termination": False,
+        "target_exit": 99,
+        "peer_alive_after_target_termination": True,
+        "probe_exit": 0,
+        "probe_alive_after_natural_exit": False,
+        "peer_exit": 0,
+        "peer_alive_after_natural_exit": False,
+    }.items():
+        check(f"observer-real-{key}", expect(lambda k=key: receipt.get(k), value))
+    check(
+        "observer-real-owned-records-absent",
+        lambda: require(
+            receipt.get("owned_records")
+            and not any(r["alive_after"] for r in receipt["owned_records"]),
+            "owned target record still alive",
+        ),
+    )
+
+    # Exercise the actual command timeout boundary: successful emergency
+    # termination is retained failure evidence and cannot become command PASS.
+    emergency = Evidence(scratch / "emergency-cleanup")
+    check(
+        "observer-emergency-cleanup-remains-red",
+        lambda: emergency.run(
+            "owned-timeout",
+            command + ["import time; time.sleep(60)"],
+            dict(os.environ),
+            scratch.resolve(),
+            timeout=0.1,
+        ),
+        Red,
+    )
+    emergency_path = emergency.root / "commands/001-owned-timeout/command.json"
+    emergency_record = read_json(emergency_path)
+    check(
+        "observer-emergency-cleanup-confirmed-but-failed",
+        lambda: require(
+            emergency_record["timeout"] is True
+            and emergency_record["exit"] == 99
+            and bool(emergency_record["processes"])
+            and all(
+                r["creation_filetime"] and r["alive_after"] is False
+                for r in emergency_record["processes"]
+            ),
+            "emergency cleanup lacks exact identity/exit or timeout failure",
+        ),
+    )
+    receipt["emergency_cleanup"] = {
+        "record": file_record(emergency_path),
+        "path": str(emergency_path),
+        "command_status": "RED",
+        "installed_credit": False,
+    }
+    write_json(scratch / "process-observer.json", receipt)
+    return {"receipt": file_record(scratch / "process-observer.json"), **receipt}
 
 
 def validator_contract_checks(args, evidence: Evidence) -> None:
@@ -3099,6 +3653,7 @@ def validator_contract_checks(args, evidence: Evidence) -> None:
         check, availability_path, availability_sha, evidence.root / "contract-scratch"
     )
     availability["binding"] = binding
+    observer = process_observer_checks(check, evidence.root / "contract-scratch")
     write_json(
         evidence.root / "validator-contract.json",
         {
@@ -3107,6 +3662,7 @@ def validator_contract_checks(args, evidence: Evidence) -> None:
             "archive": file_record(args.archive),
             "expected_cppcheck_sha256": expected,
             "availability": availability,
+            "process_observer": observer,
             "installed_credit": False,
         },
     )
