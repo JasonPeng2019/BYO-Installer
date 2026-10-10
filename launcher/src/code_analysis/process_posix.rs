@@ -1,7 +1,7 @@
 //! Owned POSIX sessions. The child stops before exec, so native start identity
 //! is captured before any analyzer instruction or descendant can run.
 use super::super::*;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CString;
 use std::os::unix::{ffi::OsStrExt, io::AsRawFd};
 use std::sync::{
@@ -120,8 +120,59 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
 fn same(a: &Observation, b: &Observation) -> bool {
     a.pid == b.pid && a.start == b.start
 }
+fn namespace(pid: i32) -> std::io::Result<(Option<i32>, Option<i32>)> {
+    let checked = |value| {
+        if value >= 0 {
+            Ok(Some(value))
+        } else {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
+    };
+    let group = checked(unsafe { libc::getpgid(pid) })?;
+    let session = checked(unsafe { libc::getsid(pid) })?;
+    Ok((group, session))
+}
+fn candidate_pids(
+    leader: &Observation,
+    owned: &BTreeMap<i32, Observation>,
+    parents: &[(i32, Option<i32>)],
+    membership: impl Fn(i32) -> std::io::Result<(Option<i32>, Option<i32>)>,
+    remaining: &impl Fn() -> Result<Duration>,
+) -> Result<BTreeSet<i32>> {
+    // These are candidates for strict native observation, not ownership proof.
+    // Always retain captured PIDs, including detached children omitted by sysinfo.
+    let mut candidates: BTreeSet<_> = owned.keys().copied().collect();
+    candidates.insert(leader.pid);
+    for (pid, _) in parents {
+        remaining()?;
+        if !candidates.contains(pid) {
+            let (group, session) = membership(*pid)?;
+            if group == Some(leader.group) || session == Some(leader.session) {
+                candidates.insert(*pid);
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (pid, parent) in parents {
+            remaining()?;
+            if parent.is_some_and(|parent| candidates.contains(&parent)) {
+                changed |= candidates.insert(*pid);
+            }
+        }
+        if !changed {
+            return Ok(candidates);
+        }
+    }
+}
 fn table(
     leader: &Observation,
+    owned: &BTreeMap<i32, Observation>,
     remaining: &impl Fn() -> Result<Duration>,
 ) -> Result<Vec<Observation>> {
     // Fresh sysinfo enumeration supplies process IDs, never cached image identity.
@@ -132,16 +183,30 @@ fn table(
         true,
         sysinfo::ProcessRefreshKind::nothing(),
     );
+    let parents: Vec<_> = system
+        .processes()
+        .iter()
+        .filter(|(pid, _)| pid.as_u32() > 0)
+        .map(|(pid, process)| {
+            (
+                pid.as_u32() as i32,
+                process.parent().map(|parent| parent.as_u32() as i32),
+            )
+        })
+        .collect();
+    let candidates = candidate_pids(leader, owned, &parents, namespace, remaining)?;
     let mut values = Vec::new();
-    for pid in system.processes().keys() {
+    for pid in candidates {
         remaining()?;
-        if pid.as_u32() == leader.pid as u32 && exited(leader.pid)?.is_some() {
+        if pid == leader.pid && exited(leader.pid)?.is_some() {
             let mut terminal = leader.clone();
             terminal.zombie = true;
             values.push(terminal);
             continue;
         }
-        if let Some(value) = observe(pid.as_u32() as i32)? {
+        // macOS can deny proc_pidinfo for unrelated protected processes. Only
+        // inspect candidates, and never suppress a candidate's identity error.
+        if let Some(value) = observe(pid)? {
             values.push(value);
         }
     }
@@ -152,7 +217,7 @@ fn discover(
     owned: &mut BTreeMap<i32, Observation>,
     remaining: &impl Fn() -> Result<Duration>,
 ) -> Result<Vec<Observation>> {
-    let mut values = table(leader, remaining)?;
+    let mut values = table(leader, owned, remaining)?;
     if !values.iter().any(|value| same(value, leader)) && exited(leader.pid)?.is_some() {
         // A retained WNOWAIT child is still the exact child captured before
         // exec. Its wait proof remains valid when the live native view is gone.
@@ -559,6 +624,68 @@ pub(in crate::code_analysis) fn run_owned(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn candidates_keep_session_group_and_detached_ancestry_without_unrelated_pids() {
+        let leader = Observation {
+            pid: 42,
+            start: (1, 2),
+            parent: 1,
+            group: 42,
+            session: 42,
+            zombie: false,
+        };
+        let mut detached = leader.clone();
+        detached.pid = 55;
+        detached.group = 55;
+        detached.session = 55;
+        let owned = BTreeMap::from([(42, leader.clone()), (55, detached)]);
+        // 55 is deliberately absent from enumeration; 46 precedes its parent.
+        let parents = [
+            (100, Some(1)),
+            (46, Some(45)),
+            (45, Some(42)),
+            (47, Some(1)),
+            (48, Some(1)),
+        ];
+        let candidates = candidate_pids(
+            &leader,
+            &owned,
+            &parents,
+            |pid| {
+                Ok(match pid {
+                    47 => (Some(47), Some(42)),
+                    48 => (Some(42), Some(99)),
+                    _ => (Some(pid), Some(pid)),
+                })
+            },
+            &|| Ok(Duration::from_secs(1)),
+        )
+        .unwrap();
+        assert_eq!(candidates, BTreeSet::from([42, 45, 46, 47, 48, 55]));
+        // table() only performs strict identity reads for these candidates:
+        // unrelated protected PID 100 must never reach proc_pidinfo.
+        assert!(!candidates.contains(&100));
+    }
+    #[test]
+    fn namespace_probe_errors_do_not_become_missing_processes() {
+        let leader = Observation {
+            pid: 42,
+            start: (1, 2),
+            parent: 1,
+            group: 42,
+            session: 42,
+            zombie: false,
+        };
+        let error = candidate_pids(
+            &leader,
+            &BTreeMap::from([(42, leader.clone())]),
+            &[(45, Some(42))],
+            |_| Err(std::io::Error::from_raw_os_error(libc::EPERM)),
+            &|| Ok(Duration::from_secs(1)),
+        )
+        .unwrap_err();
+        assert!(error.message.contains("permitted"));
+    }
     #[test]
     fn exact_identity_rejects_recycled_pid() {
         let a = Observation {
