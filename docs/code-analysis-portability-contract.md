@@ -435,12 +435,23 @@ Acquire external repository access, clone installer plus `AgentWorkspace/` and
 Rust **1.97.1** with rustfmt/clippy, Python **3.12** (record exact patch/build),
 uv and compiler/build tools above. Populate locked Python/Cargo dependencies
 before an offline run; `uv sync --locked --all-groups` uses the server `uv.lock`.
-No firmware hardware is required. A full installed ARM fixture additionally
-requires an actual native ARM cross compiler and generated headers, recorded in
-the test receipt; it cannot be substituted by handcrafted database flags.
-The ARM mode must require explicit compiler/fixture paths and expected compiler
-digest, build the fixture natively with that cross compiler, and retain the
-generated database, ABI file and build/header evidence.
+No firmware hardware is required. ROOT has provisioned Rust 1.97.1 standard
+libraries for all four targets on Windows; availability is neither a successful
+cross compile nor native execution evidence. The core smoke requires a real
+native `arm-none-eabi-g++`, its expected SHA-256, and an embedded, hash-bound
+authoritative fixture from `launcher/tests/fixtures/cppcheck-acceptance/arm-originals.json`.
+Build that fixture with the supplied compiler and retain generated headers,
+compile database, ABI file and build evidence. Host C or handcrafted database
+flags cannot substitute for this required ARM case; no external fixture-source
+option is required when the embedded fixture is bound to the accepted corpus.
+
+Before these installed commands can pass, the independent installer tester
+must correct `release/scripts/test_installed_e2e.py`'s native source-leak guard.
+Allow only exact-target locked analyzer resource leaves with matching bytes and
+classification, using the generalized payload/archive validator. Retain rejection
+of arbitrary source, existing Windows behavior and the full installed lifecycle
+gate. Production owners do not edit this test; the portable smoke does not
+replace its install/update/uninstall acceptance.
 
 Download only the Cppcheck archive and the matching clangd ZIP above into a
 private input directory. Hash before using them (macOS `shasum -a 256`, Linux
@@ -471,6 +482,7 @@ python3 release/scripts/verify_build_output.py --dist release/dist \
   --expected-target "$TARGET" --archive-type zip
 VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("launcher/Cargo.toml", "rb"))["package"]["version"])')
 BUNDLE="release/dist/byo-$VERSION-$TARGET"
+ARCHIVE="$BUNDLE.zip"
 python3 release/scripts/test_installed_e2e.py --bundle "$BUNDLE"
 ```
 
@@ -494,6 +506,7 @@ python3 release/scripts/verify_build_output.py --dist release/dist \
   --expected-target "$TARGET" --archive-type tar.gz
 VERSION=$(python3 -c 'import tomllib; print(tomllib.load(open("launcher/Cargo.toml", "rb"))["package"]["version"])')
 BUNDLE="release/dist/byo-$VERSION-$TARGET"
+ARCHIVE="$BUNDLE.tar.gz"
 python3 release/scripts/test_installed_e2e.py --bundle "$BUNDLE"
 ```
 
@@ -503,33 +516,56 @@ Run in a fresh task-owned checkout/output directory so no command replaces an
 accepted artifact. The existing source builder produces development candidates
 without `--production`; production signing is a separate authorized operation.
 
-Independent tester owns a new portable installed-analysis harness
-`release/scripts/test_code_analysis_native.py`, retaining the current
-Windows-specific accepted harnesses unchanged. Required runnable interface:
+The independent installer tester owns the single portable entrypoint
+`release/scripts/test_code_analysis_portable_smoke.py` and its independent
+`release/scripts/test_code_analysis_portable_smoke_controls.py`. No wrapper or
+competing entrypoint is needed. Canonical options are `--expected-target` and
+`--evidence`; `--platform` and `--scratch` may be aliases. Required runnable
+interface, using the native build's `BUNDLE`, `ARCHIVE` and `TARGET` above:
 
 ```sh
-python3 release/scripts/test_code_analysis_native.py \
-  --bundle "$BUNDLE" --archive "$BUNDLE.zip" --expected-target "$TARGET" \
-  --workspace-source AgentWorkspace --evidence /absolute/path/to/new-evidence
-# Linux: use --archive "$BUNDLE.tar.gz" instead.
-# Cross-target acceptance adds these explicit options:
-# --arm-compiler /absolute/native/arm-none-eabi-gcc \
-# --arm-compiler-sha256 <measured-sha256> --arm-fixture-source /absolute/fixture-source
+ARM_GXX=/absolute/native/arm-none-eabi-g++
+ARM_GXX_SHA256='REPLACE_WITH_64_HEX_SHA256_FROM_TRUSTED_TOOLCHAIN_RECEIPT'
+python3 release/scripts/test_code_analysis_portable_smoke.py \
+  --bundle "$BUNDLE" --archive "$ARCHIVE" --expected-target "$TARGET" \
+  --workspace-source AgentWorkspace --evidence /absolute/path/to/new-evidence \
+  --arm-gxx "$ARM_GXX" --arm-gxx-sha256 "$ARM_GXX_SHA256"
+python3 release/scripts/test_code_analysis_portable_smoke_controls.py
+# Optional sibling compiler: --arm-gcc /absolute/native/arm-none-eabi-gcc
+# Windows setup may supply --rustc C:/absolute/path/to/rustc.exe explicitly.
 ```
 
-The harness is a required implementation/test deliverable, **absent at the
-audited baseline**. It must create isolated product home/project fixtures,
-install the exact archive through the public launcher, use managed tools with
-poisoned analyzer PATH/loader environment, and test both the compiled Rust
-workflow route and workspace Python runner against the same project/corpus.
-It must call all five tools through the public `byo mcp serve` stdio interface,
-parse intact JSON text blocks, test no-board/tier/profile availability and
-non-indexing status, and observe exact owned processes through normal shutdown,
-EOF, timeout/cancellation and child-survives-leader fixtures. It records failures
-and skipped prerequisites, exits nonzero on required skip/failure, and binds its
-receipt to harness/source/archive/manifest/final executable identities. Provide
-an optional explicit ARM compiler/fixture mode; acceptance of cross-target
-firmware requires that mode, not just a host C fixture.
+The smoke and controls are required deliverables, **absent at the audited
+baseline**. `--archive`, `--bundle`, `--workspace-source`, `--arm-gxx` and
+`--arm-gxx-sha256` are required. Hash and target-static verify the archive's
+bytes, modes and inventory, and prove equality with the expanded bundle before
+installation. The public launcher accepts the expanded directory through
+`byo install-runtime --bundle DIR`; this adds no ZIP installer protocol.
+Create isolated product home/project fixtures and exercise the compiled Rust
+workflow and the managed companion on the same installed runtime and project,
+with analyzer PATH and loader environment poisoned.
+
+The companion is a direct **SOURCE API** check using the required accepted
+`--workspace-source`, not a shipped Python CLI. Its exact call is
+`internal.code_analysis.run_cppcheck(project_root, target,
+runtime_context=TrustedRuntimeContext(runtime_root, manifest_sha, managed=True))`.
+`TrustedRuntimeContext` has `runtime_root`, `runtime_manifest_sha256` and
+`managed` fields; `project_root` is a runner argument. Bind `manifest_sha` to
+the installed manifest bytes. The workspace CLI supplies no trusted context;
+a source `bin/verify` development/PATH check may be an additional separate gate.
+
+The delivered **core smoke** verifies archive/install, both runners' real ARM
+clean/defect/restored results, all five tools through public `byo mcp serve`
+stdio with intact JSON text, saved-file freshness, query-driver behavior,
+natural EOF and exact owned-process retirement with an unaffected peer.
+Missing core prerequisites or failures exit nonzero. Its scoped PASS must name
+the covered target and checks; it cannot claim complete OS or all-profile
+acceptance. Bind receipts to harness/source/archive/manifest/final executable,
+compiler and embedded-fixture identities. Keep full native matrix, corruption,
+timeout/cancellation, update/uninstall, resource consumption, missing-data and
+no-board/tier/profile cases as separate independently runnable unit/module/CLI
+gates below. Do not port the entire Windows validator into the core smoke or
+waive any required product behavior.
 
 Existing server tests run in the matching server checkout using its locked
 environment: `uv run python -m pytest tests/test_code_analysis_*.py` and focused
@@ -543,7 +579,7 @@ Installer packaging tests remain `python3 release/scripts/test_analysis_tools.py
 `test_build_release.py`, and `test_verify_build_output.py`; add native-format,
 permissions, closed-target and tampered-archive cases, preserving Windows gates.
 
-Independent acceptance must cover:
+The separate gates and full future native acceptance must still cover:
 
 1. Platform-neutral Python/Rust target/mapping/header/namespace/SBOM parity
    negatives on Windows, labeled **Windows-host platform-neutral fixtures**;
@@ -566,12 +602,14 @@ Independent acceptance must cover:
 | --- | --- | --- |
 | 1. ROOT accepts contract | This document only in this module | Fresh contract critique, including target/ABI and selection decisions |
 | 2a. Installer Rust owner | `launcher/src/code_analysis.rs`, `code_analysis/{config,runtime,process,xml}.rs`, `main.rs`, `workflow.rs`, `Cargo.toml`, `Cargo.lock` | Tester owns portable fixture additions and focused Rust/native lifecycle tests; preserve accepted corpus identity |
-| 2b. Installer packaging owner | `release/scripts/{analysis_tools,build_release,verify_build_output}.py`, `release/analysis-tools.lock.json`, installer mapping schema | Separate tester owns release-script tests and native installed-analysis harness/fixtures |
+| 2b. Installer packaging owner | `release/scripts/{analysis_tools,build_release,verify_build_output}.py`, `release/analysis-tools.lock.json`, installer mapping schema | Separate tester owns release-script regression tests; production paths remain disjoint |
+| 2c. Independent installer tester | No production files | Sole owner of `release/scripts/test_code_analysis_portable_smoke.py`, `release/scripts/test_code_analysis_portable_smoke_controls.py` and the narrow exact-target analyzer-resource acceptance change in existing `release/scripts/test_installed_e2e.py`; retain its lifecycle gate |
 | 3. Server owner after installer runtime retirement/retarget by ROOT | `code_analysis_manifest.py`, `code_analysis_runtime.py`, `kernel/processes.py` as needed; matching runtime-manifest doc/schema | Server tester owns native mapping/lifecycle/real-clangd/availability regression suites; adapter/service changes only for a demonstrated blocker |
 | 4. Workspace owner in its repository | `internal/code_analysis.py`; `internal/agent_workspace.py` only if its existing resolution seam needs correction | Workspace tester owns parity and real Cppcheck/cleanup suites; no server dependency introduced |
 | 5. ROOT integration/build instructions/CI | `release/source-lock.json`, `.github/workflows/{quality,build-matrix,release,clean-machine}.yml`, release/runner instructions | Independent integrated-source tests then fresh review; native tester gathers new target evidence |
 
-Keep one writer per path. Rust and packaging can be separate disjoint modules,
+Keep one writer per path; production owners do not edit independently owned
+tests. Rust and packaging can be separate disjoint modules,
 but acceptance uses their integrated tip. Source pins/CI belong to final
 integration, not an early worker. The single harness is retired before a
 repository change; workers need only harness coordination hooks. ROOT owns
