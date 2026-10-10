@@ -556,6 +556,14 @@ class Owned:
                     key = (pid, child["creation_filetime"])
                     known = self.records.get(key)
                     if (
+                        known is not None
+                        and known.get("alive") is False
+                        and child.get("alive") is False
+                    ):
+                        # A fresh exact creation/signalled observation confirms
+                        # the recorded exit even when no image was obtainable.
+                        continue
+                    if (
                         known is None
                         or not isinstance(known.get("image"), str)
                         or not known["image"]
@@ -572,7 +580,7 @@ class Owned:
                         if (
                             not isinstance(observed.get("image"), str)
                             or not observed["image"]
-                        ):
+                        ) and observed.get("alive") is not False:
                             raise Setup(f"new child PID {pid} full image unavailable")
                         if not self.native.alive(live[parent]):
                             continue
@@ -3568,12 +3576,14 @@ def process_observer_checks(check, scratch: Path) -> dict:
             started=20,
             parent_creation=3,
             parent_dies=False,
+            full_alive=True,
         ):
             self.creation, self.full_creation = creation, full_creation
             self.full_image, self.full_missing = full_image, full_missing
             self.full_error, self.fresh_error = full_error, fresh_error
             self.started, self.parent_creation = started, parent_creation
             self.parent_dies, self.full_calls = parent_dies, 0
+            self.full_alive = full_alive
             self.calls = []
 
         def now(self):
@@ -3585,7 +3595,10 @@ def process_observer_checks(check, scratch: Path) -> dict:
         def alive(self, identity):
             if identity["pid"] == 10:
                 return not (self.parent_dies and self.full_calls)
-            return identity["creation_filetime"] == self.creation
+            return (
+                identity["creation_filetime"] == self.creation
+                and self.full_alive is not False
+            )
 
         def identity(self, pid, *, image=True):
             self.calls.append((pid, image))
@@ -3594,7 +3607,11 @@ def process_observer_checks(check, scratch: Path) -> dict:
                     raise Setup(
                         f"controlled fresh {self.fresh_error} observation failure"
                     )
-                return {"pid": pid, "creation_filetime": self.creation, "alive": True}
+                return {
+                    "pid": pid,
+                    "creation_filetime": self.creation,
+                    "alive": self.full_alive,
+                }
             self.full_calls += 1
             if self.full_error:
                 raise Setup("controlled new full-image observation failure")
@@ -3603,7 +3620,7 @@ def process_observer_checks(check, scratch: Path) -> dict:
             return {
                 "pid": pid,
                 "creation_filetime": self.full_creation,
-                "alive": True,
+                "alive": self.full_alive,
                 "image": self.full_image,
             }
 
@@ -3690,6 +3707,74 @@ def process_observer_checks(check, scratch: Path) -> dict:
         "sampler-new-null-image-is-setup",
         lambda: sampler(SamplerNative(full_image=None), known=False).sample_once(),
         Setup,
+    )
+
+    def proved_exit_without_image():
+        native = SamplerNative(full_image=None, full_alive=False)
+        tracker = sampler(native, known=False)
+        tracker.sample_once()
+        record = tracker.records[(4242, 7)]
+        require(
+            record["alive"] is False
+            and record["image"] is None
+            and record["parent_pid"] == 10
+            and record["parent_creation_filetime"] == 3
+            and native.full_calls == 1
+            and next(r for r in tracker.finish() if r["pid"] == 4242)["alive_after"]
+            is False,
+            "exact proved exit rejected or given an image/unknown ownership claim",
+        )
+
+    check("sampler-new-proved-exited-null-image-owned", proved_exit_without_image)
+
+    def known_proved_exit_without_image():
+        native = SamplerNative(full_image=None, full_alive=False, full_error=True)
+        tracker = sampler(native)
+        tracker.records[(4242, 7)].update(image=None, alive=False)
+        original = dict(tracker.records[(4242, 7)])
+        tracker.sample_once()
+        require(
+            tracker.records[(4242, 7)] == original and native.calls == [(4242, False)],
+            "confirmed known exit redundantly queried its unavailable image",
+        )
+
+    check(
+        "sampler-known-proved-exited-null-image-kept", known_proved_exit_without_image
+    )
+    for label, state in (
+        ("live", True),
+        ("null", None),
+        ("integer-zero", 0),
+        ("empty", ""),
+    ):
+        check(
+            f"sampler-null-image-{label}-not-proved-exit",
+            lambda s=state: sampler(
+                SamplerNative(full_image=None, full_alive=s), known=False
+            ).sample_once(),
+            Setup,
+        )
+
+    class MissingLiveness(SamplerNative):
+        def identity(self, pid, *, image=True):
+            result = super().identity(pid, image=image)
+            result.pop("alive")
+            return result
+
+    check(
+        "sampler-null-image-missing-liveness-is-setup",
+        lambda: sampler(MissingLiveness(full_image=None), known=False).sample_once(),
+        Setup,
+    )
+
+    def prior_exit_current_unknown():
+        native = SamplerNative(full_image=None, full_alive=None)
+        tracker = sampler(native)
+        tracker.records[(4242, 7)].update(image=None, alive=False)
+        tracker.sample_once()
+
+    check(
+        "sampler-prior-exit-current-unknown-is-setup", prior_exit_current_unknown, Setup
     )
     for failure in ("OpenProcess", "GetProcessTimes", "wait"):
         check(
