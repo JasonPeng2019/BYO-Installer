@@ -41,7 +41,9 @@ def main() -> int:
         (args.evidence / "compiler.stdout").write_bytes(completed.stdout)
         (args.evidence / "compiler.stderr").write_bytes(completed.stderr)
         if completed.returncode:
-            raise RuntimeError("Pinned compiler cannot execute on the native build host")
+            raise RuntimeError(
+                "Pinned compiler cannot execute on the native build host"
+            )
         if arm.inputs.digest(compiler) != receipt["compiler_sha256"]:
             raise RuntimeError("Compiler bytes changed during native execution")
         result["confirmed"] = True
@@ -49,7 +51,9 @@ def main() -> int:
         result["error"] = f"{type(error).__name__}: {error}"
         print(result["error"])
     finally:
-        with (args.evidence / "native-input.json").open("x", encoding="utf-8") as stream:
+        with (args.evidence / "native-input.json").open(
+            "x", encoding="utf-8"
+        ) as stream:
             json.dump(result, stream, sort_keys=True, indent=2)
             stream.write("\n")
     return 0 if result["confirmed"] else 1
