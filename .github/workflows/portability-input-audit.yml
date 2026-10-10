@@ -1,0 +1,39 @@
+name: Portability compiler input audit
+
+on:
+  push:
+    branches: [ci/portability-input-audit-20261010]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64@sha256:fdb9a9c223b215604dc7b6f7e8fff4b39bfea5fbaa7777a2e5544a60dfa437f8
+    steps:
+      - name: Record actual GCC runtime and notice inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          getconf GNU_LIBC_VERSION
+          compiler=$(readlink -f "$(command -v g++)")
+          "$compiler" --version
+          sha256sum "$compiler"
+          rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n%{SOURCERPM}\n' "$compiler"
+          for library in libstdc++.a libgcc.a libgcc_eh.a; do
+            path=$("$compiler" -print-file-name="$library")
+            test -f "$path"
+            sha256sum "$path"
+            rpm -qf --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n%{SOURCERPM}\n' "$path"
+          done
+          rpm -qa --qf '%{NAME}\n' | grep -E 'gcc|libstdc' | while read -r package; do
+            printf 'NOTICE CANDIDATES: %s\n' "$package"
+            rpm -ql "$package" | grep -E 'COPYING|LICENSE|copyright' || true
+          done
+          command -v cmake || true
+          command -v patchelf || true
+          command -v readelf
+          command -v strip
