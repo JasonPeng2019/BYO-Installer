@@ -458,17 +458,25 @@ def test_native_tar_and_zip_archives_bind_target_type_and_modes() -> None:
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / f"byo-test{suffix}"
             write(archive, _entries(manifest))
-            with patch.object(vbo, "validate_payload") as payload:
+            observed = []
+
+            def inspect(checked, read_bytes, *, read_mode):
+                # The readers are scoped to the open archive; use them in-call.
+                observed.append(
+                    (
+                        checked,
+                        read_bytes("bin/byo"),
+                        read_mode("bin/byo"),
+                        read_mode("release-manifest.json"),
+                    )
+                )
+
+            with patch.object(vbo, "validate_payload", side_effect=inspect) as payload:
                 vbo.validate_archive(
                     archive, kind, "byo-test", manifest, expected_target=target
                 )
             assert payload.call_count == 1, target
-            checked, read_bytes = payload.call_args.args
-            read_mode = payload.call_args.kwargs["read_mode"]
-            assert checked == manifest, target
-            assert read_bytes("bin/byo") == EXECUTABLE, target
-            assert read_mode("bin/byo") == 0o755, target
-            assert read_mode("release-manifest.json") == 0o644, target
+            assert observed == [(manifest, EXECUTABLE, 0o755, 0o644)], target
 
             other = "windows-x86_64" if platform != "windows" else "linux-x86_64"
             _expect_archive_error(
