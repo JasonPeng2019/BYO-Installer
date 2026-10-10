@@ -23,6 +23,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 import analysis_tools
+import analysis_native
+import native_formats
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -436,12 +438,14 @@ def write_sbom(
     analysis_dependencies = []
     if analysis_provenance is not None:
         analysis_components, analysis_dependencies = analysis_tools.sbom_components(
-            analysis_tools.load_lock(), payload_files, analysis_provenance
+            analysis_tools.load_lock(target=analysis_tools.host_target()),
+            payload_files,
+            analysis_provenance,
         )
         for component in analysis_components:
             add(component)
         native_components, native_dependencies = analysis_tools.native_sbom(
-            payload_files, analysis_tools.load_lock()
+            payload_files, analysis_tools.load_lock(target=analysis_tools.host_target())
         )
         for component in native_components:
             add(component)
@@ -539,7 +543,7 @@ def validate_windows_build_python(python: Path, source: Path, version: str) -> d
 def payload_inventory(bundle: Path) -> list[dict[str, object]]:
     """Hash final transformed payloads once, before SBOM; never self-hash metadata."""
     lock = (
-        analysis_tools.load_lock()
+        analysis_tools.load_lock(target=analysis_tools.host_target())
         if (bundle / "analysis/runtime.json").is_file()
         else None
     )
@@ -570,8 +574,12 @@ def payload_inventory(bundle: Path) -> list[dict[str, object]]:
         )
         if classified:
             kind, executable = classified
-        if executable and os.name != "nt":
-            path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        if os.name != "nt" and stat.S_IMODE(path.stat().st_mode) != (
+            0o755 if executable else 0o644
+        ):
+            raise RuntimeError(
+                f"Payload permissions changed before measurement: {relative}"
+            )
         files.append(
             {
                 "path": relative,
@@ -584,11 +592,33 @@ def payload_inventory(bundle: Path) -> list[dict[str, object]]:
     return files
 
 
+def normalize_bundle_modes(bundle: Path, lock: dict) -> None:
+    """Set native delivery permissions before signing/measurement, never repair at verification."""
+    for path in (bundle, *bundle.rglob("*")):
+        if path.is_symlink() or path.is_junction():
+            raise RuntimeError(f"Native bundle contains a link: {path}")
+        if path.is_dir():
+            path.chmod(0o755)
+        elif path.is_file() and path.stat().st_nlink == 1:
+            relative = path.relative_to(bundle).as_posix()
+            classified = analysis_tools.classification(relative, lock)
+            executable = (
+                classified[1]
+                if classified
+                else relative in {"byo", "sidecar/byo-mcp-sidecar"}
+            )
+            path.chmod(0o755 if executable else 0o644)
+        else:
+            raise RuntimeError(
+                f"Native bundle contains a special/hard-linked entry: {path}"
+            )
+
+
 def signed_analysis_inputs(
     bundle: Path, evidence: Path
 ) -> tuple[dict[str, bytes], dict]:
     """Preserve already signed analysis bytes across the existing finalization stage."""
-    lock = analysis_tools.load_lock()
+    lock = analysis_tools.load_lock(target="windows-x86_64")
     provenance = json.loads((evidence / "cppcheck-build.json").read_bytes())
     if (
         provenance.get("sources")
@@ -813,23 +843,68 @@ def collect_private_symbols(
     )
 
     collected: list[Path] = [symbol_root / nuitka_report.name]
+    analyzers = (
+        [
+            bundle / path
+            for p in analysis_tools.load_lock()["programs"].values()
+            for path in [p["executable"], *p["dependencies"]]
+        ]
+        if (bundle / "analysis/runtime.json").is_file()
+        else []
+    )
+    transformation_receipt = {"schema": 1, "commands": [], "tools": {}, "files": []}
+
+    def native_symbol_command(argv: list[str]) -> subprocess.CompletedProcess:
+        tool = argv[0]
+        if tool not in transformation_receipt["tools"]:
+            executable = Path(shutil.which(tool) or "").resolve(strict=True)
+            if not executable.is_file():
+                raise RuntimeError(
+                    f"Native symbol collection requires installed {tool}"
+                )
+            transformation_receipt["tools"][tool] = {
+                "path": str(executable),
+                "sha256": digest(executable),
+            }
+        result = subprocess.run(argv, capture_output=True, text=True, check=False)
+        transformation_receipt["commands"].append(
+            {
+                "argv": argv,
+                "exit_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        )
+        analysis_tools.write_json(
+            symbol_root / "transformations.json", transformation_receipt
+        )
+        return result
+
     if platform.system() == "Darwin":
-        for candidate in (bundle / "byo", sidecar):
-            destination = symbol_root / f"{candidate.name}.dSYM"
-            completed = subprocess.run(
-                ["dsymutil", str(candidate), "-o", str(destination)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
+        for candidate in (bundle / "byo", sidecar, *analyzers):
+            relative = candidate.relative_to(bundle)
+            destination = symbol_root / relative.parent / f"{candidate.name}.dSYM"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            before = digest(candidate)
+            completed = native_symbol_command(
+                ["dsymutil", str(candidate), "-o", str(destination)]
             )
             if completed.returncode == 0 and destination.is_dir():
                 collected.append(destination)
-            elif production:
+            elif production and candidate not in analyzers:
                 raise RuntimeError(
                     f"failed to preserve dSYM for {candidate.name}: {completed.stderr.strip()}"
                 )
-            run(["strip", "-S", "-x", str(candidate)])
+            native_symbol_command(
+                ["strip", "-S", "-x", str(candidate)]
+            ).check_returncode()
+            transformation_receipt["files"].append(
+                {
+                    "path": relative.as_posix(),
+                    "before_sha256": before,
+                    "after_sha256": digest(candidate),
+                }
+            )
     elif platform.system() == "Windows":
         pdbs = {
             *launcher.parent.glob("*.pdb"),
@@ -844,13 +919,35 @@ def collect_private_symbols(
         if production and len(collected) == 1:
             raise RuntimeError("Windows production build produced no private PDB files")
     elif platform.system() == "Linux":
-        for candidate in (bundle / "byo", sidecar):
-            destination = symbol_root / f"{candidate.name}.debug"
-            run(["objcopy", "--only-keep-debug", str(candidate), str(destination)])
-            run(["strip", "--strip-unneeded", str(candidate)])
-            run(["objcopy", f"--add-gnu-debuglink={destination}", str(candidate)])
+        for candidate in (bundle / "byo", sidecar, *analyzers):
+            relative = candidate.relative_to(bundle)
+            destination = symbol_root / relative.parent / f"{candidate.name}.debug"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            before = digest(candidate)
+            for argv in (
+                ["objcopy", "--only-keep-debug", str(candidate), str(destination)],
+                ["strip", "--strip-unneeded", str(candidate)],
+                ["objcopy", f"--add-gnu-debuglink={destination}", str(candidate)],
+            ):
+                native_symbol_command(argv).check_returncode()
+            transformation_receipt["files"].append(
+                {
+                    "path": relative.as_posix(),
+                    "before_sha256": before,
+                    "after_sha256": digest(candidate),
+                }
+            )
             collected.append(destination)
 
+    if platform.system() in {"Darwin", "Linux"}:
+        for tool in tuple(transformation_receipt["tools"]):
+            if platform.system() == "Linux" or tool == "dsymutil":
+                native_symbol_command([tool, "--version"]).check_returncode()
+            # Apple's strip exposes no version flag. Its actual resolved bytes
+            # are hashed above rather than inventing a successful version probe.
+        analysis_tools.write_json(
+            symbol_root / "transformations.json", transformation_receipt
+        )
     inventory = []
     for path in sorted(
         candidate for candidate in symbol_root.rglob("*") if candidate.is_file()
@@ -884,12 +981,12 @@ def main() -> int:
         "--analysis-input-dir",
         type=Path,
         default=os.environ.get("BYO_ANALYSIS_INPUT_DIR"),
-        help="Windows: directory with the two pinned local analysis archives (no downloads)",
+        help="Directory with target-pinned local analysis archives; Linux also requires gcc-runtime inputs (no downloads)",
     )
     parser.add_argument(
         "--analysis-cmake",
         type=Path,
-        help="Existing Windows CMake executable for the pinned Cppcheck recipe",
+        help="Existing native CMake executable for the pinned Cppcheck recipe",
     )
     parser.add_argument(
         "--production",
@@ -930,11 +1027,11 @@ def main() -> int:
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.version = release_version(args.version)
-    if platform.system() == "Windows" and (
-        architecture() != "x86_64" or args.analysis_input_dir is None
-    ):
+    analysis_target = analysis_tools.host_target()
+    analysis_lock = analysis_tools.load_lock(target=analysis_target)
+    if args.analysis_input_dir is None:
         raise RuntimeError(
-            "Windows x86_64 builds require --analysis-input-dir with the pinned local archives"
+            f"{analysis_target} builds require --analysis-input-dir with the pinned local archives"
         )
     if args.production and args.channel == "development":
         raise RuntimeError("production builds must use a non-development channel")
@@ -957,6 +1054,21 @@ def main() -> int:
         signing_configuration(args) if args.production else None
     )
     build = args.build_dir.resolve()
+    native_analysis_provenance = None
+    native_analysis_stage = build / "native-analysis-stage"
+    if platform.system() != "Windows":
+        if native_analysis_stage.exists():
+            raise RuntimeError(
+                "Native analyzer scratch already exists; supply a fresh --build-dir to preserve prior evidence"
+            )
+        native_analysis_stage.mkdir(parents=True)
+        native_analysis_provenance = analysis_native.stage_native(
+            native_analysis_stage,
+            args.analysis_input_dir.resolve(strict=True),
+            build / "analysis-evidence",
+            args.analysis_cmake,
+            target=analysis_target,
+        )
     if platform.system() == "Windows":
         analysis_tools.write_json(
             build / "analysis-evidence/python-build-input.json",
@@ -1101,10 +1213,17 @@ def main() -> int:
             build / "analysis-evidence",
             args.platform_signing_complete,
         )
+    else:
+        analysis_provenance = native_analysis_provenance
+        shutil.copytree(native_analysis_stage / "analysis", bundle / "analysis")
 
     if not nuitka_report.is_file():
         raise RuntimeError(
             "Nuitka compilation report is missing; run a fresh sidecar build"
+        )
+    if platform.system() == "Darwin":
+        analysis_native.thin_macos_bundle(
+            bundle, analysis_lock, analysis_provenance, build / "analysis-evidence"
         )
     symbol_root = collect_private_symbols(
         bundle,
@@ -1113,6 +1232,8 @@ def main() -> int:
         nuitka_report,
         production=args.production,
     )
+    if platform.system() != "Windows":
+        normalize_bundle_modes(bundle, analysis_lock)
 
     if args.production:
         if platform.system() == "Darwin":
@@ -1149,6 +1270,8 @@ def main() -> int:
 
     files = payload_inventory(bundle)
     write_sbom(bundle, nuitka_report, args.version, files, analysis_provenance)
+    if os.name != "nt":
+        (bundle / "sbom.cdx.json").chmod(0o644)
     toolchains = toolchain_provenance(args.python, nuitka_report)
     sbom_path = bundle / "sbom.cdx.json"
     files.append(
@@ -1161,26 +1284,63 @@ def main() -> int:
         }
     )
     if analysis_provenance is not None:
-        analysis_tools.write_json(
-            build / "analysis-evidence/program-probes.json",
-            analysis_tools.probe_programs(bundle),
-        )
         analysis_tools.validate_analysis(
             files,
             lambda name: (bundle / name).read_bytes(),
             json.loads(sbom_path.read_bytes()),
+            analysis_lock,
         )
-        analysis_tools.validate_windows_native(
-            files,
-            lambda name: (bundle / name).read_bytes(),
-            json.loads(sbom_path.read_bytes()),
-            not args.production,
+        if platform.system() == "Windows":
+            analysis_tools.validate_windows_native(
+                files,
+                lambda name: (bundle / name).read_bytes(),
+                json.loads(sbom_path.read_bytes()),
+                not args.production,
+            )
+            closure = analysis_tools.validate_pe_closure(
+                files, lambda name: (bundle / name).read_bytes()
+            )
+            analysis_tools.write_json(
+                build / "analysis-evidence/pe-closure.json", closure
+            )
+        else:
+            closure = native_formats.validate_closure(
+                analysis_lock, lambda name: (bundle / name).read_bytes()
+            )
+            analysis_tools.write_json(
+                build / "analysis-evidence/native-closure.json", closure
+            )
+            bundle_closure = native_formats.validate_bundle_closure(
+                files,
+                lambda name: (bundle / name).read_bytes(),
+                analysis_lock["platform"],
+                analysis_lock["architecture"],
+            )
+            analysis_tools.write_json(
+                build / "analysis-evidence/bundle-native-closure.json", bundle_closure
+            )
+        analysis_tools.write_json(
+            build / "analysis-evidence/program-probes.json",
+            analysis_tools.probe_programs(bundle, analysis_lock),
         )
         analysis_tools.write_json(
-            build / "analysis-evidence/pe-closure.json",
-            analysis_tools.validate_pe_closure(
-                files, lambda name: (bundle / name).read_bytes()
-            ),
+            build / "analysis-evidence/final-analysis.json",
+            {
+                "target": analysis_target,
+                "source": sources,
+                "lock_sha256": digest(ROOT / "release/analysis-tools.lock.json"),
+                "recipe_output": analysis_provenance.get("recipe_output"),
+                "files": [
+                    leaf for leaf in files if leaf["path"].startswith("analysis/")
+                ],
+                "closure": closure,
+                "actual_host": analysis_provenance.get("actual_host"),
+                "symbol_transformations": (
+                    json.loads((symbol_root / "transformations.json").read_bytes())
+                    if (symbol_root / "transformations.json").is_file()
+                    else None
+                ),
+            },
         )
     manifest = {
         "schema": 1,
@@ -1203,9 +1363,13 @@ def main() -> int:
     (bundle / "release-manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    if os.name != "nt":
+        (bundle / "release-manifest.json").chmod(0o644)
     if args.production:
         assert signing is not None
         write_manifest_signature(bundle, manifest, signing[0], signing[1])
+        if os.name != "nt":
+            (bundle / "release-manifest.sig").chmod(0o644)
 
     sidecar = (
         bundle
@@ -1232,6 +1396,32 @@ def main() -> int:
         deterministic_zip(bundle, archive, epoch)
     else:
         deterministic_tar_gz(bundle, archive, epoch)
+    import verify_build_output
+
+    verify_build_output.validate_archive(
+        archive, archive_kind, bundle.name, manifest, expected_target=analysis_target
+    )
+    if platform.system() != "Windows":
+        needles = verify_build_output.build_leak_needles(
+            home=Path.home(),
+            user=verify_build_output._current_user(),
+            checkout_root=ROOT,
+        )
+        if analysis_provenance:
+            for command in analysis_provenance.get("commands", []):
+                if command["step"] == "configure":
+                    argv = command["argv"]
+                    for flag in ("-S", "-B"):
+                        needles.extend(
+                            verify_build_output.build_leak_needles(
+                                extra=[argv[argv.index(flag) + 1]]
+                            )
+                        )
+        findings = verify_build_output.scan_bundle_for_leaks(bundle, needles)
+        if findings:
+            raise RuntimeError(
+                f"Native bundle leaked private build identity: {findings[:10]}"
+            )
     checksums = args.output / f"{bundle.name}.sha256"
     checksums.write_text(f"{digest(archive)}  {archive.name}\n", encoding="utf-8")
     if args.production:

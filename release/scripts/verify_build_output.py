@@ -7,7 +7,9 @@ import argparse
 import getpass
 import hashlib
 import json
+import os
 import re
+import stat
 import struct
 import sys
 import tarfile
@@ -85,23 +87,20 @@ def sha256(path: Path) -> str:
 
 
 def expected_identity(target: str) -> tuple[str, str]:
-    values = {
-        "macos-aarch64": ("macos", "aarch64"),
-        "macos-x86_64": ("macos", "x86_64"),
-        "windows-x86_64": ("windows", "x86_64"),
-        "linux-x86_64-glibc-2.28": ("linux", "x86_64"),
-    }
-    try:
-        return values[target]
-    except KeyError as exc:
-        raise RuntimeError(f"unsupported build target contract: {target}") from exc
+    return analysis_tools.TARGETS[analysis_tools.canonical_target(target)]
 
 
 def validate_archive_paths(names: list[str], bundle_name: str) -> None:
     if not names or len(names) > MAX_ENTRIES:
         raise RuntimeError("archive is empty or contains too many entries")
     seen: set[str] = set()
+    analysis_tools.safe_relative(bundle_name)
+    if "/" in bundle_name:
+        raise RuntimeError("Archive requires a single bundle root")
     for name in names:
+        if name.endswith("//"):
+            raise RuntimeError(f"Archive contains noncanonical path: {name}")
+        analysis_tools.safe_relative(name.rstrip("/"))
         path = PurePosixPath(name)
         normalized = name.rstrip("/").lower()
         if (
@@ -123,7 +122,50 @@ def validate_archive(
     archive_type: str,
     bundle_name: str,
     expected_manifest: dict | None = None,
+    *,
+    expected_target: str | None = None,
 ) -> None:
+    def validate_members(members: dict, directories: dict, read_bytes, read_mode):
+        manifest = analysis_tools.strict_json(read_bytes("release-manifest.json"))
+        target = analysis_tools.canonical_target(
+            f"{manifest.get('platform')}-{manifest.get('architecture')}"
+        )
+        if expected_target is not None and target != analysis_tools.canonical_target(
+            expected_target
+        ):
+            raise RuntimeError("Archive manifest target differs from explicit target")
+        if expected_manifest is not None and manifest != expected_manifest:
+            raise RuntimeError("Archive manifest differs from the assembled bundle")
+        expected_kind = "tar.gz" if manifest["platform"] == "linux" else "zip"
+        if archive_type != expected_kind:
+            raise RuntimeError("Archive type differs from target contract")
+        expected = {leaf["path"] for leaf in manifest["files"]} | {
+            "release-manifest.json"
+        }
+        if manifest.get("development_unsigned") is False:
+            expected.add("release-manifest.sig")
+        if set(members) != expected:
+            raise RuntimeError(
+                f"Archive leaves differ from payload inventory: {sorted(set(members) ^ expected)}"
+            )
+        allowed_directories = {bundle_name}
+        for name in expected:
+            for parent in PurePosixPath(f"{bundle_name}/{name}").parents:
+                if str(parent) != ".":
+                    allowed_directories.add(str(parent))
+        if set(directories) - allowed_directories:
+            raise RuntimeError("Archive contains unknown/misplaced directory entries")
+        if manifest["platform"] != "windows":
+            if any(mode != 0o755 for mode in directories.values()):
+                raise RuntimeError("Native archive directory permissions must be 0755")
+            if any(
+                read_mode(name) != 0o644
+                for name in expected
+                if name in {"release-manifest.json", "release-manifest.sig"}
+            ):
+                raise RuntimeError("Native archive metadata permissions must be 0644")
+        validate_payload(manifest, read_bytes, read_mode=read_mode)
+
     if archive_type == "zip":
         if archive.suffix != ".zip":
             raise RuntimeError("ZIP target did not produce a .zip archive")
@@ -134,58 +176,58 @@ def validate_archive(
                 file_type = (member.external_attr >> 16) & 0o170000
                 if file_type not in {0, 0o040000, 0o100000}:
                     raise RuntimeError("ZIP contains a forbidden non-file entry")
-            manifest_name = f"{bundle_name}/release-manifest.json"
-            manifest = json.loads(handle.read(manifest_name))
-            if manifest.get("platform") == "windows":
-                if expected_manifest is not None and manifest != expected_manifest:
-                    raise RuntimeError("ZIP manifest differs from the assembled bundle")
-                leaves = {
-                    member.filename[len(bundle_name) + 1 :]
-                    for member in members
-                    if not member.is_dir()
-                }
-                expected = {leaf["path"] for leaf in manifest["files"]} | {
-                    "release-manifest.json"
-                }
-                if manifest.get("development_unsigned") is False:
-                    expected.add("release-manifest.sig")
-                if leaves != expected:
-                    raise RuntimeError(
-                        f"ZIP leaves differ from payload inventory: {sorted(leaves ^ expected)}"
-                    )
-                allowed_directories = {bundle_name}
-                for name in expected:
-                    for parent in PurePosixPath(f"{bundle_name}/{name}").parents:
-                        if str(parent) != ".":
-                            allowed_directories.add(str(parent))
-                if any(
-                    m.is_dir() and m.filename.rstrip("/") not in allowed_directories
-                    for m in members
+                if (file_type == stat.S_IFDIR and not member.is_dir()) or (
+                    file_type == stat.S_IFREG and member.is_dir()
                 ):
                     raise RuntimeError(
-                        "ZIP contains unknown/misplaced directory entries"
+                        "ZIP entry type disagrees with its directory spelling"
                     )
-
-                def read_bytes(name):
-                    return handle.read(f"{bundle_name}/{name}")
-
-                validate_windows_payload(manifest, read_bytes)
+            leaves = {
+                m.filename[len(bundle_name) + 1 :]: m for m in members if not m.is_dir()
+            }
+            directories = {
+                m.filename.rstrip("/"): stat.S_IMODE(m.external_attr >> 16)
+                for m in members
+                if m.is_dir()
+            }
+            validate_members(
+                leaves,
+                directories,
+                lambda name: handle.read(f"{bundle_name}/{name}"),
+                lambda name: stat.S_IMODE(leaves[name].external_attr >> 16),
+            )
     elif archive_type == "tar.gz":
         if not archive.name.endswith(".tar.gz"):
             raise RuntimeError("Linux target did not produce a .tar.gz archive")
         with tarfile.open(archive, "r:gz") as handle:
             members = handle.getmembers()
             validate_archive_paths([member.name for member in members], bundle_name)
-            if any(not (member.isfile() or member.isdir()) for member in members):
+            if any(
+                member.type not in {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE}
+                for member in members
+            ):
                 raise RuntimeError("tar archive contains a forbidden non-file entry")
+            leaves = {m.name[len(bundle_name) + 1 :]: m for m in members if m.isfile()}
+            directories = {m.name.rstrip("/"): m.mode for m in members if m.isdir()}
+            validate_members(
+                leaves,
+                directories,
+                lambda name: handle.extractfile(leaves[name]).read(),
+                lambda name: leaves[name].mode,
+            )
     else:
         raise RuntimeError(f"unsupported archive contract: {archive_type}")
 
 
-def validate_windows_payload(manifest: dict, read_bytes) -> None:
+def validate_payload(manifest: dict, read_bytes, *, read_mode=None) -> None:
     """Check actual leaf bytes; upstream resource exceptions are exact and owned."""
     seen = set()
-    lock = analysis_tools.load_lock()
+    target = analysis_tools.canonical_target(
+        f"{manifest.get('platform')}-{manifest.get('architecture')}"
+    )
+    lock = analysis_tools.load_lock(target=target)
+    native = lock["platform"] != "windows"
+    analysis_tools.safe_namespace([leaf["path"] for leaf in manifest["files"]])
     pinned_resources = {
         f["runtime_path"]
         for f in lock["programs"]["clangd"]["selected_files"]
@@ -210,6 +252,13 @@ def validate_windows_payload(manifest: dict, read_bytes) -> None:
         data = read_bytes(name)
         if len(data) != leaf["size"] or analysis_tools.sha256(data) != leaf["sha256"]:
             raise RuntimeError(f"Payload inventory byte mismatch: {name}")
+        if native and (
+            read_mode is None
+            or read_mode(name) != (0o755 if leaf["executable"] else 0o644)
+        ):
+            raise RuntimeError(
+                f"Native payload has incorrect executable/data permissions: {name}"
+            )
         path = PurePosixPath(name)
         forbidden = (
             path.suffix.lower()
@@ -227,10 +276,28 @@ def validate_windows_payload(manifest: dict, read_bytes) -> None:
                 ".lib",
                 ".a",
                 ".log",
+                ".debug",
+                ".inc",
+                ".inl",
+                ".asm",
+                ".s",
+                ".m",
+                ".mm",
+                ".cmake",
             }
             or any(
                 part.lower()
-                in {".firm", ".cache", "__pycache__", "addons", "reports", "cmakefiles"}
+                in {
+                    ".firm",
+                    ".cache",
+                    ".git",
+                    ".svn",
+                    ".venv",
+                    "__pycache__",
+                    "addons",
+                    "reports",
+                    "cmakefiles",
+                }
                 for part in path.parts
             )
             or path.name.lower()
@@ -242,20 +309,25 @@ def validate_windows_payload(manifest: dict, read_bytes) -> None:
                 "compile_commands.json",
             }
         )
+        forbidden = forbidden or any(part.endswith(".dSYM") for part in path.parts)
         if forbidden and name not in pinned_resources:
             raise RuntimeError(
                 f"Windows payload leaked source/development file: {name}"
             )
     analysis_tools.validate_analysis(
-        manifest["files"], read_bytes, json.loads(read_bytes("sbom.cdx.json")), lock
-    )
-    analysis_tools.validate_windows_native(
         manifest["files"],
         read_bytes,
-        json.loads(read_bytes("sbom.cdx.json")),
-        manifest.get("development_unsigned") is True,
+        analysis_tools.strict_json(read_bytes("sbom.cdx.json")),
+        lock,
     )
-    if manifest.get("development_unsigned") is True:
+    if not native:
+        analysis_tools.validate_windows_native(
+            manifest["files"],
+            read_bytes,
+            analysis_tools.strict_json(read_bytes("sbom.cdx.json")),
+            manifest.get("development_unsigned") is True,
+        )
+    if not native and manifest.get("development_unsigned") is True:
         program = lock["programs"]["clangd"]
         executable = next(
             leaf
@@ -263,9 +335,40 @@ def validate_windows_payload(manifest: dict, read_bytes) -> None:
             if leaf["kind"] == "analysis-executable"
         )
         analysis_tools.checked_bytes(read_bytes(program["executable"]), executable)
+    if native:
+        import native_formats
+
+        native_formats.validate_bundle_closure(
+            manifest["files"], read_bytes, lock["platform"], lock["architecture"]
+        )
+        for leaf in manifest["files"]:
+            if leaf["executable"] or leaf["kind"] == "analysis-dependency":
+                assert_stripped_bytes(
+                    read_bytes(leaf["path"]), lock["platform"], leaf["path"]
+                )
 
 
-def validate_windows_bundle(bundle: Path, manifest: dict) -> None:
+def validate_windows_payload(manifest: dict, read_bytes) -> None:
+    """Retained Windows caller interface."""
+    if (
+        manifest.get("platform", "windows"),
+        manifest.get("architecture", "x86_64"),
+    ) != (
+        "windows",
+        "x86_64",
+    ):
+        raise RuntimeError("Windows payload validator requires Windows x86_64")
+    validate_payload(
+        {"platform": "windows", "architecture": "x86_64", **manifest}, read_bytes
+    )
+
+
+def validate_bundle(bundle: Path, manifest: dict) -> None:
+    native = manifest.get("platform") != "windows"
+    if bundle.is_symlink() or bundle.is_junction() or not bundle.is_dir():
+        raise RuntimeError(
+            "Bundle root must be a regular directory without a link/reparse entry"
+        )
     expected = {f["path"] for f in manifest["files"]} | {"release-manifest.json"}
     if manifest.get("development_unsigned") is False:
         expected.add("release-manifest.sig")
@@ -280,14 +383,37 @@ def validate_windows_bundle(bundle: Path, manifest: dict) -> None:
         if path.is_symlink() or path.is_junction():
             raise RuntimeError(f"Bundle contains a link/reparse entry: {path}")
         if path.is_file():
+            if not stat.S_ISREG(path.stat().st_mode) or path.stat().st_nlink != 1:
+                raise RuntimeError(
+                    f"Bundle contains a special/hard-linked entry: {path}"
+                )
             actual.add(path.relative_to(bundle).as_posix())
         elif path.is_dir() and path.relative_to(bundle).as_posix() not in directories:
             raise RuntimeError(f"Bundle contains an unknown directory: {path}")
+        elif not path.is_dir():
+            raise RuntimeError(f"Bundle contains a special entry: {path}")
+        if native and path.is_dir() and stat.S_IMODE(path.stat().st_mode) != 0o755:
+            raise RuntimeError(f"Bundle directory permissions must be 0755: {path}")
+    if native:
+        for name in ("release-manifest.json", "release-manifest.sig"):
+            if (
+                name in expected
+                and stat.S_IMODE((bundle / name).stat().st_mode) != 0o644
+            ):
+                raise RuntimeError(f"Bundle metadata permissions must be 0644: {name}")
     if actual != expected:
         raise RuntimeError(
             f"Bundle leaves differ from inventory: {sorted(actual ^ expected)}"
         )
-    validate_windows_payload(manifest, lambda name: (bundle / name).read_bytes())
+    validate_payload(
+        manifest,
+        lambda name: (bundle / name).read_bytes(),
+        read_mode=lambda name: stat.S_IMODE((bundle / name).stat().st_mode),
+    )
+
+
+def validate_windows_bundle(bundle: Path, manifest: dict) -> None:
+    validate_bundle(bundle, manifest)
 
 
 def _needle_encodings(text: str) -> list[bytes]:
@@ -437,20 +563,22 @@ def macho_debug_stab_count(data: bytes, limit: int) -> int | None:
     count = 0
     for _ in range(ncmds):
         if offset + 8 > len(data):
-            break
+            raise RuntimeError("Truncated Mach-O load command")
         cmd, cmdsize = struct.unpack_from("<II", data, offset)
+        if cmdsize < 8 or offset + cmdsize > len(data):
+            raise RuntimeError("Invalid Mach-O load command bounds")
         if cmd == MACHO_LC_SYMTAB:
+            if cmdsize != 24:
+                raise RuntimeError("Invalid Mach-O symbol command")
             symoff, nsyms = struct.unpack_from("<II", data, offset + 8)
+            if symoff + nsyms * 16 > len(data):
+                raise RuntimeError("Truncated Mach-O symbol table")
             for index in range(nsyms):
                 entry = symoff + index * 16
-                if entry + 5 > len(data):
-                    break
                 if data[entry + 4] & MACHO_N_STAB:
                     count += 1
                     if count > limit:
                         return count
-        if cmdsize == 0:
-            break
         offset += cmdsize
     return count
 
@@ -465,12 +593,29 @@ def elf_has_symtab(data: bytes) -> bool | None:
     shentsize = struct.unpack_from(endian + "H", data, 58)[0]
     shnum = struct.unpack_from(endian + "H", data, 60)[0]
     shstrndx = struct.unpack_from(endian + "H", data, 62)[0]
+    if shnum == 0 and shoff == 0:
+        return False
+    if (
+        shentsize != 64
+        or shnum == 0
+        or shstrndx >= shnum
+        or shoff < 64
+        or shoff + shnum * shentsize > len(data)
+    ):
+        raise RuntimeError("Invalid ELF section table")
     strtab_hdr = shoff + shstrndx * shentsize
     strtab_off = struct.unpack_from(endian + "Q", data, strtab_hdr + 24)[0]
+    strtab_size = struct.unpack_from(endian + "Q", data, strtab_hdr + 32)[0]
+    if strtab_off + strtab_size > len(data):
+        raise RuntimeError("Truncated ELF section-name table")
     for index in range(shnum):
         header = shoff + index * shentsize
         name_off = struct.unpack_from(endian + "I", data, header)[0]
-        end = data.index(b"\x00", strtab_off + name_off)
+        if name_off >= strtab_size:
+            raise RuntimeError("Invalid ELF section-name offset")
+        end = data.find(b"\x00", strtab_off + name_off, strtab_off + strtab_size)
+        if end < 0:
+            raise RuntimeError("Unterminated ELF section name")
         if data[strtab_off + name_off : end] == b".symtab":
             return True
     return False
@@ -495,31 +640,34 @@ def assert_stripped(path: Path, platform: str) -> None:
     must not re-ship them. Parsers are calibrated against real stripped bundles:
     macOS keeps ~0–1 residual stabs, Linux drops `.symtab`, Windows zeroes the
     COFF symbol table (its symbols live in the separate `.pdb`)."""
-    data = path.read_bytes()
+    assert_stripped_bytes(path.read_bytes(), platform, path.name)
+
+
+def assert_stripped_bytes(data: bytes, platform: str, name: str) -> None:
     if platform == "macos":
         count = macho_debug_stab_count(data, MACHO_MAX_STAB)
         if count is None:
             raise RuntimeError(
-                f"{path.name}: not a thin Mach-O 64 image; cannot verify strip"
+                f"{name}: not a thin Mach-O 64 image; cannot verify strip"
             )
         if count > MACHO_MAX_STAB:
             raise RuntimeError(
-                f"{path.name}: {count}+ Mach-O debug symbols present — not stripped"
+                f"{name}: {count}+ Mach-O debug symbols present — not stripped"
             )
     elif platform == "linux":
         present = elf_has_symtab(data)
         if present is None:
-            raise RuntimeError(f"{path.name}: not a 64-bit ELF; cannot verify strip")
+            raise RuntimeError(f"{name}: not a 64-bit ELF; cannot verify strip")
         if present:
-            raise RuntimeError(f"{path.name}: ELF .symtab present — not stripped")
+            raise RuntimeError(f"{name}: ELF .symtab present — not stripped")
     elif platform == "windows":
         table = pe_coff_symbol_table(data)
         if table is None:
-            raise RuntimeError(f"{path.name}: not a PE image; cannot verify strip")
+            raise RuntimeError(f"{name}: not a PE image; cannot verify strip")
         pointer, count = table
         if pointer != 0 or count != 0:
             raise RuntimeError(
-                f"{path.name}: PE COFF symbol table present ({count} symbols) — not stripped"
+                f"{name}: PE COFF symbol table present ({count} symbols) — not stripped"
             )
     else:
         raise RuntimeError(f"unsupported platform for strip verification: {platform}")
@@ -530,34 +678,66 @@ def shipped_executables(bundle: Path, platform: str) -> list[Path]:
     sidecar's main binary. Bundled dependency `.so`/`.dylib` from upstream wheels
     are not our strip target and are excluded."""
     suffix = ".exe" if platform == "windows" else ""
-    return [bundle / f"byo{suffix}", bundle / "sidecar" / f"byo-mcp-sidecar{suffix}"]
+    result = [bundle / f"byo{suffix}", bundle / "sidecar" / f"byo-mcp-sidecar{suffix}"]
+    if platform != "windows" and (bundle / "analysis/runtime.json").is_file():
+        mapping = analysis_tools.strict_json(
+            (bundle / "analysis/runtime.json").read_bytes()
+        )
+        result += [
+            bundle / program["executable"] for program in mapping["programs"].values()
+        ]
+    return result
 
 
 def main() -> int:
-    if len(sys.argv) > 1 and sys.argv[1] == "windows-analysis-archive":
+    if len(sys.argv) > 1 and sys.argv[1] in {
+        "windows-analysis-archive",
+        "analysis-archive",
+    }:
+        windows_alias = sys.argv[1] == "windows-analysis-archive"
         parser = argparse.ArgumentParser(
-            description="Additional Windows analysis checks after clean_candidate verifies signatures"
+            description="Static target-specific analysis archive checks; signatures and native execution are separate gates"
         )
         parser.add_argument("--archive", type=Path, required=True)
         parser.add_argument("--receipt", type=Path, required=True)
+        parser.add_argument(
+            "--expected-target",
+            required=not windows_alias,
+            default="windows-x86_64" if windows_alias else None,
+        )
         args = parser.parse_args(sys.argv[2:])
-        with zipfile.ZipFile(args.archive) as archive:
+        target = analysis_tools.canonical_target(args.expected_target)
+        if windows_alias and target != "windows-x86_64":
+            raise RuntimeError("windows-analysis-archive requires Windows x86_64")
+        expected_platform, _ = expected_identity(target)
+        archive_kind = "tar.gz" if expected_platform == "linux" else "zip"
+        archive_context = (
+            zipfile.ZipFile(args.archive)
+            if archive_kind == "zip"
+            else tarfile.open(args.archive, "r:gz")
+        )
+        with archive_context as archive:
+            names = archive.namelist() if archive_kind == "zip" else archive.getnames()
             manifests = [
                 name
-                for name in archive.namelist()
+                for name in names
                 if len(PurePosixPath(name).parts) == 2
                 and PurePosixPath(name).name == "release-manifest.json"
             ]
             if len(manifests) != 1:
-                raise RuntimeError("Windows ZIP requires one root release manifest")
+                raise RuntimeError("Archive requires one root release manifest")
             name = PurePosixPath(manifests[0]).parent.as_posix()
-            data = archive.read(manifests[0])
-            manifest = json.loads(data)
-            if (manifest.get("platform"), manifest.get("architecture")) != (
-                "windows",
-                "x86_64",
-            ):
-                raise RuntimeError("Analysis archive gate requires Windows x86_64")
+
+            def read_bytes(path):
+                full = f"{name}/{path}"
+                return (
+                    archive.read(full)
+                    if archive_kind == "zip"
+                    else archive.extractfile(full).read()
+                )
+
+            data = read_bytes("release-manifest.json")
+            manifest = analysis_tools.strict_json(data)
             lock = json.loads((ROOT / "release/source-lock.json").read_bytes())
             for key in ("agent_workspace", "firmware_mcp"):
                 if manifest.get("source", {}).get(key) != {
@@ -567,14 +747,27 @@ def main() -> int:
                     raise RuntimeError(
                         f"Windows analysis archive {key} source pin mismatch"
                     )
-            validate_archive(args.archive, "zip", name, manifest)
-            result = analysis_tools.validate_pe_closure(
-                manifest["files"], lambda path: archive.read(f"{name}/{path}")
+            validate_archive(
+                args.archive, archive_kind, name, manifest, expected_target=target
             )
+            if expected_platform == "windows":
+                result = analysis_tools.validate_pe_closure(
+                    manifest["files"], read_bytes
+                )
+            else:
+                import native_formats
+
+                result = native_formats.validate_closure(
+                    analysis_tools.load_lock(target=target), read_bytes
+                )
         result.update(
             archive_sha256=sha256(args.archive),
             manifest_sha256=analysis_tools.sha256(data),
             source=manifest["source"],
+            target=target,
+            evidence_kind="Windows-host platform-neutral archive verification"
+            if os.name == "nt" and expected_platform != "windows"
+            else "static archive verification; probes/installed behavior are separate gates",
         )
         analysis_tools.write_json(args.receipt, result)
         print(
@@ -668,21 +861,7 @@ def main() -> int:
     ):
         raise RuntimeError("manifest does not contain complete toolchain provenance")
 
-    if platform == "windows":
-        validate_windows_bundle(bundle, manifest)
-    forbidden = [
-        path.relative_to(bundle).as_posix()
-        for path in bundle.rglob("*")
-        if path.is_file()
-        and (
-            path.suffix.lower() in FORBIDDEN_SUFFIXES
-            or "__pycache__" in path.parts
-            or path.name in {"Cargo.toml", "pyproject.toml", "uv.lock"}
-        )
-    ]
-    if forbidden and platform != "windows":
-        raise RuntimeError(f"bundle leaked source or development files: {forbidden}")
-
+    validate_bundle(bundle, manifest)
     leak_scan = "skipped"
     if not args.no_leak_scan:
         needles = build_leak_needles(
@@ -724,7 +903,8 @@ def main() -> int:
         archive,
         args.archive_type,
         bundle.name,
-        manifest if platform == "windows" else None,
+        manifest,
+        expected_target=args.expected_target,
     )
     pe_receipt = None
     if platform == "windows":
