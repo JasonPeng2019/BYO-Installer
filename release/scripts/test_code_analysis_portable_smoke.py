@@ -469,8 +469,9 @@ class Processes:
 
     def terminate_exact(self, identity: dict) -> bool | None:
         """Kill only the proved live exact identity; return proved-exit state."""
-        if self.alive(identity) is not True:
-            return self.alive(identity) is False or None
+        state = self.alive(identity)
+        if state is not True:
+            return True if state is False else None
         try:
             process = self.ps.Process(identity["pid"])
             if process.create_time() != identity["create_time"]:
@@ -478,8 +479,12 @@ class Processes:
             process.kill()
             process.wait(5)
         except self.ps.NoSuchProcess:
+            return True
+        except self.ps.TimeoutExpired:
+            # A non-parent cannot reap an orphan zombie. The fresh exact
+            # identity/status observation below still has to prove it nonlive.
             pass
-        except (self.ps.AccessDenied, OSError, self.ps.TimeoutExpired):
+        except (self.ps.AccessDenied, OSError):
             return None
         state = self.alive(identity)
         return None if state is None else not state
