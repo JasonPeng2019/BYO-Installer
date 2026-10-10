@@ -8,6 +8,8 @@ on:
       - 'release/scripts/acquire_arm_test_toolchain.py'
       - 'release/scripts/test_arm_test_toolchain.py'
       - 'release/scripts/acquire_analysis_inputs.py'
+      - 'release/scripts/run_installed_analysis_ci.py'
+      - 'release/scripts/test_installed_analysis_ci.py'
       - '.github/workflows/arm-test-input-contracts.yml'
   workflow_dispatch:
 
@@ -32,3 +34,6 @@ jobs:
       - name: Existing analyzer acquisition contracts
         if: success() || failure()
         run: python release/scripts/test_acquire_analysis_inputs.py
+      - name: Native installed analysis CI input binding
+        if: success() || failure()
+        run: python release/scripts/test_installed_analysis_ci.py
