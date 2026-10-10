@@ -80,6 +80,7 @@ jobs:
           enable-cache: false
 
       - name: Install pinned build dependencies
+        id: build-deps
         shell: bash
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
@@ -101,17 +102,6 @@ jobs:
         shell: bash
         run: cargo test --manifest-path launcher/Cargo.toml --locked 'install::tests::windows_'
 
-      - name: Run Windows analysis packaging negatives
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          python release/scripts/test_analysis_tools.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python release/scripts/test_build_release.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python release/scripts/test_verify_build_output.py --windows-only
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Prepare pinned analysis archives
         shell: bash
         env:
@@ -120,18 +110,27 @@ jobs:
           python release/scripts/acquire_analysis_inputs.py --expected-target "$EXPECTED_TARGET" --output "$RUNNER_TEMP/byo-analysis-inputs"
           echo "BYO_ANALYSIS_INPUT_DIR=$RUNNER_TEMP/byo-analysis-inputs" >> "$GITHUB_ENV"
 
-      - name: Run launcher and analysis source contracts
+      - name: Run launcher source contracts
         shell: bash
         run: |
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
-          python release/scripts/test_analysis_tools.py
-          python release/scripts/test_build_release.py
-          python release/scripts/test_verify_build_output.py
-          python release/scripts/test_analysis_portability.py
-          python release/scripts/test_acquire_analysis_inputs.py
-          python release/scripts/test_code_analysis_portable_smoke_controls.py
+
+      - name: Run analysis Python source contracts
+        if: (success() || failure()) && steps.build-deps.outcome == 'success'
+        shell: bash
+        run: |
+          result=0
+          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
+            if python "release/scripts/$script"; then
+              echo "PASS $script"
+            else
+              result=1
+              echo "FAIL $script"
+            fi
+          done
+          exit "$result"
 
       - name: Build native launcher, sidecar, SBOM, and archive
         if: runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
@@ -231,6 +230,7 @@ jobs:
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Install pinned Linux build toolchains
+        id: build-deps
         shell: bash
         run: |
           set -euo pipefail
@@ -277,7 +277,7 @@ jobs:
             --output "$input_dir/gcc-runtime"
           echo "BYO_ANALYSIS_INPUT_DIR=$input_dir" >> "$GITHUB_ENV"
 
-      - name: Run native Linux launcher and analysis source contracts
+      - name: Run native Linux launcher source contracts
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
@@ -285,9 +285,21 @@ jobs:
           cargo fmt --manifest-path launcher/Cargo.toml --check
           cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
           cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
+
+      - name: Run native Linux analysis Python source contracts
+        if: (success() || failure()) && steps.build-deps.outcome == 'success'
+        shell: bash
+        run: |
+          result=0
           for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
-            "$BYO_BUILD_PYTHON" "release/scripts/$script"
+            if "$BYO_BUILD_PYTHON" "release/scripts/$script"; then
+              echo "PASS $script"
+            else
+              result=1
+              echo "FAIL $script"
+            fi
           done
+          exit "$result"
 
       - name: Build native launcher, sidecar, SBOM, and archive
         if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
