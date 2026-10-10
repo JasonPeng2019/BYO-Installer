@@ -72,7 +72,7 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: ${{ runner.os == 'Windows' && '3.12.13' || '3.12' }}
+          python-version: '3.12'
 
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
@@ -84,6 +84,8 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # Build Python remains pinned; setup-python supplies the test host.
+            uv python install 3.12.13
             export UV_PYTHON=3.12.13
           fi
           uv sync --project "Firmware MCP New" --locked --all-groups
@@ -261,6 +263,14 @@ jobs:
           source_rpm=$(rpm -qf --qf '%{SOURCERPM}' "$compiler")
           gcc_package=$(rpm -qf --qf '%{NAME}' "$("$compiler" -print-file-name=libgcc.a)")
           notice=$(rpm -ql "$gcc_package" | grep '/COPYING3$')
+          # The manylinux image omits RPM documentation. Restore notices from
+          # the exact installed GCC package before measuring supplied inputs.
+          if [ ! -f "$notice" ] || [ ! -f "$(dirname "$notice")/COPYING.RUNTIME" ]; then
+            gcc_nevra=$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$gcc_package")
+            dnf --setopt=tsflags= --setopt=install_weak_deps=False reinstall --assumeyes "$gcc_nevra"
+          fi
+          test -s "$notice"
+          test -s "$(dirname "$notice")/COPYING.RUNTIME"
           "$BYO_BUILD_PYTHON" release/scripts/prepare_gcc_runtime_inputs.py \
             --compiler "$compiler" --notices "$(dirname "$notice")" \
             --package "$package" --source "AlmaLinux 8 source RPM: $source_rpm" \
