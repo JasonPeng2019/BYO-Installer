@@ -94,6 +94,36 @@ class InstalledAnalysisCiContracts(unittest.TestCase):
         acquire.assert_called_once()
         smoke.assert_not_called()
 
+    def test_sibling_retry_preserves_first_attempt_receipt(self):
+        code, _, _ = self.invoke()
+        self.assertEqual(code, 0)
+        first_path = self.root / "evidence/core.arm-test-input.json"
+        first_bytes = first_path.read_bytes()
+        self.arguments[self.arguments.index("--evidence") + 1] = str(
+            self.root / "evidence/core-retry"
+        )
+        self.arguments[self.arguments.index("--arm-input-dir") + 1] = str(
+            self.root / "arm-inputs-retry"
+        )
+        self.receipt = {**self.receipt, "compiler": str(self.root / "retry-compiler")}
+        code, _, _ = self.invoke()
+        self.assertEqual(code, 0)
+        self.assertEqual(first_path.read_bytes(), first_bytes)
+        second_path = self.root / "evidence/core-retry.arm-test-input.json"
+        self.assertEqual(json.loads(second_path.read_text()), self.receipt)
+        self.assertNotEqual(first_path.read_bytes(), second_path.read_bytes())
+
+    def test_existing_attempt_receipt_refuses_before_acquisition(self):
+        receipt_path = self.root / "evidence/core.arm-test-input.json"
+        receipt_path.parent.mkdir()
+        receipt_path.write_bytes(b"retained prior attempt")
+        with contextlib.redirect_stderr(io.StringIO()):
+            code, acquire, smoke = self.invoke()
+        self.assertEqual(code, 2)
+        acquire.assert_not_called()
+        smoke.assert_not_called()
+        self.assertEqual(receipt_path.read_bytes(), b"retained prior attempt")
+
     def test_missing_archive_refuses_before_acquisition(self):
         self.archive.unlink()
         with contextlib.redirect_stderr(io.StringIO()):
