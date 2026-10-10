@@ -698,6 +698,9 @@ mod tests {
 
     #[test]
     #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
+    // normal_exit_cleans_a_captured_detached_child needs this parent to exit
+    // while its child is live so the process owner must clean up the orphan.
+    #[allow(clippy::zombie_processes)]
     fn detached_process_fixture() {
         let root = std::env::current_dir().unwrap();
         if !root.join(".byo-posix-child-fixture").is_file() {
