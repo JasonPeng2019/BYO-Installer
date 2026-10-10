@@ -922,7 +922,12 @@ class TargetAndNamespaceTests(unittest.TestCase):
                         )
                 else:
                     self.assertFalse(any("GCC-" in path for path in licenses))
-                    self.assertIsNone(tools.classification(GCC_NOTICES[0], lock))
+                    for notice in GCC_NOTICES:
+                        with self.assertRaisesRegex(
+                            RuntimeError,
+                            "Unselected analysis payload: " + re.escape(notice),
+                        ):
+                            tools.classification(notice, lock)
 
 
 # --------------------------------------------------------------------------
@@ -1581,12 +1586,36 @@ class NativePayloadTests(unittest.TestCase):
             else leaf
             for leaf in files
         ]
-        with self.assertRaisesRegex(RuntimeError, "Pinned upstream bytes changed"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Analysis SBOM ownership/hash mismatch: " + re.escape(GCC_NOTICES[1]),
+        ):
             tools.validate_analysis(files, tampered.__getitem__, sbom, lock)
         lock, data, files, sbom = native_fixture("linux-x86_64")
         missing = [leaf for leaf in files if leaf["path"] != GCC_NOTICES[0]]
         with self.assertRaises((RuntimeError, KeyError)):
             tools.validate_analysis(missing, data.__getitem__, sbom, lock)
+
+    def test_gcc_notice_provenance_rejects_rehashed_inventory_and_file_sbom(
+        self,
+    ) -> None:
+        for notice in GCC_NOTICES:
+            with self.subTest(notice):
+                lock, data, files, sbom = native_fixture("linux-x86_64")
+                data[notice] = b"different toolchain notice text"
+                digest = sha256(data[notice])
+                for leaf in files:
+                    if leaf["path"] == notice:
+                        leaf.update(size=len(data[notice]), sha256=digest)
+                for component in sbom["components"]:
+                    if component["bom-ref"] == f"byo-analysis-file:{notice}":
+                        component["hashes"] = [{"alg": "SHA-256", "content": digest}]
+                # File hashes agree with the replacement bytes. The separately
+                # recorded GCC toolchain notice identity must still reject them.
+                with self.assertRaisesRegex(
+                    RuntimeError, "Pinned upstream bytes changed"
+                ):
+                    tools.validate_analysis(files, data.__getitem__, sbom, lock)
 
 
 class NativeModeAndStripTests(unittest.TestCase):

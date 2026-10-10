@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -297,12 +298,16 @@ class AcquisitionTests(unittest.TestCase):
         self.lock["programs"]["clangd"]["source"] = copy.deepcopy(
             self.lock["programs"]["cppcheck"]["source"]
         )
-        urlopen, calls = serve(self.urls())
+        shared = self.lock["programs"]["cppcheck"]["source"]
+        urlopen, calls = serve({shared["url"]: CPPCHECK_BYTES})
         receipt = self.acquire(urlopen)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [shared["url"]])
         self.assertEqual(
             [item["archive"] for item in receipt["archives"]], ["cppcheck-src.tar.gz"]
         )
+        self.assertEqual((self.output / shared["archive"]).read_bytes(), CPPCHECK_BYTES)
+        self.assertEqual(receipt["archives"][0]["sha256"], sha256(CPPCHECK_BYTES))
+        self.assertEqual(receipt["archives"][0]["size"], len(CPPCHECK_BYTES))
 
     def test_symlinked_output_directory_is_refused(self) -> None:
         real = self.root / "real"
@@ -689,7 +694,8 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
                     }
                     self.answers[name] = answer
                     with self.assertRaisesRegex(
-                        RuntimeError, f"Selected compiler cannot locate {name}"
+                        RuntimeError,
+                        re.escape(f"Selected compiler cannot locate {name}"),
                     ):
                         self.run_prepare()
                     self.assert_nothing_published()

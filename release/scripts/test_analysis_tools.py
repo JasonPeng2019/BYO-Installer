@@ -358,6 +358,7 @@ class WindowsAnalysisTests(unittest.TestCase):
             any(e["to"] == "analysis/cppcheck/local.dll" for e in receipt["imports"])
         )
 
+    @unittest.skipUnless(tools.os.name == "nt", "native Windows OS import resolution")
     def test_actual_system32_symbols_and_missing_symbol_blocker(self):
         result = tools.system_module("kernel32.dll", ["GetCurrentProcessId"])
         self.assertEqual(result["search"], "LOAD_LIBRARY_SEARCH_SYSTEM32")
@@ -393,6 +394,7 @@ class WindowsAnalysisTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 tools.safe_relative(path)
 
+    @unittest.skipUnless(tools.os.name == "nt", "native Windows staging")
     def test_source_inputs_missing_fail_before_build(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
