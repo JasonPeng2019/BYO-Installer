@@ -34,6 +34,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_code_analysis_portable_smoke as smoke  # noqa: E402
 import test_installed_e2e as e2e  # noqa: E402
+import verify_build_output as verifier  # noqa: E402
 
 SCRIPT = Path(smoke.__file__).resolve()
 HOST = "windows-host" if os.name == "nt" else "posix-host"
@@ -552,7 +553,11 @@ def stub_smoke(**attributes) -> smoke.Smoke:
 
 
 class ArchiveBinding(Temp):
-    """Archive bytes/modes/inventory must equal the expanded bundle before install."""
+    """Bind minimal non-product bytes through real archive and bundle checks.
+
+    Full analyzer/SBOM/native-image payload validation is a separate seam. These
+    synthetic leaves provide archive-binding controls, never execution evidence.
+    """
 
     def make(
         self,
@@ -565,7 +570,8 @@ class ArchiveBinding(Temp):
         name: str | None = None,
     ):
         bundle = self.dir / "byo-0.1.8-control"
-        leaves = {"byo": b"launcher bytes", "analysis/runtime.json": b"{}\n"}
+        launcher = smoke.exe_name(target, "byo")
+        leaves = {launcher: b"launcher bytes", "analysis/runtime.json": b"{}\n"}
         for relative, data in leaves.items():
             (bundle / relative).parent.mkdir(parents=True, exist_ok=True)
             (bundle / relative).write_bytes(data)
@@ -576,7 +582,8 @@ class ArchiveBinding(Temp):
             "files": [
                 {
                     "path": r,
-                    "executable": r == "byo",
+                    "kind": "launcher" if r == launcher else "analysis-manifest",
+                    "executable": r == launcher,
                     "sha256": hashlib.sha256(d).hexdigest(),
                     "size": len(d),
                 }
@@ -597,7 +604,7 @@ class ArchiveBinding(Temp):
             with zipfile.ZipFile(archive, "w") as handle:
                 for relative, data in contents.items():
                     info = zipfile.ZipInfo(f"{bundle.name}/{relative}")
-                    mode = archive_mode if relative == "byo" else 0o644
+                    mode = archive_mode if relative == launcher else 0o644
                     info.external_attr = (stat.S_IFREG | mode) << 16
                     handle.writestr(info, data)
         else:
@@ -605,7 +612,7 @@ class ArchiveBinding(Temp):
                 for relative, data in contents.items():
                     info = tarfile.TarInfo(f"{bundle.name}/{relative}")
                     info.size = len(data)
-                    info.mode = archive_mode if relative == "byo" else 0o644
+                    info.mode = archive_mode if relative == launcher else 0o644
                     handle.addfile(info, io.BytesIO(data))
                 if symlink:
                     info = tarfile.TarInfo(f"{bundle.name}/link")
@@ -619,25 +626,38 @@ class ArchiveBinding(Temp):
             bundle_before=smoke.tree_record(bundle),
         )
 
-    def bind(self, binder):
+    def bind(self, binder, *, isolate_payload=True):
         with mock.patch.object(
             smoke, "executable_bit", lambda path: path.name == "byo"
         ):
-            return binder.archive_binding()
+            if not isolate_payload:
+                return binder.archive_binding()
+            # Isolate only full product payload validation. validate_archive,
+            # archive_leaves and the digest/inventory/mode comparisons stay real.
+            with mock.patch.object(verifier, "validate_payload") as payload:
+                detail = binder.archive_binding()
+                payload.assert_called_once()
+                self.assertEqual(payload.call_args.args[0], binder.manifest)
+                return detail
 
     def reset(self):
         shutil.rmtree(self.dir)
         self.dir.mkdir()
 
     def test_green_zip_and_tar(self):
-        for target in ("macos-aarch64", "linux-x86_64"):
+        for target in smoke.PLATFORMS:
             with self.subTest(target=target):
                 binder = self.make(target)
                 detail = self.bind(binder)
                 self.assertEqual(
-                    (detail["leaves"], detail["posix_modes_checked"]), (3, 3)
+                    (detail["leaves"], detail["posix_modes_checked"]),
+                    (3, 0 if target.startswith("windows") else 3),
                 )
                 self.assertEqual(binder.report["archive"]["sha256"], detail["sha256"])
+                self.assertEqual(detail["sha256"], smoke.sha256(binder.args.archive))
+                self.assertEqual(
+                    detail["manifest_executables"], [smoke.exe_name(target, "byo")]
+                )
                 self.reset()
 
     def test_archive_digest_name_and_presence_are_setup(self):
@@ -656,17 +676,68 @@ class ArchiveBinding(Temp):
     def test_byte_inventory_mode_and_entry_type_mutations_are_red(self):
         cases = (
             ({"archived": {"byo": b"tampered launcher"}}, "bytes differ"),
-            ({"extra": {"stray.txt": b"x"}}, "inventories differ"),
+            (
+                {"extra": {"stray.txt": b"x"}},
+                r"Archive leaves differ from payload inventory: \['stray.txt'\]",
+            ),
             ({"archive_mode": 0o644}, "executable mode"),
-            ({"extra": {"../escape": b"x"}}, "outside the bundle root|static archive"),
+            ({"extra": {"../escape": b"x"}}, "Unsafe Windows payload path"),
         )
         for options, message in cases:
             with self.subTest(options=options):
                 with self.assertRaisesRegex(smoke.Red, message):
                     self.bind(self.make("macos-aarch64", **options))
                 self.reset()
-        with self.assertRaisesRegex(smoke.Red, "static archive|not a regular"):
+        with self.assertRaisesRegex(
+            smoke.Red, "tar archive contains a forbidden non-file"
+        ):
             self.bind(self.make("linux-x86_64", symlink=True))
+
+    def test_real_payload_inventory_and_permissions_reject_mutations(self):
+        # Exercise the shared payload verifier without seam isolation: each
+        # mutation must fail before the absent full analyzer/SBOM contract.
+        cases = (
+            (
+                {"archived": {"byo": b"tampered launcher"}},
+                "Payload inventory byte mismatch: byo",
+            ),
+            ({"archive_mode": 0o644}, "incorrect executable/data permissions: byo"),
+        )
+        for target in ("macos-aarch64", "macos-x86_64", "linux-x86_64"):
+            for options, message in cases:
+                with self.subTest(target=target, options=options):
+                    with self.assertRaisesRegex(smoke.Red, message):
+                        self.bind(self.make(target, **options), isolate_payload=False)
+                    self.reset()
+
+    def test_expanded_bundle_inventory_and_bytes_are_bound(self):
+        for target in ("macos-aarch64", "linux-x86_64"):
+            for mutation in ("bytes", "extra", "missing"):
+                with self.subTest(target=target, mutation=mutation):
+                    binder = self.make(target)
+                    if mutation == "bytes":
+                        (binder.bundle / "byo").write_bytes(b"changed expanded bytes")
+                    elif mutation == "extra":
+                        (binder.bundle / "stray.txt").write_bytes(b"x")
+                    else:
+                        (binder.bundle / "byo").unlink()
+                    binder.bundle_before = smoke.tree_record(binder.bundle)
+                    message = (
+                        "archive bytes differ from the expanded bundle"
+                        if mutation == "bytes"
+                        else "archive/bundle inventories differ"
+                    )
+                    with self.assertRaisesRegex(smoke.Red, message):
+                        self.bind(binder)
+                    self.reset()
+
+    def test_archive_manifest_must_match_expanded_manifest(self):
+        binder = self.make("macos-aarch64")
+        binder.manifest["architecture"] = "x86_64"
+        with self.assertRaisesRegex(
+            smoke.Red, "Archive manifest differs from the assembled bundle"
+        ):
+            self.bind(binder)
 
 
 COMPANION_STUB = """
@@ -920,19 +991,72 @@ class InstalledE2eResourceAllowance(Temp):
         with self.assertRaisesRegex(e2e.AcceptanceFailure, "producer dependency"):
             self.unexpected(other_target)
 
-    def test_current_repository_lock_is_windows_only_seam(self):
-        windows = {"platform": "windows", "architecture": "x86_64"}
-        resources = e2e.locked_analysis_resources(windows)
-        self.assertTrue(resources)
-        self.assertTrue(
-            all(p.startswith("analysis/clangd/lib/clang/") for p in resources)
-        )
+    def test_current_repository_lock_has_exact_four_target_resources(self):
+        lock = json.loads(e2e.ANALYSIS_LOCK.read_bytes())
+        identities = {
+            "windows-x86_64": ("windows", "x86_64"),
+            "macos-aarch64": ("macos", "aarch64"),
+            "macos-x86_64": ("macos", "x86_64"),
+            "linux-x86_64": ("linux", "x86_64"),
+        }
+        self.assertEqual(lock["schema_version"], 2)
+        self.assertEqual(set(lock["targets"]), set(identities))
+        for target, (system, architecture) in identities.items():
+            with self.subTest(target=target):
+                record = lock["targets"][target]
+                self.assertEqual(
+                    (record["platform"], record["architecture"]),
+                    (system, architecture),
+                )
+                expected = {
+                    leaf["runtime_path"]: {
+                        "sha256": leaf["sha256"],
+                        "size": leaf["size"],
+                    }
+                    for program in record["programs"].values()
+                    for leaf in program["selected_files"]
+                    if leaf["kind"] == "analysis-resource"
+                }
+                resources = e2e.locked_analysis_resources(
+                    {"platform": system, "architecture": architecture}
+                )
+                self.assertTrue(expected)
+                self.assertEqual(resources, expected)
+                self.assertTrue(
+                    all(p.startswith("analysis/clangd/lib/clang/") for p in resources)
+                )
+                self.assertIn(self.HEADER, resources)
+
+    def test_target_key_cannot_borrow_another_targets_resources(self):
+        lock = self.lock(self.record())
+        manifest = {**self.manifest, "platform": "macos"}
         with self.assertRaisesRegex(e2e.AcceptanceFailure, "producer dependency"):
-            e2e.locked_analysis_resources(self.manifest)
-        print(
-            f"\n[{HOST}] repository lock: {len(resources)} Windows resource leaves; "
-            "no native macOS/Linux target record (producer dependency)",
-            file=sys.stderr,
+            self.unexpected(lock, manifest=manifest)
+
+    def test_shared_resource_path_keeps_exact_target_identity(self):
+        lock = self.dir / "multiple-targets.json"
+        foreign_digest = "0" * 64
+        lock.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "targets": {
+                        "linux-x86_64": self.record(),
+                        "macos-x86_64": {
+                            **self.record(sha256=foreign_digest),
+                            "platform": "macos",
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(self.unexpected(lock, [self.HEADER]), [])
+        macos = {**self.manifest, "platform": "macos"}
+        self.assertEqual(self.unexpected(lock, [self.HEADER], macos), [self.HEADER])
+        self.assertEqual(
+            e2e.locked_analysis_resources(macos, lock)[self.HEADER]["sha256"],
+            foreign_digest,
         )
 
 
