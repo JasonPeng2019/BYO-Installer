@@ -7,6 +7,8 @@ on:
       - 'release/arm-test-toolchains.json'
       - 'release/scripts/acquire_arm_test_toolchain.py'
       - 'release/scripts/test_arm_test_toolchain.py'
+      - 'release/scripts/check_arm_test_input.py'
+      - 'release/scripts/test_arm_native_input.py'
       - 'release/scripts/acquire_analysis_inputs.py'
       - 'release/scripts/run_installed_analysis_ci.py'
       - 'release/scripts/test_installed_analysis_ci.py'
@@ -37,3 +39,6 @@ jobs:
       - name: Native installed analysis CI input binding
         if: success() || failure()
         run: python release/scripts/test_installed_analysis_ci.py
+      - name: Native compiler failure receipt contracts
+        if: success() || failure()
+        run: python release/scripts/test_arm_native_input.py
