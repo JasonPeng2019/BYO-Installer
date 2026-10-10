@@ -1,5 +1,8 @@
 # Code analysis portability contract
 
+The [POSIX lifecycle scope decision](code-analysis-posix-lifecycle-scope.md)
+clarifies the owned group and observed-descendant cleanup requirements below.
+
 Contract candidate for ROOT acceptance, 2026-10-10. This module specifies source
 implementation; it implements no runtime or builder and establishes no native
 macOS/Linux execution, shipping, signing or publication acceptance. The approved
