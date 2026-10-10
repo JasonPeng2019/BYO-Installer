@@ -15,7 +15,6 @@ from unittest import SkipTest
 from unittest.mock import patch
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +23,7 @@ import json
 import build_release as br
 from test_analysis_tools import fixture, pe
 import analysis_tools
+import verify_build_output
 
 SEP = "\x1f"
 
@@ -119,12 +119,18 @@ def check_windows_output_destination(output_kind: str) -> None:
             patch.object(br, "toolchain_provenance", return_value={}),
             patch.object(analysis_tools, "stage_windows", return_value=None),
             patch.object(analysis_tools, "stage_windows_native"),
+            # Analyzer staging is mocked here, so the final archive validator
+            # is a seam; its own contracts live in test_verify_build_output.py.
+            patch.object(verify_build_output, "validate_archive") as validated,
         ):
             assert br.main() == 0
         assert len(self_tests) == 1, self_tests
         assert (expected_bundle / "release-manifest.json").is_file()
         archive = expected_output / f"{expected_bundle.name}.zip"
         assert archive.is_file()
+        assert validated.call_count == 1, validated.call_args_list
+        assert Path(validated.call_args.args[0]) == archive, validated.call_args
+        assert validated.call_args.kwargs.get("expected_target") == "windows-x86_64"
         assert (expected_output / f"{expected_bundle.name}.sha256").read_text() == (
             f"{br.digest(archive)}  {archive.name}\n"
         )
@@ -193,131 +199,83 @@ def test_public_launcher_closure_rejects_bundle_only_crt() -> None:
         assert list(br.public_launcher_closure(launcher)["images"]) == ["byo.exe"]
 
 
-def windows_input_step(workflow: str) -> str:
-    # Extract the exact preparation block; execute it locally with fixture
-    # downloads, so a missing hash guard or early GITHUB_ENV write fails.
-    match = re.search(
-        r"      - name: Prepare pinned Windows analysis inputs\n"
-        r"(?:(?!      - name:).)*?        run: \|\n"
-        r"((?:          [^\n]*\n|\n)+)",
-        workflow,
-        re.DOTALL,
-    )
-    assert match, "Windows job has no pinned analysis input preparation"
-    return "\n".join(line[10:] for line in match[1].splitlines())
+BUILD_INVOCATION = re.compile(r"release/scripts/build_release\.py ")
+ACQUIRE = re.compile(
+    r"release/scripts/acquire_analysis_inputs\.py --expected-target "
+    r"(\"\$EXPECTED_TARGET\"|[a-z0-9_-]+) --output (\"[^\"]+\")"
+)
 
 
-def test_windows_workflows_prepare_hash_checked_inputs_for_every_stage() -> None:
-    for filename, job, stages in (
-        ("build-matrix.yml", "build", 1),
-        ("release.yml", "windows", 2),
-    ):
-        workflow = (br.ROOT / ".github/workflows" / filename).read_text("utf-8")
-        # Job steps are indented more than two spaces.
-        section = re.split(r"\n  [a-z][\w-]*:\n", workflow.split(f"  {job}:\n", 1)[1])[
-            0
-        ]
-        script = windows_input_step(section)
-        python_version = analysis_tools.load_lock()["windows_native"]["source"][
-            "python_version"
-        ]
-        assert python_version in section, (
-            "Windows build Python must match pinned native inputs"
-        )
-        assert "Get-FileHash" in script and "$source.sha256" in script
-        assert "BYO_ANALYSIS_INPUT_DIR=" in script
-        calls = [
-            line
-            for line in section.splitlines()
-            if "python release/scripts/build_release.py " in line
-        ]
-        if job == "build":
-            # The other-platform build step is explicitly excluded on Windows.
-            assert "if: runner.os != 'Windows'" in section
-            calls = [line for line in calls if "--analysis-input-dir" in line]
-        assert len(calls) == stages, calls
-        assert all(
-            '"$BYO_ANALYSIS_INPUT_DIR"' in line
-            or '"${{ env.BYO_ANALYSIS_INPUT_DIR }}"' in line
-            for line in calls
-        )
-        assert section.index("Prepare pinned Windows analysis inputs") < section.index(
-            "python release/scripts/build_release.py "
-        )
+def workflow_jobs(filename: str) -> tuple[str, dict[str, str]]:
+    text = (br.ROOT / ".github/workflows" / filename).read_text("utf-8")
+    parts = re.split(r"(?m)^  ([a-z][\w-]*):\n", text.split("\njobs:\n", 1)[1])
+    return text, dict(zip(parts[1::2], parts[2::2]))
 
 
-def test_windows_input_preparation_refuses_changed_downloads() -> None:
-    if os.name != "nt":
-        raise SkipTest("native Windows input preparation")
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    assert powershell, "Windows PowerShell is required"
+def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
+    # Workflow contract (static text; pending until ROOT integrates the
+    # workflows): each archive build first runs the explicit target-pinned
+    # acquisition CLI and passes exactly that directory to build_release.py.
+    expected = {
+        ("build-matrix.yml", "build"): ({"macos-aarch64", "macos-x86_64", "windows-x86_64"}, 2),
+        ("build-matrix.yml", "linux-x86_64"): ({"linux-x86_64"}, 1),
+        ("release.yml", "build"): ({"macos-aarch64", "macos-x86_64", "linux-x86_64"}, 1),
+        ("release.yml", "windows"): ({"windows-x86_64"}, 2),
+    }
+    seen = set()
+    windows_python = analysis_tools.load_lock(target="windows-x86_64")["windows_native"][
+        "source"
+    ]["python_version"]
     for filename in ("build-matrix.yml", "release.yml"):
-        script = windows_input_step(
-            (br.ROOT / ".github/workflows" / filename).read_text("utf-8")
-        )
-        for corrupt in (False, True):
-            with tempfile.TemporaryDirectory(prefix="byo-ci-inputs-") as temporary:
-                root = Path(temporary)
-                (root / "release").mkdir()
-                payload = b"pinned test archive"
-                sources = {
-                    name: {
-                        "archive": f"{name}.zip",
-                        "url": f"https://example.invalid/{name}",
-                        "sha256": analysis_tools.sha256(payload),
-                    }
-                    for name in ("cppcheck", "clangd")
-                }
-                lock = {
-                    "programs": {
-                        name: {"source": source} for name, source in sources.items()
-                    }
-                }
-                (root / "release/analysis-tools.lock.json").write_text(
-                    json.dumps(lock), "utf-8"
-                )
-                (root / "payload").write_bytes(payload)
-                (root / "corrupt").write_bytes(b"changed archive")
-                fixture_script = root / "prepare.ps1"
-                fixture_script.write_text(
-                    "function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing) "
-                    "$fixture='payload'; if ($env:BYO_TEST_BAD_INPUT -eq '1' -and $Uri.EndsWith('/clangd')) { $fixture='corrupt' }; "
-                    "Copy-Item -LiteralPath $fixture -Destination $OutFile }\n"
-                    + script,
-                    "utf-8",
-                )
-                completed = subprocess.run(
-                    [
-                        powershell,
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-File",
-                        str(fixture_script),
-                    ],
-                    cwd=root,
-                    env={
-                        **os.environ,
-                        "RUNNER_TEMP": str(root),
-                        "GITHUB_ENV": str(root / "github-env"),
-                        "BYO_TEST_BAD_INPUT": "1" if corrupt else "0",
-                    },
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if corrupt:
-                    assert completed.returncode != 0, completed.stdout
-                    assert "SHA-256 mismatch" in completed.stderr
-                    assert not (root / "github-env").exists()
+        text, jobs = workflow_jobs(filename)
+        # Inline lock parsing/downloads would bypass the hash-pinned CLI.
+        for forbidden in ("Invoke-WebRequest", "Get-FileHash", "ConvertFrom-Json"):
+            assert forbidden not in text, (filename, forbidden)
+        for job, section in jobs.items():
+            builds = [
+                line for line in section.splitlines() if BUILD_INVOCATION.search(line)
+            ]
+            if not builds:
+                continue
+            seen.add((filename, job))
+            targets, count = expected[(filename, job)]
+            assert len(builds) == count, (filename, job, builds)
+            acquisitions = list(ACQUIRE.finditer(section))
+            assert len(acquisitions) == 1, (filename, job)
+            acquisition = acquisitions[0]
+            target = acquisition[1]
+            if target == '"$EXPECTED_TARGET"':
+                assert "EXPECTED_TARGET: ${{ matrix.target }}" in section[: acquisition.start()]
+                matrix = set(re.findall(r"(?m)^ +- target: ([a-z0-9_-]+)$", section))
+                assert matrix == targets, (filename, job, matrix)
+            else:
+                assert {target} == targets, (filename, job, target)
+            first_build = min(section.index(line) for line in builds)
+            assert acquisition.start() < first_build, (filename, job)
+            assert "BYO_ANALYSIS_INPUT_DIR=" in section[acquisition.end() : first_build]
+            for line in builds:
+                if '"${args[@]}"' in line:
+                    arrays = re.findall(r"(?m)^ +args=\((.*)\)$", section)
+                    assert any('--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in a for a in arrays)
                 else:
-                    assert completed.returncode == 0, completed.stderr
-                    for source in sources.values():
-                        assert (
-                            root / "byo-analysis-inputs" / source["archive"]
-                        ).read_bytes() == payload
-                    assert "BYO_ANALYSIS_INPUT_DIR=" in (root / "github-env").read_text(
-                        "utf-8-sig"
-                    )
+                    assert '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in line, line
+            if "windows-x86_64" in targets:
+                assert windows_python in section, (
+                    "Windows build Python must match pinned native inputs"
+                )
+            if "linux-x86_64" in targets:
+                # Linux Cppcheck needs measured GCC runtime inputs in the same
+                # directory before the build; never generated by the builder.
+                staging = section[acquisition.end() : first_build]
+                assert "/gcc-runtime" in staging, (filename, job)
+                if "prepare_gcc_runtime_inputs.py" in staging:
+                    for flag in ("--compiler", "--notices", "--package", "--source", "--output"):
+                        assert flag in staging, (filename, job, flag)
+                    assert '--output "$input_dir/gcc-runtime"' in staging
+                else:
+                    for leaf in ("COPYING3", "COPYING.RUNTIME", "provenance.json"):
+                        assert leaf in staging, (filename, job, leaf)
+    assert seen == set(expected), seen
 
 
 def test_release_version_defaults_to_matching_component_metadata() -> None:

@@ -42,7 +42,9 @@ def pe(ordinary: str | None = None, delay: str | None = None) -> bytes:
 
 
 def fixture() -> tuple[dict, dict[str, bytes], list[dict], dict]:
-    lock = copy.deepcopy(tools.load_lock())
+    # Windows regression fixture: always the explicit Windows lock record,
+    # independent of the host that runs these platform-neutral tests.
+    lock = copy.deepcopy(tools.load_lock(target="windows-x86_64"))
     data = {}
     for name, program in lock["programs"].items():
         selected = [f for f in program["selected_files"] if f["kind"] == "license"]
@@ -198,7 +200,8 @@ class WindowsAnalysisTests(unittest.TestCase):
             )
 
     def test_pinned_selection_counts_and_portable_recipe(self):
-        lock = tools.load_lock()
+        lock = tools.load_lock(target="windows-x86_64")
+        self.assertEqual((lock["platform"], lock["architecture"]), ("windows", "x86_64"))
         cpp = lock["programs"]["cppcheck"]["selected_files"]
         clang = lock["programs"]["clangd"]["selected_files"]
         self.assertEqual(

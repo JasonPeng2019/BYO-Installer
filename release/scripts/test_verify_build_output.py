@@ -12,7 +12,14 @@ from __future__ import annotations
 
 import struct
 import argparse
+import contextlib
+import io
 import json
+import os
+import stat
+import sys
+import tarfile
+import types
 import zipfile
 from unittest.mock import patch
 import tempfile
@@ -177,6 +184,9 @@ def _elf(section_names: list[str]) -> bytes:
         struct.pack_into(
             "<Q", data, header + 24, strtab_off if name == ".shstrtab" else 0
         )
+        if name == ".shstrtab":
+            # sh_size bounds every name lookup; a zero size is an invalid table.
+            struct.pack_into("<Q", data, header + 32, len(strtab))
     data[strtab_off : strtab_off + len(strtab)] = strtab
     return bytes(data)
 
@@ -257,7 +267,12 @@ def test_windows_zip_actual_bytes_and_resource_negatives() -> None:
             "sha256": analysis_tools.sha256(data["sbom.cdx.json"]),
         }
     )
-    manifest = {"platform": "windows", "development_unsigned": True, "files": files}
+    manifest = {
+        "platform": "windows",
+        "architecture": "x86_64",
+        "development_unsigned": True,
+        "files": files,
+    }
     data["release-manifest.json"] = json.dumps(manifest).encode()
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / "byo-test.zip"
@@ -342,6 +357,397 @@ def test_windows_inventory_rejects_rehashed_arbitrary_source() -> None:
                 raise AssertionError(path)
             except RuntimeError as error:
                 assert "source/development" in str(error), error
+
+
+# Native archive contract. These are platform-neutral: they build archives in
+# memory and never execute payload bytes. `validate_payload` is replaced so each
+# check isolates the archive layer (type, target, modes, entry kinds); native
+# payload bytes are covered by test_analysis_portability.py.
+SOURCE_LOCK = {
+    "agent_workspace": {"repository": "example/agent", "commit": "a" * 40},
+    "firmware_mcp": {"repository": "example/firmware", "commit": "b" * 40},
+}
+SOURCE = {
+    key: {"repository": value["repository"], "commit": value["commit"]}
+    for key, value in SOURCE_LOCK.items()
+}
+EXECUTABLE = b"native payload bytes are never executed"
+
+
+def _native_manifest(platform: str, architecture: str) -> dict:
+    return {
+        "platform": platform,
+        "architecture": architecture,
+        "development_unsigned": True,
+        "source": SOURCE,
+        "files": [
+            {
+                "path": "bin/byo",
+                "sha256": analysis_tools.sha256(EXECUTABLE),
+                "size": len(EXECUTABLE),
+                "kind": "executable",
+                "executable": True,
+            }
+        ],
+    }
+
+
+def _entries(manifest: dict, overrides: dict | None = None) -> list[tuple]:
+    """(name, data or None for a directory, mode, tar type) in archive order."""
+    entries = {
+        "byo-test": (None, 0o755, tarfile.DIRTYPE),
+        "byo-test/bin": (None, 0o755, tarfile.DIRTYPE),
+        "byo-test/bin/byo": (EXECUTABLE, 0o755, tarfile.REGTYPE),
+        "byo-test/release-manifest.json": (
+            json.dumps(manifest).encode(),
+            0o644,
+            tarfile.REGTYPE,
+        ),
+    }
+    entries.update(overrides or {})
+    return [(name, *value) for name, value in entries.items()]
+
+
+def _write_tar(path: Path, entries) -> None:
+    with tarfile.open(path, "w:gz") as output:
+        for name, data, mode, kind in entries:
+            info = tarfile.TarInfo(name)
+            info.mode, info.type = mode, kind
+            if kind in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
+                info.linkname = "byo-test/bin/byo"
+            if data is None or kind != tarfile.REGTYPE:
+                output.addfile(info)
+            else:
+                info.size = len(data)
+                output.addfile(info, io.BytesIO(data))
+
+
+def _write_zip(path: Path, entries) -> None:
+    with zipfile.ZipFile(path, "w") as output:
+        for name, data, mode, kind in entries:
+            if data is None:
+                info = zipfile.ZipInfo(name + "/")
+                info.external_attr = ((stat.S_IFDIR | mode) << 16) | 0x10
+                output.writestr(info, b"")
+                continue
+            info = zipfile.ZipInfo(name)
+            file_type = stat.S_IFLNK if kind == tarfile.SYMTYPE else stat.S_IFREG
+            info.external_attr = (file_type | mode) << 16
+            output.writestr(info, data)
+
+
+def _expect_archive_error(archive: Path, kind: str, manifest, fragment: str, **kw):
+    with patch.object(vbo, "validate_payload") as payload:
+        try:
+            vbo.validate_archive(archive, kind, "byo-test", manifest, **kw)
+        except RuntimeError as error:
+            assert fragment in str(error), (fragment, error)
+        else:
+            raise AssertionError(f"accepted archive; expected {fragment!r}")
+        assert not payload.called, "payload validated after archive rejection"
+
+
+def test_native_tar_and_zip_archives_bind_target_type_and_modes() -> None:
+    cases = (
+        ("linux", "x86_64", "linux-x86_64-glibc-2.28", "tar.gz", ".tar.gz", _write_tar),
+        ("macos", "aarch64", "macos-aarch64", "zip", ".zip", _write_zip),
+        ("macos", "x86_64", "macos-x86_64", "zip", ".zip", _write_zip),
+    )
+    for platform, architecture, target, kind, suffix, write in cases:
+        manifest = _native_manifest(platform, architecture)
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / f"byo-test{suffix}"
+            write(archive, _entries(manifest))
+            with patch.object(vbo, "validate_payload") as payload:
+                vbo.validate_archive(
+                    archive, kind, "byo-test", manifest, expected_target=target
+                )
+            assert payload.call_count == 1, target
+            checked, read_bytes = payload.call_args.args
+            read_mode = payload.call_args.kwargs["read_mode"]
+            assert checked == manifest, target
+            assert read_bytes("bin/byo") == EXECUTABLE, target
+            assert read_mode("bin/byo") == 0o755, target
+            assert read_mode("release-manifest.json") == 0o644, target
+
+            other = "windows-x86_64" if platform != "windows" else "linux-x86_64"
+            _expect_archive_error(
+                archive, kind, manifest, "differs from explicit target",
+                expected_target=other,
+            )
+            sibling = {"aarch64": "x86_64", "x86_64": "aarch64"}[architecture]
+            if platform == "macos":
+                _expect_archive_error(
+                    archive, kind, manifest, "differs from explicit target",
+                    expected_target=f"macos-{sibling}",
+                )
+            _expect_archive_error(
+                archive, kind, {**manifest, "version": "other"}, "manifest differs"
+            )
+            write(
+                archive,
+                _entries(manifest, {"byo-test/bin": (None, 0o700, tarfile.DIRTYPE)}),
+            )
+            _expect_archive_error(archive, kind, manifest, "directory permissions")
+            write(
+                archive,
+                _entries(
+                    manifest,
+                    {
+                        "byo-test/release-manifest.json": (
+                            json.dumps(manifest).encode(),
+                            0o600,
+                            tarfile.REGTYPE,
+                        )
+                    },
+                ),
+            )
+            _expect_archive_error(archive, kind, manifest, "metadata permissions")
+            write(
+                archive,
+                _entries(
+                    manifest, {"byo-test/extra": (None, 0o755, tarfile.DIRTYPE)}
+                ),
+            )
+            _expect_archive_error(archive, kind, manifest, "misplaced directory")
+            write(
+                archive,
+                _entries(
+                    manifest, {"byo-test/bin/extra": (b"x", 0o644, tarfile.REGTYPE)}
+                ),
+            )
+            _expect_archive_error(archive, kind, manifest, "payload inventory")
+
+
+def test_native_archive_type_and_suffix_follow_target() -> None:
+    for platform, architecture, wrong_kind, write in (
+        ("linux", "x86_64", "zip", _write_zip),
+        ("macos", "aarch64", "tar.gz", _write_tar),
+        ("macos", "x86_64", "tar.gz", _write_tar),
+    ):
+        manifest = _native_manifest(platform, architecture)
+        with tempfile.TemporaryDirectory() as temporary:
+            suffix = ".zip" if wrong_kind == "zip" else ".tar.gz"
+            archive = Path(temporary) / f"byo-test{suffix}"
+            write(archive, _entries(manifest))
+            _expect_archive_error(archive, wrong_kind, manifest, "Archive type differs")
+    with tempfile.TemporaryDirectory() as temporary:
+        manifest = _native_manifest("linux", "x86_64")
+        tgz = Path(temporary) / "byo-test.tgz"
+        _write_tar(tgz, _entries(manifest))
+        _expect_archive_error(tgz, "tar.gz", manifest, "did not produce a .tar.gz")
+        not_zip = Path(temporary) / "byo-test.tar"
+        _write_zip(not_zip, _entries(_native_manifest("macos", "aarch64")))
+        _expect_archive_error(not_zip, "zip", None, "did not produce a .zip")
+        _expect_archive_error(tgz, "tar", manifest, "unsupported archive contract")
+
+
+def test_native_archives_reject_links_and_special_entries() -> None:
+    manifest = _native_manifest("linux", "x86_64")
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / "byo-test.tar.gz"
+        for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE, tarfile.CHRTYPE):
+            _write_tar(
+                archive,
+                _entries(manifest, {"byo-test/bin/link": (None, 0o755, kind)}),
+            )
+            _expect_archive_error(archive, "tar.gz", manifest, "forbidden non-file")
+        _write_tar(
+            archive,
+            _entries(manifest, {"byo-test/bin/byo": (None, 0o755, tarfile.SYMTYPE)}),
+        )
+        _expect_archive_error(archive, "tar.gz", manifest, "forbidden non-file")
+        _write_tar(
+            archive,
+            _entries(manifest, {"byo-test/../escape": (b"x", 0o644, tarfile.REGTYPE)}),
+        )
+        _expect_archive_error(archive, "tar.gz", manifest, "Unsafe")
+    macos = _native_manifest("macos", "aarch64")
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / "byo-test.zip"
+        _write_zip(
+            archive,
+            _entries(macos, {"byo-test/bin/link": (b"byo", 0o755, tarfile.SYMTYPE)}),
+        )
+        _expect_archive_error(archive, "zip", macos, "forbidden non-file")
+        with zipfile.ZipFile(archive, "w") as output:
+            for name, data, mode, _ in _entries(macos):
+                info = zipfile.ZipInfo(name + ("/" if data is None else ""))
+                info.external_attr = (stat.S_IFREG | mode) << 16
+                output.writestr(info, data or b"")
+        _expect_archive_error(archive, "zip", macos, "directory spelling")
+
+
+class _CommandLine:
+    """Run `verify_build_output.py analysis-archive` against a temporary root."""
+
+    def __init__(self, temporary: str) -> None:
+        self.root = Path(temporary) / "root"
+        (self.root / "release").mkdir(parents=True)
+        (self.root / "release/source-lock.json").write_text(json.dumps(SOURCE_LOCK))
+        self.receipt = Path(temporary) / "receipt.json"
+        self.locks: list[str] = []
+        self.native = types.ModuleType("native_formats")
+        self.native.validate_closure = lambda lock, read_bytes: {
+            "native_closure": lock["target"],
+            "manifest_seen": bool(read_bytes("release-manifest.json")),
+        }
+
+    def load_lock(self, *, target=None, **_):
+        self.locks.append(target)
+        return {"target": target}
+
+    def run(self, *argv: str):
+        output = io.StringIO()
+        with patch.object(vbo, "ROOT", self.root), patch.object(
+            vbo, "validate_archive"
+        ) as validated, patch.object(
+            analysis_tools, "load_lock", side_effect=self.load_lock
+        ), patch.object(
+            analysis_tools,
+            "validate_pe_closure",
+            return_value={"pe_closure": "checked"},
+        ) as pe, patch.dict(
+            sys.modules, {"native_formats": self.native}
+        ), patch.object(
+            sys, "argv", ["verify_build_output.py", *argv]
+        ), contextlib.redirect_stdout(output):
+            code = vbo.main()
+        return code, validated, pe, output.getvalue()
+
+
+def _cli_archive(directory: Path, platform: str, architecture: str, **manifest_changes):
+    manifest = {**_native_manifest(platform, architecture), **manifest_changes}
+    if platform == "linux":
+        archive = directory / "byo-test.tar.gz"
+        _write_tar(archive, _entries(manifest))
+    else:
+        archive = directory / "byo-test.zip"
+        _write_zip(archive, _entries(manifest))
+    return archive, manifest
+
+
+def test_analysis_archive_cli_requires_target_and_writes_receipt() -> None:
+    cases = (
+        ("linux", "x86_64", "linux-x86_64-glibc-2.28", "linux-x86_64", "tar.gz"),
+        ("macos", "aarch64", "macos-aarch64", "macos-aarch64", "zip"),
+        ("macos", "x86_64", "macos-x86_64", "macos-x86_64", "zip"),
+        ("windows", "x86_64", "windows-x86_64", "windows-x86_64", "zip"),
+    )
+    for platform, architecture, spelled, target, kind in cases:
+        with tempfile.TemporaryDirectory() as temporary:
+            cli = _CommandLine(temporary)
+            archive, manifest = _cli_archive(Path(temporary), platform, architecture)
+            code, validated, pe, printed = cli.run(
+                "analysis-archive",
+                "--expected-target", spelled,
+                "--archive", str(archive),
+                "--receipt", str(cli.receipt),
+            )
+            assert code == 0, target
+            assert validated.call_count == 1, target
+            args, kwargs = validated.call_args
+            assert (Path(args[0]), args[1], args[2], args[3]) == (
+                archive, kind, "byo-test", manifest
+            ), target
+            assert kwargs == {"expected_target": target}, target
+            receipt = json.loads(cli.receipt.read_text())
+            assert receipt["target"] == target
+            assert receipt["source"] == SOURCE
+            assert receipt["archive_sha256"] == vbo.sha256(archive)
+            assert receipt["manifest_sha256"] == analysis_tools.sha256(
+                json.dumps(manifest).encode()
+            )
+            assert json.loads(printed)["archive_sha256"] == receipt["archive_sha256"]
+            if platform == "windows":
+                assert pe.call_count == 1 and receipt["pe_closure"] == "checked"
+                assert cli.locks == []
+            else:
+                assert not pe.called
+                assert cli.locks == [target], cli.locks
+                assert receipt["native_closure"] == target
+            native_on_windows = os.name == "nt" and platform != "windows"
+            assert receipt["evidence_kind"].startswith(
+                "Windows-host platform-neutral" if native_on_windows else "static archive"
+            ), receipt["evidence_kind"]
+
+            # The generic command has no implicit or host-derived target.
+            cli.receipt.unlink()
+            try:
+                cli.run("analysis-archive", "--archive", str(archive), "--receipt", str(cli.receipt))
+                raise AssertionError("analysis-archive accepted a missing target")
+            except SystemExit as exit_:
+                assert exit_.code == 2
+            assert not cli.receipt.exists()
+
+
+def test_windows_analysis_archive_alias_is_retained_and_windows_only() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        cli = _CommandLine(temporary)
+        archive, manifest = _cli_archive(Path(temporary), "windows", "x86_64")
+        code, validated, pe, _ = cli.run(
+            "windows-analysis-archive", "--archive", str(archive), "--receipt", str(cli.receipt)
+        )
+        assert code == 0 and pe.call_count == 1
+        assert validated.call_args.kwargs == {"expected_target": "windows-x86_64"}
+        assert json.loads(cli.receipt.read_text())["target"] == "windows-x86_64"
+        for other in ("linux-x86_64", "macos-aarch64", "macos-x86_64"):
+            cli.receipt.unlink(missing_ok=True)
+            try:
+                cli.run(
+                    "windows-analysis-archive",
+                    "--expected-target", other,
+                    "--archive", str(archive),
+                    "--receipt", str(cli.receipt),
+                )
+                raise AssertionError(f"alias accepted {other}")
+            except RuntimeError as error:
+                assert "requires Windows x86_64" in str(error), error
+            assert not cli.receipt.exists()
+
+
+def test_analysis_archive_cli_rejects_source_pin_and_root_manifest_drift() -> None:
+    drifted = {
+        "agent_workspace": {**SOURCE["agent_workspace"], "commit": "c" * 40},
+        "firmware_mcp": SOURCE["firmware_mcp"],
+    }
+    for source in (drifted, {"agent_workspace": SOURCE["agent_workspace"]}, {}):
+        with tempfile.TemporaryDirectory() as temporary:
+            cli = _CommandLine(temporary)
+            archive, _ = _cli_archive(Path(temporary), "linux", "x86_64", source=source)
+            try:
+                cli.run(
+                    "analysis-archive",
+                    "--expected-target", "linux-x86_64",
+                    "--archive", str(archive),
+                    "--receipt", str(cli.receipt),
+                )
+                raise AssertionError("source pin drift passed")
+            except RuntimeError as error:
+                assert "source pin mismatch" in str(error), error
+            assert not cli.receipt.exists()
+    with tempfile.TemporaryDirectory() as temporary:
+        cli = _CommandLine(temporary)
+        manifest = _native_manifest("macos", "aarch64")
+        archive = Path(temporary) / "byo-test.zip"
+        entries = _entries(manifest)
+        second = [(n.replace("byo-test", "byo-other", 1), d, m, k) for n, d, m, k in entries]
+        for layout in ([], entries + second):
+            if layout:
+                _write_zip(archive, layout)
+            else:
+                zipfile.ZipFile(archive, "w").close()
+            try:
+                cli.run(
+                    "analysis-archive",
+                    "--expected-target", "macos-aarch64",
+                    "--archive", str(archive),
+                    "--receipt", str(cli.receipt),
+                )
+                raise AssertionError("ambiguous root manifest passed")
+            except RuntimeError as error:
+                assert "one root release manifest" in str(error), error
+            assert not cli.receipt.exists()
 
 
 def main() -> int:
