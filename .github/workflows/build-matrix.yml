@@ -122,7 +122,7 @@ jobs:
         shell: bash
         run: |
           result=0
-          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
+          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
             if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
               echo "PASS $script"
             else
@@ -158,6 +158,20 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
         shell: bash
         run: python release/scripts/test_installed_e2e.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}"
+
+      - name: Run native installed Cppcheck and clangd core checks
+        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          bundle="release/dist/byo-$VERSION-$EXPECTED_TARGET"
+          uv run --project "Firmware MCP New" python release/scripts/run_installed_analysis_ci.py \
+            --expected-target "$EXPECTED_TARGET" --bundle "$bundle" --archive "$bundle.zip" \
+            --workspace-source AgentWorkspace --arm-input-dir "$RUNNER_TEMP/byo-arm-core" \
+            --evidence release/build/analysis-evidence/installed-core \
+            --rustc "$(rustup which rustc)" --artifact-label "candidate-$GITHUB_SHA"
 
       - name: Upload target artifact
         if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
@@ -301,7 +315,7 @@ jobs:
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           result=0
-          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_code_analysis_portable_smoke_controls.py; do
+          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
             if uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "release/scripts/$script"; then
               echo "PASS $script"
             else
@@ -335,6 +349,20 @@ jobs:
         run: |
           "$BYO_BUILD_PYTHON" release/scripts/test_installed_e2e.py \
             --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64"
+
+      - name: Run native installed Cppcheck and clangd core checks
+        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        shell: bash
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          bundle="release/dist/byo-$VERSION-linux-x86_64"
+          uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/run_installed_analysis_ci.py \
+            --expected-target linux-x86_64-glibc-2.28 --bundle "$bundle" --archive "$bundle.tar.gz" \
+            --workspace-source AgentWorkspace --arm-input-dir "$RUNNER_TEMP/byo-arm-core" \
+            --evidence release/build/analysis-evidence/installed-core \
+            --artifact-label "candidate-$GITHUB_SHA"
 
       - name: Upload target artifact
         if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
