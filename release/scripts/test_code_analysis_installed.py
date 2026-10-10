@@ -536,7 +536,10 @@ class Owned:
             for pid, parent in parents.items():
                 if parent not in live:
                     continue
-                child = self.native.identity(pid)
+                # Refresh creation and liveness first. A previously captured
+                # image belongs only to that exact process incarnation; asking
+                # for it again can fail while a compiled sidecar is closing.
+                child = self.native.identity(pid, image=False)
                 if (
                     child
                     and child["creation_filetime"] >= live[parent]["creation_filetime"]
@@ -551,7 +554,29 @@ class Owned:
                     ):
                         continue
                     key = (pid, child["creation_filetime"])
-                    if key not in self.records:
+                    known = self.records.get(key)
+                    if (
+                        known is None
+                        or not isinstance(known.get("image"), str)
+                        or not known["image"]
+                    ):
+                        observed = self.native.identity(pid)
+                        # A second handle may refer to a different incarnation,
+                        # or the PID may have vanished since the first query.
+                        if (
+                            observed is None
+                            or observed["creation_filetime"]
+                            != child["creation_filetime"]
+                        ):
+                            continue
+                        if (
+                            not isinstance(observed.get("image"), str)
+                            or not observed["image"]
+                        ):
+                            raise Setup(f"new child PID {pid} full image unavailable")
+                        if not self.native.alive(live[parent]):
+                            continue
+                        child = observed
                         child["parent_pid"] = parent
                         child["parent_creation_filetime"] = live[parent][
                             "creation_filetime"
@@ -3528,6 +3553,150 @@ def process_observer_checks(check, scratch: Path) -> dict:
         tracker.finish()
 
     check("observer-sampler-unobservable-is-setup", sampler_unobservable, Setup)
+
+    class SamplerNative:
+        # Independent snapshots and per-handle observations exercise the
+        # ownership boundary, including changes between the two identity calls.
+        def __init__(
+            self,
+            creation=7,
+            full_creation=7,
+            full_image="new.exe",
+            full_missing=False,
+            full_error=False,
+            fresh_error=None,
+            started=20,
+            parent_creation=3,
+            parent_dies=False,
+        ):
+            self.creation, self.full_creation = creation, full_creation
+            self.full_image, self.full_missing = full_image, full_missing
+            self.full_error, self.fresh_error = full_error, fresh_error
+            self.started, self.parent_creation = started, parent_creation
+            self.parent_dies, self.full_calls = parent_dies, 0
+            self.calls = []
+
+        def now(self):
+            return self.started
+
+        def snapshot(self):
+            return {4242: 10}
+
+        def alive(self, identity):
+            if identity["pid"] == 10:
+                return not (self.parent_dies and self.full_calls)
+            return identity["creation_filetime"] == self.creation
+
+        def identity(self, pid, *, image=True):
+            self.calls.append((pid, image))
+            if not image:
+                if self.fresh_error:
+                    raise Setup(
+                        f"controlled fresh {self.fresh_error} observation failure"
+                    )
+                return {"pid": pid, "creation_filetime": self.creation, "alive": True}
+            self.full_calls += 1
+            if self.full_error:
+                raise Setup("controlled new full-image observation failure")
+            if self.full_missing:
+                return None
+            return {
+                "pid": pid,
+                "creation_filetime": self.full_creation,
+                "alive": True,
+                "image": self.full_image,
+            }
+
+    def sampler(native, *, known=True):
+        tracker = stopped(native)
+        tracker.records = {
+            (10, native.parent_creation): {
+                "pid": 10,
+                "creation_filetime": native.parent_creation,
+                "image": "parent.exe",
+            }
+        }
+        if known:
+            tracker.records[(4242, 7)] = {
+                **owned,
+                "image": "original.exe",
+                "parent_pid": 10,
+                "parent_creation_filetime": native.parent_creation,
+            }
+        return tracker
+
+    def known_image_unavailable():
+        native = SamplerNative(full_error=True)
+        tracker = sampler(native)
+        original = dict(tracker.records[(4242, 7)])
+        tracker.sample_once()
+        require(
+            tracker.records[(4242, 7)] == original
+            and native.calls == [(4242, False)]
+            and next(r for r in tracker.finish() if r["pid"] == 4242)["alive_after"],
+            "known image was queried/replaced, or a live child earned cleanup credit",
+        )
+
+    check(
+        "sampler-known-exact-live-keeps-original-image-no-cleanup",
+        known_image_unavailable,
+    )
+    check(
+        "sampler-new-unreadable-live-is-setup",
+        lambda: sampler(SamplerNative(full_error=True), known=False).sample_once(),
+        Setup,
+    )
+    check(
+        "sampler-reused-pid-unreadable-cannot-inherit-image",
+        lambda: sampler(
+            SamplerNative(creation=9, full_creation=9, full_error=True)
+        ).sample_once(),
+        Setup,
+    )
+
+    def reused_new_image():
+        native = SamplerNative(creation=9, full_creation=9)
+        tracker = sampler(native)
+        tracker.sample_once()
+        require(
+            tracker.records[(4242, 7)]["image"] == "original.exe"
+            and tracker.records[(4242, 9)]["image"] == "new.exe"
+            and native.full_calls == 1,
+            "a new incarnation inherited the prior image or skipped full capture",
+        )
+
+    check("sampler-reused-pid-needs-new-full-image", reused_new_image)
+    for name, fields in (
+        ("vanished-second-handle", {"full_missing": True}),
+        ("changed-second-handle", {"full_creation": 9}),
+        ("post-snapshot-reuse", {"creation": 20, "full_creation": 20}),
+        ("child-before-parent", {"parent_creation": 8}),
+        ("parent-died-during-full-query", {"parent_dies": True}),
+    ):
+
+        def excluded(fields=fields):
+            native = SamplerNative(**fields)
+            tracker = sampler(native, known=False)
+            tracker.sample_once()
+            require(len(tracker.records) == 1, "unbound child incarnation adopted")
+            if (
+                native.creation >= native.started
+                or native.creation < native.parent_creation
+            ):
+                require(native.full_calls == 0, "excluded snapshot queried a new image")
+
+        check(f"sampler-{name}-excluded", excluded)
+    check(
+        "sampler-new-null-image-is-setup",
+        lambda: sampler(SamplerNative(full_image=None), known=False).sample_once(),
+        Setup,
+    )
+    for failure in ("OpenProcess", "GetProcessTimes", "wait"):
+        check(
+            f"sampler-known-fresh-{failure}-failure-is-setup",
+            lambda f=failure: sampler(SamplerNative(fresh_error=f)).sample_once(),
+            Setup,
+        )
 
     for name, kernel in (
         ("access-denied", {"open_error": 5}),
