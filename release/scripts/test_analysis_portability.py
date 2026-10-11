@@ -2470,5 +2470,122 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                 self.assertEqual(dependency.read_bytes(), fat_image(full))
 
 
+class LinuxSidecarZlibBundleClosureTests(unittest.TestCase):
+    """Delivered-bundle closure for the Nuitka sidecar ``libz.so.1`` import.
+
+    Linux bundle run 38108880368 rejected ``sidecar/binascii.so: libz.so.1``;
+    its sidecar binaries were not uploaded. Pinned Nuitka 2.8.9 omits
+    ``libz.so*`` from Linux standalone output and gives copied ELF images
+    DT_RPATH ``$ORIGIN``. These synthetic images model that shape through the
+    byte parser only; they are not measured sidecar bytes or loader evidence.
+    """
+
+    BINASCII = "sidecar/binascii.so"
+    ZLIB_ERROR = (
+        "Unresolved or ambiguous private native import: sidecar/binascii.so: libz.so.1"
+    )
+
+    def images(self, binascii=None, zlib=None, **extra) -> dict[str, bytes]:
+        module = dict(
+            executable=False,
+            needed=("libz.so.1", "libc.so.6"),
+            rpath="$ORIGIN",
+            versions=(("libz.so.1", "ZLIB_1.2.0"), ("libc.so.6", "GLIBC_2.2.5")),
+        )
+        module.update(binascii or {})
+        library = dict(
+            executable=False,
+            soname="libz.so.1",
+            needed=("libc.so.6",),
+            versions=(("libc.so.6", "GLIBC_2.14"),),
+            defined=("libz.so.1", "ZLIB_1.2.0"),
+        )
+        library.update(zlib or {})
+        images = {
+            "sidecar/byo-mcp-sidecar": elf_image(rpath="$ORIGIN"),
+            self.BINASCII: elf_image(**module),
+            "sidecar/libz.so.1": elf_image(**library),
+        }
+        images.update(extra)
+        return {path: data for path, data in images.items() if data is not None}
+
+    def validate(self, images: dict[str, bytes]) -> dict:
+        import native_formats
+
+        files = [
+            {"path": path, "executable": path == "sidecar/byo-mcp-sidecar"}
+            for path in images
+        ]
+        return native_formats.validate_bundle_closure(
+            files, images.__getitem__, "linux", "x86_64"
+        )
+
+    def test_zlib_import_needs_a_loader_selected_private_copy(self) -> None:
+        for label, binascii in {
+            "DT_RPATH": {},
+            "DT_RUNPATH": {"rpath": None, "runpath": "$ORIGIN"},
+        }.items():
+            with self.subTest(label):
+                result = self.validate(self.images(binascii))
+                self.assertEqual(
+                    result["images"][self.BINASCII]["resolved_private_imports"],
+                    {"libz.so.1": "sidecar/libz.so.1"},
+                )
+        # The failed Actions shape: no private copy means no OS/host fallback.
+        with self.assertRaisesRegex(RuntimeError, re.escape(self.ZLIB_ERROR)):
+            self.validate(self.images(**{"sidecar/libz.so.1": None}))
+        with self.assertRaisesRegex(RuntimeError, re.escape(self.ZLIB_ERROR)):
+            self.validate(
+                self.images(
+                    **{
+                        "sidecar/libz.so.1": None,
+                        "sidecar/zlib/libz.so.1": self.images()["sidecar/libz.so.1"],
+                    }
+                )
+            )
+
+    def test_private_zlib_keeps_strict_loader_version_and_abi_failures(
+        self,
+    ) -> None:
+        private = self.images()["sidecar/libz.so.1"]
+        cases = {
+            "ambiguous search": (
+                self.images(
+                    {"rpath": "$ORIGIN:$ORIGIN/zlib"},
+                    **{"sidecar/zlib/libz.so.1": private},
+                ),
+                re.escape(self.ZLIB_ERROR),
+            ),
+            "origin escape": (
+                self.images({"rpath": "$ORIGIN/.."}),
+                "escapes private payload or uses host/cwd search",
+            ),
+            "host search": (
+                self.images({"rpath": "$ORIGIN:/usr/lib64"}),
+                "escapes private payload or uses host/cwd search",
+            ),
+            "absolute import": (
+                self.images(
+                    {
+                        "needed": ("/lib64/libz.so.1", "libc.so.6"),
+                        "versions": (("libc.so.6", "GLIBC_2.2.5"),),
+                    }
+                ),
+                "Nonportable ELF import",
+            ),
+            "missing zlib version": (
+                self.images(zlib={"defined": ("libz.so.1", "ZLIB_1.2.9")}),
+                "Private ELF library does not define needed version",
+            ),
+            "zlib above glibc 2.28": (
+                self.images(zlib={"versions": (("libc.so.6", "GLIBC_2.29"),)}),
+                "exceeds glibc 2.28 ABI: sidecar/libz.so.1",
+            ),
+        }
+        for label, (images, pattern) in cases.items():
+            with self.subTest(label), self.assertRaisesRegex(RuntimeError, pattern):
+                self.validate(images)
+
+
 if __name__ == "__main__":
     unittest.main()
