@@ -30,7 +30,7 @@ jobs:
             runner: macos-15-intel
             archive: zip
           - target: windows-x86_64
-            runner: windows-2025
+            runner: windows-2022 # The locked Cppcheck recipe requires Visual Studio 2022.
             archive: zip
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -322,6 +322,17 @@ jobs:
             fi
           done
           exit "$result"
+
+      - name: Restore exact installed Linux zlib license notices
+        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The manylinux image omits RPM documentation. Restore the installed
+          # package's notices before the builder binds their RPM file digests.
+          zlib_nevra=$(rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' zlib.x86_64)
+          test -n "$zlib_nevra"
+          dnf --setopt=tsflags= --setopt=install_weak_deps=False reinstall --assumeyes "$zlib_nevra"
 
       - name: Build native launcher, sidecar, SBOM, and archive
         if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
