@@ -2889,6 +2889,78 @@ class LinuxSidecarZlibBundleClosureTests(unittest.TestCase):
                 self.validate(images)
 
 
+class MacOSSidecarLibffiBundleClosureTests(unittest.TestCase):
+    """Delivered-bundle closure for the sidecar CFFI ``/usr/lib/libffi.dylib`` import.
+
+    macOS ARM bundle run 38118455116 rejected ``sidecar/_cffi_backend.so:
+    /usr/lib/libffi.dylib``; Apple's libffi project installs into ``/usr/lib``.
+    The synthetic MH_BUNDLE models that import shape through the byte parser
+    only; it is not measured sidecar bytes or loader evidence.
+    """
+
+    CFFI = "sidecar/_cffi_backend.so"
+    LIBFFI = "/usr/lib/libffi.dylib"
+
+    def test_bundle_allows_exact_os_libffi_but_analyzers_do_not(self) -> None:
+        import native_formats
+
+        for architecture in ("aarch64", "x86_64"):
+
+            def bundle(name, architecture=architecture):
+                image = macho_image(
+                    architecture,
+                    executable=False,
+                    filetype=8,
+                    loads=(name, "/usr/lib/libSystem.B.dylib"),
+                )
+                return native_formats.validate_bundle_closure(
+                    [{"path": self.CFFI, "executable": False}],
+                    {self.CFFI: image}.__getitem__,
+                    "macos",
+                    architecture,
+                )
+
+            with self.subTest(architecture, case="exact OS libffi"):
+                info = bundle(self.LIBFFI)["images"][self.CFFI]
+                self.assertIn(self.LIBFFI, info["needed"])
+                self.assertEqual(info["resolved_private_imports"], {})
+            for name in (
+                "/opt/homebrew/opt/libffi/lib/libffi.8.dylib",
+                "/usr/local/opt/libffi/lib/libffi.8.dylib",
+                "/usr/local/lib/libffi.dylib",
+                "/usr/lib/libffi.8.dylib",
+                "/usr/lib/../local/lib/libffi.dylib",
+            ):
+                with (
+                    self.subTest(architecture, case=name),
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        re.escape(
+                            f"Unresolved non-OS Mach-O import: {self.CFFI}: {name}"
+                        ),
+                    ),
+                ):
+                    bundle(name)
+            # Analyzer closure keeps its narrower OS policy for the same import.
+            with (
+                self.subTest(architecture, case="analyzer refusal"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    re.escape(
+                        f"Non-OS absolute/unresolved Mach-O import: {self.LIBFFI}"
+                    ),
+                ),
+            ):
+                native_formats.validate_closure(
+                    macos_closure_lock(architecture),
+                    MacOSClosureTests.images(
+                        self,
+                        architecture,
+                        cppcheck={"loads": ("/usr/lib/libSystem.B.dylib", self.LIBFFI)},
+                    ).__getitem__,
+                )
+
+
 @unittest.skipUnless(os.name == "posix", "mocked Linux zlib RPM paths; Actions only")
 class LinuxSidecarZlibStagingTests(unittest.TestCase):
     """Mock loader/RPM measurements; parse fixture ELF, never execute it.
