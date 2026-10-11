@@ -494,6 +494,58 @@ class Identity(unittest.TestCase):
                 self.assertEqual(native.waited, [(7, 5)])
 
 
+class ObservedChildMetadata(unittest.TestCase):
+    def observer(self, records, children, alive=True):
+        owned = object.__new__(smoke.Owned)
+        owned.records = {(r["pid"], r["create_time"]): r for r in records}
+        owned.native = mock.Mock()
+        owned.native.alive.return_value = alive
+        owned.native.children.side_effect = lambda r: children if r["pid"] == 1 else []
+        return owned
+
+    def test_known_child_refreshes_after_exec_without_changing_identity(self):
+        root = {"pid": 1, "create_time": 10.0}
+        before = {
+            "pid": 2,
+            "create_time": 11.0,
+            "parent_pid": 1,
+            "parent_create_time": 10.0,
+            "image": "/home/bin/byo",
+            "argv": ["byo", "workflow", "tool", "verify"],
+            "status": "stopped",
+        }
+        after = {
+            **before,
+            "image": "/home/analysis/cppcheck/cppcheck",
+            "argv": ["cppcheck", "--project=filtered.json"],
+            "status": "running",
+        }
+        owned = self.observer([root, before], [after])
+        owned.sample_once()
+        self.assertEqual(set(owned.records), {(1, 10.0), (2, 11.0)})
+        self.assertEqual(owned.records[(2, 11.0)], after)
+        self.assertEqual(before["image"], "/home/bin/byo")
+
+    def test_reused_pid_retains_separate_creation_identities(self):
+        root = {"pid": 1, "create_time": 10.0}
+        old = {"pid": 2, "create_time": 11.0, "image": "old"}
+        replacement = {**old, "create_time": 12.0, "image": "replacement"}
+        owned = self.observer([root, old], [replacement])
+        owned.sample_once()
+        self.assertEqual(owned.records[(2, 11.0)], old)
+        self.assertEqual(owned.records[(2, 12.0)], replacement)
+
+    def test_dead_or_unknown_parent_does_not_acquire_children(self):
+        root = {"pid": 1, "create_time": 10.0}
+        child = {"pid": 2, "create_time": 11.0}
+        for alive in (False, None):
+            with self.subTest(alive=alive):
+                owned = self.observer([root], [child], alive)
+                owned.sample_once()
+                self.assertEqual(owned.records, {(1, 10.0): root})
+                owned.native.children.assert_not_called()
+
+
 @unittest.skipIf(not hasattr(smoke, "Processes"), "smoke import failed")
 class RealProcesses(Temp):
     def setUp(self):
