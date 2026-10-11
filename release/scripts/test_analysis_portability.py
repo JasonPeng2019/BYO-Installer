@@ -2587,5 +2587,395 @@ class LinuxSidecarZlibBundleClosureTests(unittest.TestCase):
                 self.validate(images)
 
 
+@unittest.skipUnless(os.name == "posix", "mocked Linux zlib RPM paths; Actions only")
+class LinuxSidecarZlibStagingTests(unittest.TestCase):
+    """Mock loader/RPM measurements; parse fixture ELF, never execute it.
+
+    Requires the owner's stage_linux_sidecar_zlib addition. The earlier
+    closure controls alone pass without that addition; this staging path
+    discriminates the missing private dependency and records its ownership.
+    """
+
+    def setUp(self) -> None:
+        import build_release
+
+        self.br = build_release
+        self.prepare_fixture()
+
+    def prepare_fixture(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="byo-zlib-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        self.bundle, self.evidence = root / "bundle", root / "evidence"
+        images = LinuxSidecarZlibBundleClosureTests().images()
+        self.library_bytes = images.pop("sidecar/libz.so.1")
+        for relative, data in images.items():
+            path = self.bundle / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(0o755 if relative.endswith("byo-mcp-sidecar") else 0o644)
+        self.consumer = self.bundle / "sidecar/binascii.so"
+        self.source = root / "libz.so.1.2.11"
+        self.source.write_bytes(self.library_bytes)
+        selected = root / "libz.so.1"
+        selected.symlink_to(self.source)
+        self.notice = root / "LICENSE"
+        self.notice.write_bytes(b"fixture zlib license notice, not upstream evidence\n")
+        self.tools = {}
+        for name in ("ldd", "rpm"):
+            tool = root / name
+            tool.write_bytes(f"fixture {name}; never executed".encode())
+            self.tools[name] = tool
+        self.ldd_output = (
+            "\tlinux-vdso.so.1 (0x00007fff)\n"
+            f"\tlibz.so.1 => {selected} (0x00007fff)\n"
+            "\tlibc.so.6 => /lib64/libc.so.6 (0x00007fff)\n"
+        )
+        self.rpm_header = [
+            "zlib",
+            "1.2.11",
+            "25.el8",
+            "x86_64",
+            "zlib-1.2.11-25.el8.src.rpm",
+            "zlib",
+            "8",
+        ]
+        self.rpm_rows = [
+            [str(self.source), sha256(self.library_bytes), ""],
+            [str(self.notice), sha256(self.notice.read_bytes()), "l"],
+        ]
+        self.failed_tool = None
+        self.measurements = []
+
+    def measure(self, argv, **kwargs):
+        name = next(name for name, path in self.tools.items() if str(path) == argv[0])
+        self.assertEqual(kwargs["cwd"], self.bundle / "sidecar")
+        self.assertFalse(any(key.startswith("LD_") for key in kwargs["env"]))
+        self.assertEqual(kwargs["env"]["LC_ALL"], "C")
+        self.assertEqual(kwargs["env"]["BYO_ZLIB_FIXTURE"], "retained")
+        self.assertTrue(kwargs["capture_output"])
+        self.assertTrue(kwargs["text"])
+        self.assertFalse(kwargs["check"])
+        self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+        if name == "ldd":
+            self.assertEqual(argv[1:], [str(self.consumer)])
+            output = self.ldd_output
+        else:
+            self.assertEqual(argv[1:3], ["-qf", "--qf"])
+            self.assertEqual(argv[-1], str(self.source))
+            output = (
+                "\n".join("\t".join(row) for row in [self.rpm_header, *self.rpm_rows])
+                + "\n"
+            )
+        result = subprocess.CompletedProcess(
+            argv, 1 if self.failed_tool == name else 0, output, f"fixture {name} stderr"
+        )
+        self.measurements.append(result)
+        return result
+
+    def stage(self) -> dict:
+        with (
+            mock.patch.object(self.br.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                self.br.shutil, "which", side_effect=lambda name: str(self.tools[name])
+            ),
+            mock.patch.object(self.br.subprocess, "run", side_effect=self.measure),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "LD_LIBRARY_PATH": "/untrusted",
+                    "LD_PRELOAD": "untrusted.so",
+                    "LD_AUDIT": "audit.so",
+                    "LC_ALL": "untrusted",
+                    "BYO_ZLIB_FIXTURE": "retained",
+                },
+            ),
+        ):
+            return self.br.stage_linux_sidecar_zlib(self.bundle, self.evidence)
+
+    def test_staging_restores_private_closure_and_measured_inventory_sbom(self) -> None:
+        import native_formats
+
+        before = self.br.payload_inventory(self.bundle)
+
+        def read(relative):
+            return (self.bundle / relative).read_bytes()
+
+        with self.assertRaisesRegex(
+            RuntimeError, "Unresolved or ambiguous private native import"
+        ):
+            native_formats.validate_bundle_closure(before, read, "linux", "x86_64")
+        consumer_bytes = self.consumer.read_bytes()
+        receipt = self.stage()
+        self.assertEqual(receipt["schema"], 1)
+        self.assertEqual(receipt["library"], "libz.so.1")
+        self.assertEqual(receipt["required_by"], "sidecar/binascii.so")
+        self.assertEqual(receipt["consumer_sha256"], sha256(consumer_bytes))
+        self.assertEqual(
+            receipt["consumer_native"]["needed"], ["libz.so.1", "libc.so.6"]
+        )
+        self.assertEqual(receipt["source_path"], str(self.source))
+        self.assertEqual(receipt["source_sha256"], sha256(self.library_bytes))
+        self.assertEqual(receipt["native"]["soname"], "libz.so.1")
+        self.assertEqual(receipt["native"]["machine"], 62)
+        self.assertEqual(receipt["package"], "zlib-1.2.11-25.el8.x86_64")
+        self.assertEqual(receipt["source_rpm"], "zlib-1.2.11-25.el8.src.rpm")
+        self.assertEqual(receipt["license"], "zlib")
+        self.assertEqual(self.consumer.read_bytes(), consumer_bytes)
+        self.assertEqual(self.source.read_bytes(), self.library_bytes)
+        self.assertEqual(len(self.measurements), 2)
+        for name, tool in self.tools.items():
+            self.assertEqual(
+                receipt["tools"][name],
+                {
+                    "path": str(tool),
+                    "sha256": sha256(tool.read_bytes()),
+                },
+            )
+        self.assertEqual(
+            receipt["commands"],
+            [
+                {
+                    "argv": result.args,
+                    "exit_code": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+                for result in self.measurements
+            ],
+        )
+        self.assertEqual(
+            json.loads((self.evidence / "linux-sidecar-zlib.json").read_bytes()),
+            receipt,
+        )
+        files = self.br.payload_inventory(self.bundle)
+        staged = [
+            leaf
+            for leaf in files
+            if leaf["path"]
+            in {
+                "sidecar/libz.so.1",
+                "sidecar/licenses/zlib/LICENSE",
+            }
+        ]
+        self.assertEqual(
+            sorted(receipt["files"], key=lambda leaf: leaf["path"]), staged
+        )
+        self.assertEqual(
+            {leaf["kind"] for leaf in staged}, {"native-dependency", "license"}
+        )
+        self.assertTrue(all(leaf["executable"] is False for leaf in staged))
+        self.assertEqual(read("sidecar/libz.so.1"), self.library_bytes)
+        self.assertEqual(
+            read("sidecar/licenses/zlib/LICENSE"), self.notice.read_bytes()
+        )
+        closure = native_formats.validate_bundle_closure(files, read, "linux", "x86_64")
+        self.assertEqual(
+            closure["images"]["sidecar/binascii.so"]["resolved_private_imports"],
+            {"libz.so.1": "sidecar/libz.so.1"},
+        )
+        report = self.evidence / "report.xml"
+        report.write_text(
+            '<report nuitka_version="2.8.9"><python python_version="3.12.0"/><distributions/></report>'
+        )
+        with mock.patch.object(
+            self.br, "digest", side_effect=AssertionError("SBOM rehashed payload")
+        ):
+            self.br.write_sbom(
+                self.bundle, report, "0.1.8", files, linux_sidecar_provenance=receipt
+            )
+        sbom = json.loads((self.bundle / "sbom.cdx.json").read_bytes())
+        components = {leaf["bom-ref"]: leaf for leaf in sbom["components"]}
+        reference = "byo-native:sidecar/libz.so.1"
+        zlib = components[reference]
+        self.assertEqual(
+            (zlib["type"], zlib["name"], zlib["version"]), ("library", "zlib", "1.2.11")
+        )
+        self.assertEqual(
+            zlib["hashes"], [{"alg": "SHA-256", "content": sha256(self.library_bytes)}]
+        )
+        self.assertEqual(zlib["licenses"], [{"license": {"name": "zlib"}}])
+        properties = {leaf["name"]: leaf["value"] for leaf in zlib["properties"]}
+        self.assertEqual(properties["byo:linux:package"], receipt["package"])
+        self.assertEqual(properties["byo:linux:source-rpm"], receipt["source_rpm"])
+        self.assertEqual(
+            properties["byo:linux:license-notice"], "sidecar/licenses/zlib/LICENSE"
+        )
+        notice_ref = "byo-native:sidecar/licenses/zlib/LICENSE"
+        self.assertEqual(
+            components[notice_ref]["hashes"],
+            [
+                {"alg": "SHA-256", "content": sha256(self.notice.read_bytes())},
+            ],
+        )
+        self.assertIn(
+            {"ref": reference, "dependsOn": [notice_ref]}, sbom["dependencies"]
+        )
+
+    def test_consumer_must_exist_and_declare_the_zlib_import(self) -> None:
+        self.consumer.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.stage()
+        self.assertEqual(self.measurements, [])
+        self.consumer.write_bytes(elf_image(executable=False, needed=("libc.so.6",)))
+        with self.assertRaisesRegex(RuntimeError, "does not declare libz"):
+            self.stage()
+        self.assertEqual(self.measurements, [])
+        self.consumer.unlink()
+        self.consumer.symlink_to(self.source)
+        with self.assertRaisesRegex(RuntimeError, "regular private image"):
+            self.stage()
+
+    def test_loader_selection_must_be_unique_absolute_and_resolved(self) -> None:
+        for label, output in {
+            "absent": "libc.so.6 => /lib64/libc.so.6 (0x1234)\n",
+            "unresolved": "libz.so.1 => not found\n",
+            "relative": "libz.so.1 => libz.so.1 (0x1234)\n",
+            "ambiguous": self.ldd_output + self.ldd_output,
+        }.items():
+            with self.subTest(label):
+                self.ldd_output = output
+                with self.assertRaisesRegex(
+                    RuntimeError, "Unresolved or ambiguous loader-selected"
+                ):
+                    self.stage()
+                self.assertFalse((self.bundle / "sidecar/libz.so.1").exists())
+
+    def test_selected_library_requires_regular_x86_64_elf_and_zlib_soname(self) -> None:
+        for label, data, pattern in (
+            (
+                "wrong architecture",
+                elf_image(executable=False, machine=183),
+                "Wrong ELF",
+            ),
+            ("executable", elf_image(), "Wrong ELF"),
+            ("not ELF", b"not an ELF library", "ELF64"),
+            (
+                "wrong SONAME",
+                elf_image(executable=False, soname="libother.so.1"),
+                "SONAME",
+            ),
+        ):
+            with self.subTest(label):
+                self.source.write_bytes(data)
+                with self.assertRaisesRegex(RuntimeError, pattern):
+                    self.stage()
+        self.source.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.stage()
+        self.source.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
+            self.stage()
+
+    def test_rpm_requires_unambiguous_zlib_package_source_license_and_sha256(
+        self,
+    ) -> None:
+        original = self.rpm_header[:]
+        for label, index, value in (
+            ("other owner", 0, "other"),
+            ("wrong arch", 3, "aarch64"),
+            ("missing version", 1, ""),
+            ("missing release", 2, "(none)"),
+            ("other source", 4, "other-1.2.11.src.rpm"),
+            ("binary source", 4, "zlib-1.2.11.x86_64.rpm"),
+            ("missing source", 4, "(none)"),
+            ("missing license", 5, ""),
+            ("unsupported digest", 6, "1"),
+        ):
+            with self.subTest(label):
+                self.rpm_header = original[:]
+                self.rpm_header[index] = value
+                with self.assertRaisesRegex(
+                    RuntimeError, "RPM package/source/license provenance"
+                ):
+                    self.stage()
+        self.rpm_header = original
+        self.rpm_rows.append(self.rpm_rows[0][:])
+        with self.assertRaisesRegex(
+            RuntimeError, "Ambiguous/malformed zlib RPM file provenance"
+        ):
+            self.stage()
+        self.rpm_rows[-1] = (
+            original  # A second package header cannot masquerade as a file row.
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "Ambiguous/malformed zlib RPM file provenance"
+        ):
+            self.stage()
+
+    def test_rpm_hashes_and_license_tagged_regular_notices_are_required(self) -> None:
+        for label in (
+            "source digest",
+            "notice digest",
+            "missing source row",
+            "untagged notice",
+            "missing notice",
+            "empty notice",
+            "linked notice",
+        ):
+            with self.subTest(label):
+                self.prepare_fixture()
+                pattern = "digest mismatch"
+                if label.endswith("digest"):
+                    self.rpm_rows[0 if label.startswith("source") else 1][1] = "0" * 64
+                elif label == "missing source row":
+                    self.rpm_rows.pop(0)
+                elif label == "untagged notice":
+                    self.rpm_rows[1][2] = "d"
+                    pattern = "declares no license notices"
+                elif label == "empty notice":
+                    self.notice.write_bytes(b"")
+                    self.rpm_rows[1][1] = sha256(b"")
+                else:
+                    self.notice.unlink()
+                    if label == "linked notice":
+                        self.notice.symlink_to(self.source)
+                    pattern = "Restore the exact installed zlib RPM license notice"
+                with self.assertRaisesRegex(RuntimeError, pattern):
+                    self.stage()
+
+    def test_existing_destinations_and_linked_license_ancestors_are_rejected(
+        self,
+    ) -> None:
+        for relative in ("sidecar/libz.so.1", "sidecar/licenses/zlib/LICENSE"):
+            with self.subTest(relative):
+                self.prepare_fixture()
+                destination = self.bundle / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"existing private payload")
+                with self.assertRaisesRegex(RuntimeError, "payload already exists"):
+                    self.stage()
+                self.assertEqual(destination.read_bytes(), b"existing private payload")
+        for relative in ("sidecar/licenses", "sidecar/licenses/zlib"):
+            with self.subTest(relative):
+                self.prepare_fixture()
+                outside = self.source.parent / "outside"
+                outside.mkdir()
+                destination = self.bundle / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.symlink_to(outside, target_is_directory=True)
+                with self.assertRaisesRegex(
+                    RuntimeError, "destination escapes through a link"
+                ):
+                    self.stage()
+                self.assertEqual(list(outside.iterdir()), [])
+
+    def test_failed_measurements_are_recorded_and_do_not_stage_payloads(self) -> None:
+        for name in ("ldd", "rpm"):
+            with self.subTest(name):
+                self.prepare_fixture()
+                self.failed_tool = name
+                with self.assertRaisesRegex(RuntimeError, f"{name} measurement failed"):
+                    self.stage()
+                receipt = json.loads(
+                    (self.evidence / "linux-sidecar-zlib.json").read_bytes()
+                )
+                self.assertEqual(receipt["commands"][-1]["exit_code"], 1)
+                self.assertEqual(
+                    receipt["commands"][-1]["stderr"], f"fixture {name} stderr"
+                )
+                self.assertFalse((self.bundle / "sidecar/libz.so.1").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

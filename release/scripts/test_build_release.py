@@ -426,6 +426,103 @@ def test_windows_finalization_preserves_signed_analysis_bytes():
         assert recorded == provenance
 
 
+def test_linux_zlib_sbom_rejects_staged_to_final_inventory_drift() -> None:
+    # This boundary consumes the final measured inventory. License ownership
+    # and RPM identity must survive even for libz.so.1's versioned suffix.
+    with tempfile.TemporaryDirectory(prefix="byo-zlib-sbom-") as temporary:
+        root = Path(temporary)
+        bundle = root / "bundle"
+        delivered = {
+            "sidecar/libz.so.1": (b"fixture library bytes", "native-dependency"),
+            "sidecar/licenses/zlib/LICENSE": (b"fixture license bytes", "license"),
+        }
+        staged = []
+        for relative, (data, kind) in delivered.items():
+            path = bundle / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(0o644)
+            staged.append(
+                {
+                    "path": relative,
+                    "sha256": analysis_tools.sha256(data),
+                    "size": len(data),
+                    "kind": kind,
+                    "executable": False,
+                }
+            )
+        provenance = {
+            "package": "zlib-1.2.11-25.el8.x86_64",
+            "version": "1.2.11",
+            "source_rpm": "zlib-1.2.11-25.el8.src.rpm",
+            "license": "zlib",
+            "files": staged,
+        }
+        report = root / "report.xml"
+        report.write_text(
+            '<report nuitka_version="2.8.9"><python python_version="3.12.0"/><distributions/></report>',
+            encoding="utf-8",
+        )
+        final = br.payload_inventory(bundle)
+        assert sorted(staged, key=lambda leaf: leaf["path"]) == final
+        with patch.object(
+            br, "digest", side_effect=AssertionError("SBOM rehashed payload")
+        ):
+            br.write_sbom(
+                bundle, report, "0.1.8", final, linux_sidecar_provenance=provenance
+            )
+        for selected in staged:
+            for label, change in (
+                ("missing", None),
+                ("hash", {"sha256": "0" * 64}),
+                ("size", {"size": selected["size"] + 1}),
+                ("kind", {"kind": "sidecar"}),
+                ("mode", {"executable": True}),
+            ):
+                changed = [
+                    {**leaf, **change}
+                    if leaf["path"] == selected["path"]
+                    else dict(leaf)
+                    for leaf in final
+                    if leaf["path"] != selected["path"] or change is not None
+                ]
+                try:
+                    br.write_sbom(
+                        bundle,
+                        report,
+                        "0.1.8",
+                        changed,
+                        linux_sidecar_provenance=provenance,
+                    )
+                except RuntimeError as error:
+                    assert "inventory differs from staging" in str(error), error
+                    assert selected["path"] in str(error), error
+                else:
+                    raise AssertionError(
+                        f"Accepted zlib {label} drift: {selected['path']}"
+                    )
+            # Rehashing modified delivered bytes cannot erase the earlier RPM
+            # measurement, for either the library or its owned notice.
+            path = bundle / selected["path"]
+            original = path.read_bytes()
+            path.write_bytes(original + b"changed after staging")
+            try:
+                br.write_sbom(
+                    bundle,
+                    report,
+                    "0.1.8",
+                    br.payload_inventory(bundle),
+                    linux_sidecar_provenance=provenance,
+                )
+            except RuntimeError as error:
+                assert "inventory differs from staging" in str(error), error
+            else:
+                raise AssertionError(
+                    f"Accepted remeasured zlib drift: {selected['path']}"
+                )
+            path.write_bytes(original)
+
+
 def main() -> int:
     tests = [v for n, v in sorted(globals().items()) if n.startswith("test_")]
     passed = skipped = 0
