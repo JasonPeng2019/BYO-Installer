@@ -2332,6 +2332,308 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
         ):
             native.thin_macos_bundle(self.bundle, self.lock, receipt, self.evidence)
 
+    def private_python_image(self, **changes) -> bytes:
+        # Synthetic control ID only: the rejected native Python ID was not uploaded.
+        fields = {
+            "executable": False,
+            "install_name": "/fixture/build/Python",
+            "rpaths": ("@loader_path",),
+        }
+        fields.update(changes)
+        return macho_image(self.architecture, **fields)
+
+    def add_private_python(self, data: bytes) -> Path:
+        python = self.bundle / "sidecar/Python"
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_bytes(data)
+        (python.parent / "byo-mcp-sidecar").write_bytes(
+            macho_image(
+                self.architecture,
+                loads=("/usr/lib/libSystem.B.dylib", "@rpath/Python"),
+                rpaths=("@loader_path",),
+            )
+        )
+        return python
+
+    def private_python_closure(self) -> dict:
+        return self.native.native_formats.validate_bundle_closure(
+            [
+                {"path": "sidecar/Python", "executable": False},
+                {"path": "sidecar/byo-mcp-sidecar", "executable": True},
+            ],
+            lambda name: (self.bundle / name).read_bytes(),
+            "macos",
+            self.architecture,
+        )
+
+    def normalize_private_python(
+        self,
+        receipt: dict,
+        edited: bytes,
+        *,
+        fail_edit=False,
+        host=None,
+        no_tools=False,
+    ) -> None:
+        install_tool = self.compiler.parent / "install_name_tool"
+        codesign = self.compiler.parent / "codesign"
+        for path in (install_tool, codesign):
+            path.write_bytes(f"fixture {path.name} identity".encode())
+
+        def identity_host(argv, **kwargs):
+            argv = list(argv)
+            if argv[0] not in {str(install_tool), str(codesign)}:
+                return self.apple_host(argv, **kwargs)
+            self.calls.append(argv)
+            if argv[0] == str(install_tool):
+                if fail_edit:
+                    return subprocess.CompletedProcess(
+                        argv, 7, "", "fixture install_name_tool failure"
+                    )
+                Path(argv[-1]).write_bytes(edited)
+            elif "--force" in argv:
+                # Distinct synthetic bytes model the post-edit integrity receipt.
+                Path(argv[-1]).write_bytes(edited + b"fixture adhoc integrity")
+            stderr = "Signature=adhoc\n" if "--display" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, "", stderr)
+
+        with (
+            mock.patch.object(
+                self.native.tools,
+                "host_target",
+                return_value=host or f"macos-{self.architecture}",
+            ),
+            mock.patch.object(
+                self.native.shutil,
+                "which",
+                side_effect=(
+                    AssertionError("unexpected identity tool discovery")
+                    if no_tools
+                    else {
+                        "install_name_tool": str(install_tool),
+                        "codesign": str(codesign),
+                    }.get
+                ),
+            ),
+            mock.patch.object(self.native.subprocess, "run", side_effect=identity_host),
+        ):
+            self.native.thin_macos_bundle(
+                self.bundle, self.lock, receipt, self.evidence
+            )
+
+    def test_thin_private_python_identity_and_integrity_receipts_both_targets(self):
+        for target in MACOS_TARGETS:
+            with self.subTest(target):
+                receipt = self.stage(target)
+                before = self.private_python_image()
+                edited = self.private_python_image(install_name="@rpath/Python")
+                after = edited + b"fixture adhoc integrity"
+                python = self.add_private_python(before)
+                consumer = (python.parent / "byo-mcp-sidecar").read_bytes()
+                with self.assertRaisesRegex(
+                    RuntimeError, "absolute/unportable install name: sidecar/Python"
+                ):
+                    self.private_python_closure()
+                self.calls.clear()
+                start = len(receipt["commands"])
+                self.normalize_private_python(receipt, edited)
+                self.assertEqual(python.read_bytes(), after)
+                self.assertEqual(
+                    (python.parent / "byo-mcp-sidecar").read_bytes(), consumer
+                )
+                images = self.private_python_closure()["images"]
+                self.assertEqual(
+                    images["sidecar/Python"]["install_name"], "@rpath/Python"
+                )
+                self.assertEqual(
+                    images["sidecar/byo-mcp-sidecar"]["resolved_private_imports"],
+                    {"@rpath/Python": "sidecar/Python"},
+                )
+                before_image = self.native.native_formats.macho(
+                    before, self.architecture, False
+                )
+                after_image = self.native.native_formats.macho(
+                    after, self.architecture, False
+                )
+                native_fields = {
+                    "format": "Mach-O64",
+                    "cpu": {"aarch64": 0x0100000C, "x86_64": 0x01000007}[
+                        self.architecture
+                    ],
+                    "type": 6,
+                    "minimum_os": MACOS_12,
+                    "needed": ["/usr/lib/libSystem.B.dylib", "/usr/lib/libc++.1.dylib"],
+                    "search_paths": ["@loader_path"],
+                }
+                self.assertEqual(
+                    before_image,
+                    {**native_fields, "install_name": "/fixture/build/Python"},
+                )
+                self.assertEqual(
+                    after_image, {**native_fields, "install_name": "@rpath/Python"}
+                )
+                self.assertEqual(
+                    receipt["transformations"][-1],
+                    {
+                        "path": "sidecar/Python",
+                        "before_sha256": sha256(before),
+                        "normalized_sha256": sha256(edited),
+                        "after_sha256": sha256(after),
+                        "before_install_name": "/fixture/build/Python",
+                        "after_install_name": "@rpath/Python",
+                        "before_image": before_image,
+                        "after_image": after_image,
+                        "adhoc_integrity": "verified",
+                    },
+                )
+                install_tool = self.compiler.parent / "install_name_tool"
+                codesign = self.compiler.parent / "codesign"
+                for name, path in (
+                    ("install_name_tool", install_tool),
+                    ("codesign", codesign),
+                ):
+                    self.assertEqual(
+                        receipt["tools"][name],
+                        {"path": str(path), "sha256": sha256(path.read_bytes())},
+                    )
+                expected = [
+                    [str(codesign), "--display", "--verbose=4", str(python)],
+                    [str(codesign), "--verify", "--strict", "--verbose=2", str(python)],
+                    [str(install_tool), "-id", "@rpath/Python", str(python)],
+                    [
+                        str(codesign),
+                        "--force",
+                        "--sign",
+                        "-",
+                        "--preserve-metadata=identifier,entitlements,flags",
+                        "--timestamp=none",
+                        str(python),
+                    ],
+                    [str(codesign), "--verify", "--strict", "--verbose=2", str(python)],
+                ]
+                self.assertEqual(self.calls, expected)
+                commands = receipt["commands"][start:]
+                self.assertEqual([c["argv"] for c in commands], expected)
+                self.assertEqual(
+                    [c["step"] for c in commands],
+                    [
+                        "inspect-private-dylib-signature",
+                        "verify-private-dylib-before-normalization",
+                        "normalize-private-dylib-identity",
+                        "repair-private-dylib-adhoc-integrity",
+                        "verify-private-dylib-after-normalization",
+                    ],
+                )
+                self.assertEqual([c["exit_code"] for c in commands], [0] * 5)
+                self.assertEqual([c["stdout"] for c in commands], [""] * 5)
+                self.assertEqual(
+                    [c["stderr"] for c in commands], ["Signature=adhoc\n"] + [""] * 4
+                )
+                self.assertEqual(
+                    json.loads((self.evidence / "cppcheck-build.json").read_text()),
+                    receipt,
+                )
+
+    def test_valid_private_python_identities_are_byte_and_receipt_noops(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            for identity in ("@rpath/Python", "@loader_path/Python"):
+                with self.subTest(target=target, identity=identity):
+                    before = self.private_python_image(install_name=identity)
+                    python = self.add_private_python(before)
+                    retained = copy.deepcopy(receipt)
+                    self.calls.clear()
+                    self.normalize_private_python(
+                        receipt, b"must not be installed", no_tools=True
+                    )
+                    self.assertEqual(python.read_bytes(), before)
+                    self.assertEqual(receipt, retained)
+                    self.assertEqual(self.calls, [])
+                    self.private_python_closure()
+
+    def test_private_python_wrong_host_or_native_type_fails_before_commands(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            other = "x86_64" if self.architecture == "aarch64" else "aarch64"
+            for label, changes, host in (
+                ("host", {}, f"macos-{other}"),
+                ("non-dylib", {"filetype": 8}, target),
+                (
+                    "cpu",
+                    {"cpu": {"aarch64": 0x0100000C, "x86_64": 0x01000007}[other]},
+                    target,
+                ),
+            ):
+                with self.subTest(target=target, control=label):
+                    before = self.private_python_image(**changes)
+                    python = self.add_private_python(before)
+                    retained = copy.deepcopy(receipt)
+                    self.calls.clear()
+                    pattern = (
+                        "matching native macOS host"
+                        if label == "host"
+                        else "Wrong Mach-O CPU/file type"
+                    )
+                    with self.assertRaisesRegex(RuntimeError, pattern):
+                        self.normalize_private_python(
+                            receipt, b"invalid", host=host, no_tools=True
+                        )
+                    self.assertEqual(python.read_bytes(), before)
+                    self.assertEqual(receipt, retained)
+                    self.assertEqual(self.calls, [])
+
+    def test_private_python_native_mutation_or_failed_edit_cannot_succeed(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            for label, changes in (
+                ("minimum OS", {"minima": (("build", 0x000B0000),)}),
+                ("imports", {"loads": ("/usr/lib/libSystem.B.dylib",)}),
+                ("search path", {"rpaths": ()}),
+                ("unchanged ID", {"install_name": "/fixture/build/Python"}),
+                ("command failure", {}),
+            ):
+                with self.subTest(target=target, control=label):
+                    python = self.add_private_python(self.private_python_image())
+                    edited = self.private_python_image(
+                        **{"install_name": "@rpath/Python", **changes}
+                    )
+                    count = len(receipt["transformations"])
+                    self.calls.clear()
+                    with self.assertRaises(RuntimeError):
+                        self.normalize_private_python(
+                            receipt, edited, fail_edit=label == "command failure"
+                        )
+                    self.assertEqual(len(receipt["transformations"]), count + 1)
+                    pending = receipt["transformations"][-1]
+                    self.assertEqual(pending["path"], "sidecar/Python")
+                    self.assertEqual(
+                        pending["before_sha256"], sha256(self.private_python_image())
+                    )
+                    self.assertNotIn("adhoc_integrity", pending)
+                    self.assertFalse(any("--force" in argv for argv in self.calls))
+                    failed = receipt["commands"][-1]
+                    self.assertEqual(failed["argv"][1:3], ["-id", "@rpath/Python"])
+                    self.assertEqual(
+                        failed["exit_code"], 7 if label == "command failure" else 0
+                    )
+                    if label == "command failure":
+                        self.assertNotIn("normalized_sha256", pending)
+                        self.assertEqual(
+                            python.read_bytes(), self.private_python_image()
+                        )
+                        self.assertEqual(
+                            failed["stderr"], "fixture install_name_tool failure"
+                        )
+                    else:
+                        self.assertEqual(pending["normalized_sha256"], sha256(edited))
+                        self.assertEqual(
+                            pending["after_sha256"], sha256(python.read_bytes())
+                        )
+                    self.assertEqual(
+                        json.loads((self.evidence / "cppcheck-build.json").read_text()),
+                        receipt,
+                    )
+
     def test_both_targets_stage_past_lipo_identity_and_thin_with_it(self) -> None:
         identity = {"path": str(self.lipo), "sha256": sha256(self.lipo.read_bytes())}
         for target in MACOS_TARGETS:
