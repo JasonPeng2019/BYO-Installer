@@ -118,7 +118,6 @@ jobs:
           cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Run analysis Python source contracts
-        if: (success() || failure()) && steps.build-deps.outcome == 'success'
         shell: bash
         run: |
           result=0
@@ -310,7 +309,6 @@ jobs:
           cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Run native Linux analysis Python source contracts
-        if: (success() || failure()) && steps.build-deps.outcome == 'success'
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
@@ -395,3 +393,8 @@ jobs:
           path: release/symbols/
           if-no-files-found: error
           retention-days: 90
+
+  source-quality:
+    needs: [build, linux-x86_64]
+    uses: ./.github/workflows/quality.yml
+    secrets: inherit

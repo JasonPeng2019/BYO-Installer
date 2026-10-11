@@ -16,6 +16,13 @@ script contracts on all four native targets. It does not assemble a bundle.
 assembles the workspace, analyzer data, SBOM and archive, then validates the
 archive and runs installed hardware-free E2E.
 
+Consolidate the candidate, static checks and fresh review before pushing the
+task branch. Run `contracts` first and require all four native jobs and the
+dependent full source-quality jobs to pass at the exact installer commit and
+locked source commits. Then run `bundle` on that same unchanged commit. A
+failed or skipped required job prevents acceptance; a later source change needs
+new review and validation.
+
 ```sh
 gh workflow run build-matrix.yml --repo JasonPeng2019/BYO-Installer \
   --ref YOUR_TASK_BRANCH -f build_kind=contracts
@@ -29,6 +36,13 @@ Use `gh run view RUN_ID --log-failed` to diagnose a failed job and
 installer commit, `release/source-lock.json`, target, archive SHA-256 and verifier
 receipts when reporting a result. A source contract pass is separate evidence
 from a bundle build or an installed test pass.
+
+The installed core smoke covers both Cppcheck runners and all five clangd tools.
+POSIX cleanup receipts prove the retained group and exactly captured descendants,
+with a reaped direct child; never-observed detached descendants remain
+`not_proven`. Output persistence failures still fail the operation even when
+the receipt truthfully confirms process cleanup. See the
+[POSIX scope contract](code-analysis-posix-lifecycle-scope.md).
 
 The matrix uses separate Apple silicon and Intel macOS runners, Windows x86_64,
 and a digest-pinned manylinux glibc 2.28 container on a Linux runner. The builder
