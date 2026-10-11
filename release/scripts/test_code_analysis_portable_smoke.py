@@ -514,8 +514,8 @@ class Owned:
                 for child in self.native.children(record):
                     key = (child["pid"], child["create_time"])
                     if key not in self.records:
-                        self.records[key] = child
                         added = True
+                    self.records[key] = child
             if not added:
                 return
 
