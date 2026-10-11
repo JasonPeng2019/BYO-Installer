@@ -301,13 +301,8 @@ def stage_native(
             raise RuntimeError(
                 "Xcode SDK identity metadata is missing; supply installed Xcode command-line tools"
             )
+        # Apple lipo rejects -version; identify it by its measured path and hash.
         receipt["tools"]["lipo"] = _tool("lipo")
-        _command(
-            [receipt["tools"]["lipo"]["path"], "-version"],
-            evidence,
-            receipt,
-            "lipo-identity",
-        )
     receipt["compiler"] = _command(
         [compiler, "--version"], evidence, receipt, "compiler-identity"
     )
