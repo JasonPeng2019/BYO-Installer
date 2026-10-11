@@ -1652,6 +1652,7 @@ def main() -> int:
             home=Path.home(),
             user=verify_build_output._current_user(),
             checkout_root=ROOT,
+            extra=[],
         )
         if analysis_provenance:
             for command in analysis_provenance.get("commands", []):
@@ -1660,7 +1661,10 @@ def main() -> int:
                     for flag in ("-S", "-B"):
                         needles.extend(
                             verify_build_output.build_leak_needles(
-                                extra=[argv[argv.index(flag) + 1]]
+                                home=None,
+                                user=None,
+                                checkout_root=None,
+                                extra=[argv[argv.index(flag) + 1]],
                             )
                         )
         findings = verify_build_output.scan_bundle_for_leaks(bundle, needles)
