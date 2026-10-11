@@ -582,8 +582,6 @@ def _normalize_macos_dylib_identity(
     _regular(path)
     data = path.read_bytes()
     before = native_formats.macho(data, architecture, False)
-    if before["type"] != 6:
-        raise RuntimeError(f"Native identity repair requires a Mach-O dylib: {path}")
     identity = before["install_name"]
     if not identity:
         raise RuntimeError(f"Native private dylib has no install name: {path}")
