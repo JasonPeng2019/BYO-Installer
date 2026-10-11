@@ -82,6 +82,20 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
 }
 #[cfg(target_os = "macos")]
 fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
+    observe_with_session(pid, |_| {
+        let session = unsafe { libc::getsid(pid) };
+        if session < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(session)
+        }
+    })
+}
+#[cfg(target_os = "macos")]
+fn observe_with_session(
+    pid: i32,
+    session: impl FnOnce(&libc::proc_bsdinfo) -> std::io::Result<libc::pid_t>,
+) -> std::io::Result<Option<Observation>> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let length = std::mem::size_of_val(&info) as i32;
     let read = unsafe {
@@ -104,24 +118,27 @@ fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
             ))
         };
     }
-    let session = unsafe { libc::getsid(pid) };
-    let zombie = info.pbi_status == libc::SZOMB;
-    if session < 0
-        && !(zombie && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH))
-    {
-        let error = std::io::Error::last_os_error();
-        return Err(std::io::Error::new(
-            error.kind(),
-            format!("getsid({pid}) during identity observation: {error}"),
-        ));
-    }
+    let session = match session(&info) {
+        Ok(session) => session,
+        Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {
+            // The process can retire after the BSD snapshot, even if it was live.
+            // Discard that stale identity/namespace; discover retains child wait proof.
+            return Ok(None);
+        }
+        Err(error) => {
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("getsid({pid}) during identity observation: {error}"),
+            ));
+        }
+    };
     Ok(Some(Observation {
         pid,
         start: (info.pbi_start_tvsec, info.pbi_start_tvusec),
         parent: info.pbi_ppid as i32,
         group: info.pbi_pgid as i32,
-        session: session.max(0),
-        zombie,
+        session,
+        zombie: info.pbi_status == libc::SZOMB,
     }))
 }
 fn same(a: &Observation, b: &Observation) -> bool {
@@ -827,6 +844,10 @@ fn run_owned_with_persistence(
 #[cfg(test)]
 #[path = "process_posix_receipt_tests.rs"]
 mod process_posix_receipt_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "process_posix_macos_observation_tests.rs"]
+mod process_posix_macos_observation_tests;
 
 #[cfg(test)]
 mod tests {
