@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -2117,6 +2118,356 @@ class LinuxGccRuntimeInputTests(unittest.TestCase):
         ):
             self.stage()
         self.assertFalse(self.evidence.exists())
+
+
+# --------------------------------------------------------------------------
+# Native macOS staging against a fixture Apple host (lipo identity/thinning)
+# --------------------------------------------------------------------------
+
+# Apple cctools lipo(1) options. Any other flag is a fatal "unknown flag" with
+# exit 1, as the native macOS builder reported for -version.
+APPLE_LIPO_FLAGS = frozenset(
+    {
+        "-arch",
+        "-archs",
+        "-create",
+        "-detailed_info",
+        "-extract",
+        "-extract_family",
+        "-fat64",
+        "-hideARM64",
+        "-info",
+        "-output",
+        "-remove",
+        "-replace",
+        "-segalign",
+        "-thin",
+        "-verify_arch",
+    }
+)
+LIPO_SLICES = {"aarch64": "arm64", "x86_64": "x86_64"}
+MACOS_TARGETS = ("macos-aarch64", "macos-x86_64")
+
+
+def fat_image(slices: dict[str, bytes]) -> bytes:
+    """Synthetic universal wrapper; only the fixture lipo reads past the magic."""
+
+    return struct.pack(">II", 0xCAFEBABE, len(slices)) + b"".join(slices.values())
+
+
+@unittest.skipUnless(
+    os.name == "posix",
+    "mocked native macOS staging needs POSIX path semantics; pending on Windows host",
+)
+class MacOSAppleLipoStagingTests(unittest.TestCase):
+    """Drives stage_native through a fixture Apple host at subprocess.run.
+
+    The real _tool and _command record lipo identity and command receipts.
+    Nothing executes and passing here is not native macOS evidence.
+    """
+
+    def setUp(self) -> None:
+        import analysis_native
+
+        self.native = analysis_native
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        # macOS temporary paths traverse /var -> /private/var; inputs must be link-free.
+        self.root = Path(self.temporary.name).resolve()
+        self.inputs, toolchain = self.root / "inputs", self.root / "toolchain"
+        self.sdk = toolchain / "MacOSX.sdk"
+        self.sdk.mkdir(parents=True)
+        self.inputs.mkdir()
+        (self.sdk / "SDKSettings.json").write_text('{"Version": "15.5"}')
+        self.cmake, self.compiler, self.make, self.lipo, self.linker = (
+            toolchain / name for name in ("cmake", "clang++", "make", "lipo", "ld")
+        )
+        for path in (self.cmake, self.compiler, self.make, self.lipo, self.linker):
+            path.write_bytes(f"fixture {path.name} identity".encode())
+        self.slices = {
+            name: macho_image(architecture)
+            for architecture, name in LIPO_SLICES.items()
+        }
+        self.calls: list[list[str]] = []
+
+    def make_lock(self, target: str) -> dict:
+        lock = copy.deepcopy(tools.load_lock(target=target))
+        cpp, clangd = lock["programs"]["cppcheck"], lock["programs"]["clangd"]
+        options = b"# fixture compileroptions.cmake\n"
+        cpp["recipe"]["upstream_compileroptions_sha256"] = sha256(options)
+        cpp["selected_files"] = [
+            f for f in cpp["selected_files"] if f["runtime_path"].endswith("/std.cfg")
+        ]
+        members = {
+            cpp["source"]["archive_prefix"] + "cmake/compileroptions.cmake": options
+        }
+        for leaf in cpp["selected_files"]:
+            value = f"fixture {leaf['runtime_path']}".encode()
+            leaf.update(size=len(value), sha256=sha256(value))
+            members[leaf["upstream_path"]] = value
+        archive = self.inputs / cpp["source"]["archive"]
+        with tarfile.open(archive, "w:gz") as handle:
+            for name, value in members.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(value)
+                handle.addfile(info, io.BytesIO(value))
+        cpp["source"]["sha256"] = sha256(archive.read_bytes())
+        clangd["selected_files"] = [
+            f
+            for f in clangd["selected_files"]
+            if f["kind"] in {"analysis-executable", "license"}
+            or f["runtime_path"].endswith("/include/stddef.h")
+        ]
+        archive = self.inputs / clangd["source"]["archive"]
+        with zipfile.ZipFile(archive, "w") as handle:
+            for leaf in clangd["selected_files"]:
+                value = (
+                    fat_image(self.slices)
+                    if leaf["kind"] == "analysis-executable"
+                    else f"fixture {leaf['runtime_path']}".encode()
+                )
+                leaf.update(size=len(value), sha256=sha256(value))
+                handle.writestr(leaf["upstream_path"], value)
+        clangd["source"].update(
+            sha256=sha256(archive.read_bytes()), size=archive.stat().st_size
+        )
+        return lock
+
+    def apple_lipo(self, argv: list[str]) -> tuple[int, str]:
+        fatal = f"fatal error: {argv[0]}: "
+        unknown = [
+            part
+            for part in argv[1:]
+            if part.startswith("-") and part not in APPLE_LIPO_FLAGS
+        ]
+        if unknown:
+            return 1, fatal + f"unknown flag: {unknown[0]}\n"
+        if "-thin" not in argv or "-output" not in argv:
+            return 1, fatal + "fixture models only <input> -thin <arch> -output\n"
+        source, architecture = Path(argv[1]), argv[argv.index("-thin") + 1]
+        if source.read_bytes()[:4] != b"\xca\xfe\xba\xbe":
+            return 1, fatal + f"input file ({source}) must be a fat file\n"
+        if architecture not in self.slices:
+            return 1, fatal + (
+                f"fat input file ({source}) does not contain the specified "
+                f"architecture ({architecture}) to thin it to\n"
+            )
+        Path(argv[argv.index("-output") + 1]).write_bytes(self.slices[architecture])
+        return 0, ""
+
+    def apple_host(self, argv, **_) -> subprocess.CompletedProcess:
+        argv = list(argv)
+        self.calls.append(argv)
+        stdout, code, stderr = "", 0, ""
+        if argv[0] == str(self.lipo):
+            code, stderr = self.apple_lipo(argv)
+        elif argv[0] == str(self.cmake) and "-B" in argv:
+            build = Path(argv[argv.index("-B") + 1])
+            record = build / "CMakeFiles/3.28.3/CMakeCXXCompiler.cmake"
+            record.parent.mkdir(parents=True)
+            record.write_text(
+                f'set(CMAKE_CXX_COMPILER "{self.compiler}")\n'
+                'set(CMAKE_CXX_COMPILER_ID "AppleClang")\n'
+                'set(CMAKE_CXX_COMPILER_VERSION "17.0.0.17000013")\n'
+            )
+            (build / "CMakeCache.txt").write_text(
+                f"CMAKE_LINKER:FILEPATH={self.linker}\n"
+            )
+        elif argv[0] == str(self.cmake) and "--build" in argv:
+            output = Path(argv[argv.index("--build") + 1]) / "bin/cppcheck"
+            output.parent.mkdir(parents=True)
+            output.write_bytes(macho_image(self.architecture))
+        else:
+            stdout = {
+                (str(self.cmake), "--version"): "cmake version 3.28.3\n",
+                ("sw_vers", "-productVersion"): "15.7.9\n",
+                ("xcrun", "--find", "clang++"): f"{self.compiler}\n",
+                ("xcrun", "--show-sdk-path"): f"{self.sdk}\n",
+                ("xcrun", "--show-sdk-version"): "15.5\n",
+                (str(self.compiler), "--version"): "Apple clang version 17.0.0\n",
+                (str(self.make), "--version"): "GNU Make 3.81\n",
+                (str(self.linker), "-v"): "@(#)PROGRAM:ld fixture\n",
+            }.get(tuple(argv))
+            if stdout is None:
+                stdout, code, stderr = "", 127, f"fixture host does not model {argv}"
+        return subprocess.CompletedProcess(argv, code, stdout, stderr)
+
+    def stage(self, target: str) -> dict:
+        native = self.native
+        self.architecture = TARGETS[target][1]
+        self.lock = self.make_lock(target)
+        work = Path(tempfile.mkdtemp(dir=self.root))
+        self.bundle, self.evidence = work / "bundle", work / "evidence"
+        tools_on_path = {"lipo": str(self.lipo), "make": str(self.make)}
+        with (
+            mock.patch.object(native.tools, "host_target", return_value=target),
+            mock.patch.object(
+                native.tools, "load_lock", return_value=copy.deepcopy(self.lock)
+            ),
+            mock.patch.object(native.tools, "find_cmake", return_value=str(self.cmake)),
+            mock.patch.object(native.shutil, "which", side_effect=tools_on_path.get),
+            mock.patch.object(
+                native,
+                "_macos_translation_identity",
+                return_value={
+                    "sysctl": "sysctl.proc_translated",
+                    "result": 0,
+                    "errno": 0,
+                    "translated": 0,
+                },
+            ),
+            mock.patch.object(native.subprocess, "run", side_effect=self.apple_host),
+        ):
+            return native.stage_native(
+                self.bundle, self.inputs, self.evidence, target=target
+            )
+
+    def thin_bundle(self, receipt: dict) -> None:
+        native = self.native
+        with (
+            mock.patch.object(
+                native.tools, "host_target", return_value=f"macos-{self.architecture}"
+            ),
+            mock.patch.object(native.subprocess, "run", side_effect=self.apple_host),
+        ):
+            native.thin_macos_bundle(self.bundle, self.lock, receipt, self.evidence)
+
+    def test_both_targets_stage_past_lipo_identity_and_thin_with_it(self) -> None:
+        identity = {"path": str(self.lipo), "sha256": sha256(self.lipo.read_bytes())}
+        for target in MACOS_TARGETS:
+            with self.subTest(target):
+                self.calls.clear()
+                receipt = self.stage(target)
+                slice_name = LIPO_SLICES[self.architecture]
+                clangd = self.bundle / "analysis/clangd/bin/clangd"
+                self.assertEqual(receipt["tools"]["lipo"], identity)
+                recorded = json.loads(
+                    (self.evidence / "cppcheck-build.json").read_text()
+                )
+                self.assertEqual(recorded["tools"]["lipo"], identity)
+                self.assertEqual(
+                    [c["exit_code"] for c in recorded["commands"]],
+                    [0] * len(recorded["commands"]),
+                )
+                # Identification continues to the compiler, make and locked recipe.
+                self.assertIn([str(self.compiler), "--version"], self.calls)
+                self.assertIn([str(self.make), "--version"], self.calls)
+                configure = [argv for argv in self.calls if "-B" in argv]
+                self.assertEqual(len(configure), 1)
+                self.assertIn(f"-DCMAKE_OSX_ARCHITECTURES={slice_name}", configure[0])
+                # lipo is invoked only to thin clangd, via the measured path.
+                self.assertEqual(
+                    [argv for argv in self.calls if argv[0] == str(self.lipo)],
+                    [
+                        [
+                            str(self.lipo),
+                            str(clangd),
+                            "-thin",
+                            slice_name,
+                            "-output",
+                            str(clangd.with_name("clangd.thin")),
+                        ]
+                    ],
+                )
+                self.assertEqual(clangd.read_bytes(), self.slices[slice_name])
+                self.assertIn(
+                    {
+                        "path": "analysis/clangd/bin/clangd",
+                        "before_sha256": sha256(fat_image(self.slices)),
+                        "after_sha256": sha256(self.slices[slice_name]),
+                    },
+                    receipt["transformations"],
+                )
+                self.assertEqual(
+                    receipt["native_closure_before_strip"]["architecture"],
+                    self.architecture,
+                )
+                # Later dependency thinning uses the same retained identity.
+                dependency = self.bundle / "python/fixture.so"
+                dependency.parent.mkdir(parents=True)
+                dependency.write_bytes(fat_image(self.slices))
+                self.calls.clear()
+                self.thin_bundle(receipt)
+                self.assertEqual(
+                    self.calls,
+                    [
+                        [
+                            identity["path"],
+                            str(dependency),
+                            "-thin",
+                            slice_name,
+                            "-output",
+                            f"{dependency}.byo-thin",
+                        ]
+                    ],
+                )
+                self.assertEqual(dependency.read_bytes(), self.slices[slice_name])
+                self.assertEqual(
+                    receipt["transformations"][-1],
+                    {
+                        "path": "python/fixture.so",
+                        "before_sha256": sha256(fat_image(self.slices)),
+                        "after_sha256": sha256(self.slices[slice_name]),
+                    },
+                )
+
+    def test_unsupported_lipo_flags_and_thinning_errors_remain_failures(self) -> None:
+        # Fixture control: the observed Apple rejection still fails a command.
+        receipt = {"commands": []}
+        evidence = self.root / "control"
+        with (
+            mock.patch.object(
+                self.native.subprocess, "run", side_effect=self.apple_host
+            ),
+            self.assertRaisesRegex(RuntimeError, r"apple-lipo-version failed \(1\)"),
+        ):
+            self.native._command(
+                [str(self.lipo), "-version"], evidence, receipt, "apple-lipo-version"
+            )
+        self.assertEqual(receipt["commands"][-1]["exit_code"], 1)
+        self.assertIn("unknown flag: -version", receipt["commands"][-1]["stderr"])
+        full = dict(self.slices)
+        for target in MACOS_TARGETS:
+            slice_name = LIPO_SLICES[TARGETS[target][1]]
+            partial = {k: v for k, v in full.items() if k != slice_name}
+            with self.subTest(target, step="thin-clangd"):
+                self.slices = partial
+                with self.assertRaisesRegex(
+                    RuntimeError, r"Native analyzer thin-clangd failed \(1\)"
+                ):
+                    self.stage(target)
+                recorded = json.loads(
+                    (self.evidence / "cppcheck-build.json").read_text()
+                )
+                self.assertEqual(recorded["tools"]["lipo"]["path"], str(self.lipo))
+                failed = recorded["commands"][-1]
+                self.assertEqual(
+                    (failed["argv"][0], failed["exit_code"]), (str(self.lipo), 1)
+                )
+                self.assertIn(
+                    "does not contain the specified architecture", failed["stderr"]
+                )
+                self.assertEqual(
+                    (self.bundle / "analysis/clangd/bin/clangd").read_bytes(),
+                    fat_image(partial),
+                )
+                self.assertFalse((self.bundle / "analysis/runtime.json").exists())
+            with self.subTest(target, step="thin-native-dependency"):
+                self.slices = full
+                receipt = self.stage(target)
+                self.slices = partial
+                dependency = self.bundle / "python/fixture.so"
+                dependency.parent.mkdir(parents=True)
+                dependency.write_bytes(fat_image(full))
+                with self.assertRaisesRegex(
+                    RuntimeError, r"Native analyzer thin-native-dependency failed \(1\)"
+                ):
+                    self.thin_bundle(receipt)
+                failed = receipt["commands"][-1]
+                self.assertEqual(
+                    (failed["argv"][0], failed["exit_code"]), (str(self.lipo), 1)
+                )
+                self.assertEqual(dependency.read_bytes(), fat_image(full))
 
 
 if __name__ == "__main__":
