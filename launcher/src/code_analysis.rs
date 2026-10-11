@@ -47,7 +47,15 @@ pub(crate) struct Problem {
     status: &'static str,
     message: String,
     remedy: String,
-    details: Value,
+    pub(crate) details: Value,
+}
+impl std::fmt::Display for Problem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(reason) = self.details["runtime_status_reason"].as_str() {
+            return formatter.write_str(reason);
+        }
+        write!(formatter, "{}: {} {}", self.code, self.message, self.remedy)
+    }
 }
 impl Problem {
     fn blocked(code: &str, message: impl Into<String>, remedy: impl Into<String>) -> Self {
@@ -532,81 +540,94 @@ pub(crate) fn run_cppcheck(
 pub(crate) fn runtime_status(
     root: &Path,
     release: &crate::manifest::ReleaseManifest,
-) -> anyhow::Result<Value> {
-    let budget = Budget::new();
-    let program = runtime::resolve(root, release, &budget)
-        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
-    let clangd = runtime::resolve_selected(root, release, &budget, "clangd")
-        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
-    let mut status = program
-        .status(release)
-        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
-    let directory = std::env::temp_dir().join(format!(
-        "byo-analysis-status-{:016x}",
-        rand::random::<u64>()
-    ));
-    fs::create_dir(&directory)?;
-    let checked = (|| -> Result<()> {
-        clangd.recheck(&budget)?;
-        let mut events = Vec::new();
-        probe(&program, root, &budget, &directory, &mut events)?;
-        status["programs"]["cppcheck"]["version_probe"] = json!({"argv":[native(&program.executable),"--version"],"exit_code":0,"stdout":String::from_utf8_lossy(&read(&directory.join("version.stdout.log"), &budget)?),"stderr":String::from_utf8_lossy(&read(&directory.join("version.stderr.log"), &budget)?)});
-        let executable =
-            PathBuf::from(status["programs"]["clangd"]["executable"].as_str().unwrap());
-        let (snapshot, _) = config::Snapshot::capture(&executable, &budget)?;
-        if snapshot.hash
-            != status["programs"]["clangd"]["executable_sha256"]
-                .as_str()
-                .unwrap()
-        {
-            return Err(Problem::blocked(
-                "executable-unavailable",
-                "Managed clangd bytes changed after runtime verification.",
-                "Restore the complete immutable runtime and relaunch.",
-            ));
-        }
-        let argv = vec![native(&executable), "--version".into()];
-        let code = process::run_owned(
-            &argv,
-            root,
-            &budget,
-            &directory,
-            "clangd-version",
-            &mut events,
-            Some(Duration::from_secs(5)),
-        )?;
-        let bytes = read(&directory.join("clangd-version.stdout.log"), &budget)?;
-        let output = String::from_utf8_lossy(&bytes);
-        let version = output
-            .lines()
-            .next()
-            .and_then(|line| line.strip_prefix("clangd version "))
-            .and_then(|line| line.split_whitespace().next());
-        if code != 0
-            || version != status["programs"]["clangd"]["version"].as_str()
-            || !read(&directory.join("clangd-version.stderr.log"), &budget)?.is_empty()
-        {
-            return Err(Problem::blocked(
-                "executable-unavailable",
-                format!("Managed clangd version probe failed (exit {code}): {output}"),
-                "Restore matching inventoried executable bytes.",
-            ));
-        }
-        status["programs"]["clangd"]["version_probe"] = json!({"argv":argv,"exit_code":code,"stdout":output,"stderr":String::from_utf8_lossy(&read(&directory.join("clangd-version.stderr.log"), &budget)?)});
-        snapshot.recheck(&budget)?;
-        clangd.recheck(&budget)?;
-        program.recheck(&budget)
+) -> Result<Value> {
+    let mut events = Vec::new();
+    let result = (|| -> Result<Value> {
+        // These two filesystem errors formerly reached the consumer directly.
+        let directory_error = |error: std::io::Error| {
+            let reason = error.to_string();
+            let mut error = Problem::from(error);
+            error.details["runtime_status_reason"] = json!(reason);
+            error
+        };
+        let budget = Budget::new();
+        let program = runtime::resolve(root, release, &budget)?;
+        let clangd = runtime::resolve_selected(root, release, &budget, "clangd")?;
+        let mut status = program.status(release)?;
+        let directory = std::env::temp_dir().join(format!(
+            "byo-analysis-status-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&directory).map_err(directory_error)?;
+        let checked = (|| -> Result<()> {
+            clangd.recheck(&budget)?;
+            probe(&program, root, &budget, &directory, &mut events)?;
+            status["programs"]["cppcheck"]["version_probe"] = json!({"argv":[native(&program.executable),"--version"],"exit_code":0,"stdout":String::from_utf8_lossy(&read(&directory.join("version.stdout.log"), &budget)?),"stderr":String::from_utf8_lossy(&read(&directory.join("version.stderr.log"), &budget)?),"owned_processes":events});
+            let executable =
+                PathBuf::from(status["programs"]["clangd"]["executable"].as_str().unwrap());
+            let (snapshot, _) = config::Snapshot::capture(&executable, &budget)?;
+            if snapshot.hash
+                != status["programs"]["clangd"]["executable_sha256"]
+                    .as_str()
+                    .unwrap()
+            {
+                return Err(Problem::blocked(
+                    "executable-unavailable",
+                    "Managed clangd bytes changed after runtime verification.",
+                    "Restore the complete immutable runtime and relaunch.",
+                ));
+            }
+            let argv = vec![native(&executable), "--version".into()];
+            let clangd_events_start = events.len();
+            let code = process::run_owned(
+                &argv,
+                root,
+                &budget,
+                &directory,
+                "clangd-version",
+                &mut events,
+                Some(Duration::from_secs(5)),
+            )?;
+            let bytes = read(&directory.join("clangd-version.stdout.log"), &budget)?;
+            let output = String::from_utf8_lossy(&bytes);
+            let version = output
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("clangd version "))
+                .and_then(|line| line.split_whitespace().next());
+            if code != 0
+                || version != status["programs"]["clangd"]["version"].as_str()
+                || !read(&directory.join("clangd-version.stderr.log"), &budget)?.is_empty()
+            {
+                return Err(Problem::blocked(
+                    "executable-unavailable",
+                    format!("Managed clangd version probe failed (exit {code}): {output}"),
+                    "Restore matching inventoried executable bytes.",
+                ));
+            }
+            status["programs"]["clangd"]["version_probe"] = json!({"argv":argv,"exit_code":code,"stdout":output,"stderr":String::from_utf8_lossy(&read(&directory.join("clangd-version.stderr.log"), &budget)?),"owned_processes":&events[clangd_events_start..]});
+            snapshot.recheck(&budget)?;
+            clangd.recheck(&budget)?;
+            program.recheck(&budget)
+        })();
+        // Only this fresh, exact owned directory is removed after run_owned has
+        // completed its PID/creation-bound child cleanup.
+        let cleanup = fs::remove_dir_all(&directory);
+        checked?;
+        cleanup.map_err(directory_error)?;
+        program.recheck(&budget)?;
+        Ok(status)
     })();
-    // Only this fresh, exact owned directory is removed after run_owned has
-    // completed its PID/creation-bound child cleanup.
-    let cleanup = fs::remove_dir_all(&directory);
-    checked
-        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
-    cleanup?;
-    program
-        .recheck(&budget)
-        .map_err(|error| anyhow::anyhow!("{}: {} {}", error.code, error.message, error.remedy))?;
-    Ok(status)
+    match result {
+        Ok(mut status) => {
+            status["owned_processes"] = json!(events);
+            Ok(status)
+        }
+        Err(mut error) => {
+            error.details["owned_processes"] = json!(events);
+            Err(error)
+        }
+    }
 }
 fn run_with_runtime(
     project: &Path,
@@ -866,6 +887,10 @@ pub(crate) fn render_analysis(result: &Value) -> String {
     ));
     lines.join("\n")
 }
+
+#[cfg(test)]
+#[path = "code_analysis/receipt_consumer_tests.rs"]
+mod receipt_consumer_tests;
 
 #[cfg(test)]
 mod owner_tests {

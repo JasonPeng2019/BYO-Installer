@@ -408,6 +408,15 @@ fn cstring(value: &std::ffi::OsStr) -> Result<CString> {
     CString::new(value.as_bytes())
         .map_err(|_| Problem::execution("execution-failed", "NUL in native process input"))
 }
+fn terminal_exit(status: i32) -> Option<i64> {
+    if libc::WIFEXITED(status) {
+        Some(i64::from(libc::WEXITSTATUS(status)))
+    } else if libc::WIFSIGNALED(status) {
+        Some(-i64::from(libc::WTERMSIG(status)))
+    } else {
+        None
+    }
+}
 
 pub(in crate::code_analysis) fn run_owned(
     argv: &[String],
@@ -417,6 +426,31 @@ pub(in crate::code_analysis) fn run_owned(
     phase: &str,
     events: &mut Vec<Value>,
     phase_limit: Option<Duration>,
+) -> Result<i64> {
+    run_owned_with_persistence(
+        argv,
+        cwd,
+        budget,
+        directory,
+        phase,
+        events,
+        phase_limit,
+        |file, _| file.sync_all(),
+    )
+}
+
+// Invocation-local persistence injection leaves all native ownership and wait
+// observations intact. It is called only after successful scoped cleanup/reap.
+#[allow(clippy::too_many_arguments)]
+fn run_owned_with_persistence(
+    argv: &[String],
+    cwd: &Path,
+    budget: &Budget,
+    directory: &Path,
+    phase: &str,
+    events: &mut Vec<Value>,
+    phase_limit: Option<Duration>,
+    mut persist: impl FnMut(&File, &str) -> std::io::Result<()>,
 ) -> Result<i64> {
     let phase_start = Instant::now();
     budget.remaining()?;
@@ -524,6 +558,9 @@ pub(in crate::code_analysis) fn run_owned(
     }
     drop(writer);
     let mut startup_reaped = false;
+    let mut startup_wait_available = true;
+    let mut startup_terminal_exit = None;
+    let mut startup_identity = None;
     let startup = (|| -> Result<Observation> {
         loop {
             remaining()?;
@@ -539,6 +576,7 @@ pub(in crate::code_analysis) fn run_owned(
             if waited == pid {
                 if !libc::WIFSTOPPED(status) {
                     startup_reaped = true;
+                    startup_terminal_exit = terminal_exit(status);
                     return Err(Problem::execution(
                         "execution-failed",
                         "Native child setup failed before exec",
@@ -547,6 +585,7 @@ pub(in crate::code_analysis) fn run_owned(
                 let leader = observe(pid)?.ok_or_else(|| {
                     Problem::execution("cleanup-failed", "Stopped child identity unavailable")
                 })?;
+                startup_identity = Some(leader.clone());
                 if leader.group != pid || leader.session != pid {
                     return Err(Problem::execution(
                         "cleanup-failed",
@@ -557,7 +596,7 @@ pub(in crate::code_analysis) fn run_owned(
             }
             if waited < 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
                 if std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD) {
-                    startup_reaped = true;
+                    startup_wait_available = false;
                 }
                 return Err(std::io::Error::last_os_error().into());
             }
@@ -567,27 +606,56 @@ pub(in crate::code_analysis) fn run_owned(
     let leader = match startup {
         Ok(leader) => leader,
         Err(error) => {
+            let cleanup_start = Instant::now();
+            let mut cleanup_error = None;
             // A stopped or running direct child is still ours; never signal a
             // numeric PID after waitpid has already reaped that child.
-            if !startup_reaped {
+            if !startup_reaped && startup_wait_available {
                 let mut status = 0;
                 let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
                 if waited == pid {
                     startup_reaped = true;
+                    startup_terminal_exit = terminal_exit(status);
                 } else if waited == 0 {
-                    unsafe {
-                        libc::kill(pid, libc::SIGKILL);
+                    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+                        cleanup_error = Some(format!(
+                            "kill({pid}, SIGKILL): {}",
+                            std::io::Error::last_os_error()
+                        ));
                     }
                     while remaining().is_ok() {
-                        if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
+                        let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+                        if waited == pid {
                             startup_reaped = true;
+                            startup_terminal_exit = terminal_exit(status);
                             break;
+                        }
+                        if waited < 0 {
+                            let wait_error = std::io::Error::last_os_error();
+                            if wait_error.raw_os_error() != Some(libc::EINTR) {
+                                cleanup_error = Some(format!("waitpid({pid}): {wait_error}"));
+                                break;
+                            }
                         }
                         std::thread::sleep(Duration::from_millis(2));
                     }
+                } else if waited < 0 {
+                    cleanup_error = Some(format!(
+                        "waitpid({pid}): {}",
+                        std::io::Error::last_os_error()
+                    ));
                 }
             }
-            events.push(json!({"phase":phase,"pid":pid,"cleanup":if startup_reaped {"confirmed"} else {"unconfirmed"},"ownership":"posix_startup","exec_started":false}));
+            if !startup_reaped && cleanup_error.is_none() {
+                cleanup_error = Some(if startup_wait_available {
+                    "Direct-child reap was not confirmed before the deadline".into()
+                } else {
+                    "Retained direct-child wait is unavailable (ECHILD)".into()
+                });
+            }
+            // A direct-child reap before exec does not prove the covered group
+            // and captured-descendant set. Do not invent scoped cleanup proof.
+            events.push(json!({"phase":phase,"pid":pid,"start_identity":startup_identity.as_ref().map(|value|value.start),"process_group":startup_identity.as_ref().map(|value|value.group),"session":startup_identity.as_ref().map(|value|value.session),"cleanup":"unconfirmed","coverage":"retained_group_and_captured_descendants","scope_confirmed":false,"unobserved_detached_descendants":"not_proven","leader_reaped":startup_reaped,"terminal_exit_code":startup_terminal_exit,"ownership":"posix_startup","exec_started":false,"execution_error":error.message,"cleanup_error":cleanup_error,"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64()}));
             return Err(error);
         }
     };
@@ -713,22 +781,39 @@ pub(in crate::code_analysis) fn run_owned(
             return Err(std::io::Error::last_os_error().into());
         }
         owned.reaped = true;
-        out.sync_all()?;
-        err.sync_all()?;
-        Ok(if libc::WIFEXITED(status) {
-            i64::from(libc::WEXITSTATUS(status))
-        } else {
-            -i64::from(libc::WTERMSIG(status))
+        terminal_exit(status).ok_or_else(|| {
+            Problem::execution(
+                "cleanup-failed",
+                "Direct-child wait returned no terminal exit",
+            )
         })
     })();
-    let descendants:Vec<_>=owned.descendants.values().filter(|p|p.pid!=pid).map(|p|json!({"pid":p.pid,"start_identity":p.start,"process_group":p.group,"session":p.session,"cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"}})).collect();
-    events.push(json!({"phase":phase,"pid":pid,"start_identity":owned.leader.start,"process_group":pid,"session":pid,"ownership":"posix_session","cleanup":if cleanup.is_ok(){"confirmed"}else{"unconfirmed"},"descendants":descendants,"process_exit_code":execution.as_ref().ok(),"terminal_exit_code":cleanup.as_ref().ok(),"group_signal_errno":group_signal_errno,"group_probe_errno":group_probe_errno,"execution_error":execution.as_ref().err().map(|error|&error.message),"cleanup_error":cleanup.as_ref().err().map(|error|&error.message),"elapsed_seconds":cleanup_start.elapsed().as_secs_f64(),"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64()}));
+    let cleanup_elapsed = cleanup_start.elapsed().as_secs_f64();
+    let scope_confirmed = cleanup.is_ok() && owned.reaped;
+    let persistence = if scope_confirmed {
+        persist(&out, "stdout")
+            .map_err(|error| format!("{phase} stdout: {error}"))
+            .and_then(|()| {
+                persist(&err, "stderr").map_err(|error| format!("{phase} stderr: {error}"))
+            })
+            .map_err(|error| {
+                Problem::execution(
+                    "evidence-write-failed",
+                    format!("Cannot persist owned process output: {error}"),
+                )
+            })
+    } else {
+        Ok(())
+    };
+    let descendants:Vec<_>=owned.descendants.values().filter(|p|p.pid!=pid).map(|p|json!({"pid":p.pid,"start_identity":p.start,"process_group":p.group,"session":p.session,"cleanup":if scope_confirmed{"confirmed"}else{"unconfirmed"}})).collect();
+    events.push(json!({"phase":phase,"pid":pid,"start_identity":owned.leader.start,"process_group":owned.leader.group,"session":owned.leader.session,"ownership":"posix_session","cleanup":if scope_confirmed{"confirmed"}else{"unconfirmed"},"coverage":"retained_group_and_captured_descendants","scope_confirmed":scope_confirmed,"unobserved_detached_descendants":"not_proven","leader_reaped":owned.reaped,"descendants":descendants,"process_exit_code":execution.as_ref().ok(),"terminal_exit_code":cleanup.as_ref().ok(),"group_signal_errno":group_signal_errno,"group_probe_errno":group_probe_errno,"execution_error":execution.as_ref().err().map(|error|&error.message),"cleanup_error":cleanup.as_ref().err().map(|error|&error.message),"output_persistence_error":persistence.as_ref().err().map(|error|&error.message),"elapsed_seconds":cleanup_elapsed,"phase_elapsed_seconds":phase_start.elapsed().as_secs_f64()}));
     cleanup.map_err(|e| {
         Problem::execution(
             "cleanup-failed",
             format!("Cannot confirm owned {phase} cleanup: {}", e.message),
         )
     })?;
+    persistence?;
     remaining()?;
     if CANCELLED.load(Ordering::SeqCst) {
         return Err(Problem::execution(
@@ -738,6 +823,10 @@ pub(in crate::code_analysis) fn run_owned(
     }
     execution
 }
+
+#[cfg(test)]
+#[path = "process_posix_receipt_tests.rs"]
+mod process_posix_receipt_tests;
 
 #[cfg(test)]
 mod tests {

@@ -217,7 +217,8 @@ fn managed_analysis_status(
         Err(error) => serde_json::json!({
             "status":"unavailable", "reason":error.to_string(),
             "runtime_root":root, "runtime_manifest_sha256":null,
-            "analysis_mapping_sha256":null, "programs":{"cppcheck":null,"clangd":null}
+            "analysis_mapping_sha256":null, "programs":{"cppcheck":null,"clangd":null},
+            "owned_processes":error.details["owned_processes"]
         }),
     })
 }
