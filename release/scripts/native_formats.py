@@ -347,6 +347,7 @@ def validate_bundle_closure(
         "/usr/lib/libobjc.A.dylib",
         "/usr/lib/libc++abi.dylib",
         "/usr/lib/libiconv.2.dylib",
+        "/usr/lib/libffi.dylib",
         "/usr/lib/libbz2.1.0.dylib",
         "/usr/lib/liblzma.5.dylib",
         "/usr/lib/libncurses.5.4.dylib",
