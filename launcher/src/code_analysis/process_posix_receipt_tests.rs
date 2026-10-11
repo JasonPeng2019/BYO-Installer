@@ -78,11 +78,12 @@ struct Call {
     stream: String,
     leader: Option<i32>,
     wait_errno: Option<i32>,
-    leader_now: Result<Option<Observation>, String>,
+    leader_now: std::result::Result<Option<Observation>, String>,
 }
 
 struct Run {
     root: PathBuf,
+    argv: Vec<String>,
     result: Result<i64>,
     events: Vec<Value>,
     calls: Vec<Call>,
@@ -99,7 +100,7 @@ fn run(script: &str, fail: Option<&str>) -> Run {
     fs::create_dir(&root).unwrap();
     let mut budget = Budget::new();
     budget.configure(5.0).unwrap();
-    let argv = vec!["/bin/sh".into(), "-c".into(), script.into()];
+    let argv: Vec<String> = vec!["/bin/sh".into(), "-c".into(), script.into()];
     let mut events = Vec::new();
     let mut calls = Vec::new();
     let result = run_owned_with_persistence(
@@ -134,10 +135,28 @@ fn run(script: &str, fail: Option<&str>) -> Run {
     );
     Run {
         root,
+        argv,
         result,
         events,
         calls,
     }
+}
+
+/// Production history for one successful spawn: the stopped-before-exec
+/// identity event, then the terminal receipt for the same leader.
+fn terminal_after_startup<'a>(events: &'a [Value], argv: &[String], cwd: &Path) -> &'a Value {
+    assert_eq!(events.len(), 2, "{events:?}");
+    let (start, terminal) = (&events[0], &events[1]);
+    assert_eq!(start["phase"], "analysis", "{start}");
+    assert_eq!(start["stopped_before_exec"], true, "{start}");
+    assert_eq!(start["argv"], json!(argv), "{start}");
+    assert_eq!(start["cwd"], json!(cwd), "{start}");
+    assert!(start["start_identity"].is_array(), "{start}");
+    assert_eq!(terminal["ownership"], "posix_session", "{terminal}");
+    for key in ["phase", "pid", "start_identity", "process_group", "session"] {
+        assert_eq!(start[key], terminal[key], "{key}: {start} / {terminal}");
+    }
+    terminal
 }
 
 const SCRIPT: &str = "echo pid=$$; sleep 60 & echo bg=$!; echo diag >&2;";
@@ -145,8 +164,7 @@ const SCRIPT: &str = "echo pid=$$; sleep 60 & echo bg=$!; echo diag >&2;";
 /// Assert the receipt and kernel state prove cleanup/reap independently of
 /// the operation result, then return the receipt.
 fn assert_post_reap(run: &Run, exit: i64, streams: &[&str]) -> Value {
-    assert_eq!(run.events.len(), 1, "{:?}", run.events);
-    let receipt = run.events[0].clone();
+    let receipt = terminal_after_startup(&run.events, &run.argv, &run.root).clone();
     let stdout = fs::read_to_string(run.root.join("analysis.stdout.log")).unwrap();
     let stderr = fs::read_to_string(run.root.join("analysis.stderr.log")).unwrap();
     let pid = echoed(&stdout, "pid=").expect("leader pid output");
@@ -329,12 +347,12 @@ fn production_sync_failure_after_reap_keeps_terminal_exit() {
     std::os::unix::fs::symlink("/dev/null", root.join("analysis.stderr.log")).unwrap();
     let mut budget = Budget::new();
     budget.configure(5.0).unwrap();
-    let argv = vec!["/bin/sh".into(), "-c".into(), "echo pid=$$; exit 5".into()];
+    let argv: Vec<String> = vec!["/bin/sh".into(), "-c".into(), "echo pid=$$; exit 5".into()];
     let mut events = Vec::new();
     let error = run_owned(&argv, &root, &budget, &root, "analysis", &mut events, None).unwrap_err();
     assert_eq!(error.code, "analysis/evidence-write-failed", "{error:?}");
     assert!(error.message.contains("analysis stderr:"), "{error:?}");
-    let receipt = events.last().unwrap();
+    let receipt = terminal_after_startup(&events, &argv, &root);
     let stdout = fs::read_to_string(root.join("analysis.stdout.log")).unwrap();
     let pid = echoed(&stdout, "pid=").expect("leader pid output");
     assert_eq!(receipt["pid"], pid, "{receipt}");

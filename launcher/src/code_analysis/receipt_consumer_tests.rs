@@ -237,6 +237,30 @@ fn receipts(value: &Value) -> &Vec<Value> {
         .unwrap_or_else(|| panic!("owned_processes missing: {value}"))
 }
 
+/// The actual owned history: per probe, the stopped-before-exec event and then
+/// the terminal receipt for the same phase/PID/start identity.
+fn assert_history(events: &[Value], fixture: &Fixture, phases: &[(&str, i64)]) {
+    assert_eq!(events.len(), phases.len() * 2, "{events:?}");
+    let target = Target::host().unwrap();
+    for (pair, (phase, exit)) in events.chunks(2).zip(phases) {
+        let (start, terminal) = (&pair[0], &pair[1]);
+        let program = if *phase == "version" {
+            "cppcheck"
+        } else {
+            "clangd"
+        };
+        let executable = native(&fixture.root.join(target.executable(program)));
+        assert_eq!(start["phase"], *phase, "{start}");
+        assert_eq!(start["stopped_before_exec"], true, "{start}");
+        assert_eq!(start["argv"], json!([executable, "--version"]), "{start}");
+        assert_eq!(start["cwd"], json!(fixture.root), "{start}");
+        assert_receipt(terminal, phase, *exit);
+        for key in ["phase", "pid", "start_identity", "process_group", "session"] {
+            assert_eq!(start[key], terminal[key], "{key}: {start} / {terminal}");
+        }
+    }
+}
+
 /// The doctor consumer keeps its former unavailable shape plus the receipts.
 fn assert_unavailable(fixture: &Fixture, error: &Problem, phases: &[(&str, i64)]) {
     // Former consumer reason: "{code}: {message} {remedy}".
@@ -255,11 +279,7 @@ fn assert_unavailable(fixture: &Fixture, error: &Problem, phases: &[(&str, i64)]
         json!({"cppcheck":null,"clangd":null}),
         "{doctor}"
     );
-    let forwarded = receipts(&doctor["owned_processes"]);
-    assert_eq!(forwarded.len(), phases.len(), "{doctor}");
-    for (receipt, (phase, exit)) in forwarded.iter().zip(phases) {
-        assert_receipt(receipt, phase, *exit);
-    }
+    assert_history(receipts(&doctor["owned_processes"]), fixture, phases);
 }
 
 #[test]
@@ -268,22 +288,42 @@ fn ready_status_retains_cppcheck_and_clangd_probe_receipts() {
     let status = runtime_status(&fixture.root, &fixture.release).unwrap();
     assert_eq!(status["status"], "ready", "{status}");
     let all = receipts(&status["owned_processes"]);
-    assert_eq!(all.len(), 2, "{status}");
-    assert_receipt(&all[0], "version", 0);
-    assert_receipt(&all[1], "clangd-version", 0);
+    assert_history(all, &fixture, &[("version", 0), ("clangd-version", 0)]);
     let cppcheck = &status["programs"]["cppcheck"]["version_probe"];
     let clangd = &status["programs"]["clangd"]["version_probe"];
-    assert_eq!(cppcheck["stdout"], "Cppcheck 2.22.0\n", "{status}");
-    assert_eq!(clangd["stdout"], "clangd version 23.1.0 (fixture)\n");
-    assert_eq!(cppcheck["owned_processes"], json!([all[0]]), "{status}");
-    assert_eq!(clangd["owned_processes"], json!([all[1]]), "{status}");
+    assert_eq!(
+        cppcheck["stdout"],
+        "Cppcheck 2.22.0
+",
+        "{status}"
+    );
+    assert_eq!(
+        clangd["stdout"],
+        "clangd version 23.1.0 (fixture)
+"
+    );
+    // Each program object carries exactly its own full event slice.
+    assert_eq!(cppcheck["owned_processes"], json!(&all[..2]), "{status}");
+    assert_eq!(clangd["owned_processes"], json!(&all[2..]), "{status}");
 
     let doctor = crate::managed_analysis_status(&fixture.root, &fixture.release).unwrap();
     assert_eq!(doctor["status"], "ready", "{doctor}");
     let forwarded = receipts(&doctor["owned_processes"]);
-    assert_eq!(forwarded.len(), 2, "{doctor}");
-    assert_receipt(&forwarded[0], "version", 0);
-    assert_receipt(&forwarded[1], "clangd-version", 0);
+    assert_history(
+        forwarded,
+        &fixture,
+        &[("version", 0), ("clangd-version", 0)],
+    );
+    assert_eq!(
+        doctor["programs"]["cppcheck"]["version_probe"]["owned_processes"],
+        json!(&forwarded[..2]),
+        "{doctor}"
+    );
+    assert_eq!(
+        doctor["programs"]["clangd"]["version_probe"]["owned_processes"],
+        json!(&forwarded[2..]),
+        "{doctor}"
+    );
 }
 
 #[test]
@@ -293,8 +333,7 @@ fn cppcheck_probe_failure_retains_its_receipt() {
     assert_eq!(error.code, "analysis/version-failed", "{error:?}");
     assert!(error.message.contains("(exit 3)"), "{error:?}");
     let retained = receipts(&error.details["owned_processes"]);
-    assert_eq!(retained.len(), 1, "{error:?}");
-    assert_receipt(&retained[0], "version", 3);
+    assert_history(retained, &fixture, &[("version", 3)]);
     assert_unavailable(&fixture, &error, &[("version", 3)]);
 }
 
@@ -305,8 +344,7 @@ fn clangd_probe_failure_retains_both_receipts() {
     assert_eq!(error.code, "analysis/executable-unavailable", "{error:?}");
     assert!(error.message.contains("(exit 4)"), "{error:?}");
     let retained = receipts(&error.details["owned_processes"]);
-    assert_eq!(retained.len(), 2, "{error:?}");
-    assert_receipt(&retained[0], "version", 0);
-    assert_receipt(&retained[1], "clangd-version", 4);
-    assert_unavailable(&fixture, &error, &[("version", 0), ("clangd-version", 4)]);
+    let phases = [("version", 0), ("clangd-version", 4)];
+    assert_history(retained, &fixture, &phases);
+    assert_unavailable(&fixture, &error, &phases);
 }
