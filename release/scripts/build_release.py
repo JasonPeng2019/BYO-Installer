@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -327,12 +328,184 @@ def purl(kind: str, name: str, version: str) -> str:
     return f"pkg:{kind}/{quote(name, safe='')}@{quote(version, safe='')}"
 
 
+def stage_linux_sidecar_zlib(bundle: Path, evidence: Path) -> dict:
+    """Capture only zlib, which pinned Nuitka 2.8.9 excludes on Linux.
+
+    The controlled builder supplies the actual loader-selected RPM bytes and
+    installed notices. This never acquires inputs or repairs loader paths;
+    final bundle closure must prove the copied library is privately reachable.
+    """
+    if platform.system() != "Linux":
+        raise RuntimeError("Sidecar zlib staging requires the native Linux builder")
+    bundle = bundle.resolve(strict=True)
+    sidecar = bundle / "sidecar"
+    consumer = sidecar / "binascii.so"
+    if sidecar.is_symlink() or not stat.S_ISREG(consumer.lstat().st_mode):
+        raise RuntimeError("Sidecar zlib consumer must be a regular private image")
+    consumer_bytes = consumer.read_bytes()
+    consumer_native = native_formats.elf(consumer_bytes, False)
+    if "libz.so.1" not in consumer_native["needed"]:
+        raise RuntimeError("Sidecar binascii.so does not declare libz.so.1")
+    receipt = {
+        "schema": 1,
+        "library": "libz.so.1",
+        "required_by": "sidecar/binascii.so",
+        "consumer_sha256": analysis_tools.sha256(consumer_bytes),
+        "consumer_native": consumer_native,
+        "tools": {},
+        "commands": [],
+        "files": [],
+    }
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("LD_")
+    }
+    environment["LC_ALL"] = "C"
+
+    def measure(argv: list[str]) -> str:
+        name = argv[0]
+        tool = shutil.which(name)
+        if not tool:
+            raise RuntimeError(f"Sidecar zlib measurement requires {name}")
+        executable = Path(tool).resolve(strict=True)
+        receipt["tools"][name] = {
+            "path": str(executable),
+            "sha256": digest(executable),
+        }
+        command = [str(executable), *argv[1:]]
+        result = subprocess.run(
+            command,
+            cwd=sidecar,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+        receipt["commands"].append(
+            {
+                "argv": command,
+                "exit_code": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        )
+        analysis_tools.write_json(evidence / "linux-sidecar-zlib.json", receipt)
+        if result.returncode:
+            raise RuntimeError(
+                f"Sidecar zlib {name} measurement failed: {result.stderr.strip()}"
+            )
+        return result.stdout
+
+    selected = [
+        match.group(1)
+        for line in measure(["ldd", str(consumer)]).splitlines()
+        if (
+            match := re.fullmatch(
+                r"\s*libz\.so\.1\s+=>\s+(/\S+)\s+\(0x[0-9a-fA-F]+\)\s*", line
+            )
+        )
+    ]
+    if len(selected) != 1:
+        raise RuntimeError("Unresolved or ambiguous loader-selected sidecar libz.so.1")
+    source = Path(selected[0]).resolve(strict=True)
+    if not stat.S_ISREG(source.lstat().st_mode):
+        raise RuntimeError("Loader-selected zlib is not a regular file")
+    library_bytes = source.read_bytes()
+    native = native_formats.elf(library_bytes, False)
+    if native["soname"] != "libz.so.1":
+        raise RuntimeError("Loader-selected zlib SONAME is not libz.so.1")
+    receipt.update(
+        source_path=str(source),
+        source_sha256=analysis_tools.sha256(library_bytes),
+        native=native,
+    )
+    query = (
+        "%{NAME}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\t%{SOURCERPM}\t%{LICENSE}\t%{FILEDIGESTALGO}\n"
+        "[%{FILENAMES}\t%{FILEDIGESTS}\t%{FILEFLAGS:fflags}\n]"
+    )
+    rows = measure(["rpm", "-qf", "--qf", query, str(source)]).splitlines()
+    header = rows[0].split("\t") if rows else []
+    if (
+        len(header) != 7
+        or any(not field or field == "(none)" for field in header)
+        or header[0] != "zlib"
+        or header[3] != "x86_64"
+        or not header[4].startswith("zlib-")
+        or not header[4].endswith(".src.rpm")
+        or header[6] != "8"  # RPM's SHA-256 file digest algorithm.
+    ):
+        raise RuntimeError(
+            "Incomplete/unsupported zlib RPM package/source/license provenance"
+        )
+    manifest = {}
+    for row in rows[1:]:
+        fields = row.split("\t")
+        if len(fields) != 3 or not fields[0].startswith("/") or fields[0] in manifest:
+            raise RuntimeError("Ambiguous/malformed zlib RPM file provenance")
+        manifest[fields[0]] = fields[1:]
+    receipt.update(
+        package=f"{header[0]}-{header[1]}-{header[2]}.{header[3]}",
+        version=header[1],
+        source_rpm=header[4],
+        license=header[5],
+    )
+    notices = [path for path, (_, flags) in manifest.items() if "l" in flags]
+    if not notices:
+        raise RuntimeError("Zlib RPM declares no license notices")
+    payloads = [(source, "sidecar/libz.so.1", "native-dependency", library_bytes)]
+    for name in sorted(notices):
+        notice = Path(name)
+        if not notice.is_file() or not stat.S_ISREG(notice.lstat().st_mode):
+            raise RuntimeError(
+                f"Restore the exact installed zlib RPM license notice before building: {notice}"
+            )
+        payloads.append(
+            (
+                notice,
+                analysis_tools.safe_relative("sidecar/licenses/zlib/" + notice.name),
+                "license",
+                notice.read_bytes(),
+            )
+        )
+    analysis_tools.safe_namespace([relative for _, relative, _, _ in payloads])
+    for original, relative, kind, data in payloads:
+        sha256 = analysis_tools.sha256(data)
+        expected = manifest.get(str(original), [None])[0]
+        if not data or sha256 != expected:
+            raise RuntimeError(f"Zlib RPM file digest mismatch: {original}")
+        destination = bundle / relative
+        if destination.exists() or destination.is_symlink():
+            raise RuntimeError(f"Sidecar zlib payload already exists: {relative}")
+        for parent in destination.parents:
+            if parent == bundle:
+                break
+            if parent.is_symlink():
+                raise RuntimeError(
+                    f"Sidecar zlib destination escapes through a link: {relative}"
+                )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("xb") as handle:
+            handle.write(data)
+        receipt["files"].append(
+            {
+                "path": relative,
+                "sha256": sha256,
+                "size": len(data),
+                "kind": kind,
+                "executable": False,
+            }
+        )
+    analysis_tools.write_json(evidence / "linux-sidecar-zlib.json", receipt)
+    return receipt
+
+
 def write_sbom(
     bundle: Path,
     nuitka_report: Path,
     version: str,
     payload_files: list[dict[str, object]] | None = None,
     analysis_provenance: dict | None = None,
+    linux_sidecar_provenance: dict | None = None,
 ) -> None:
     """Write a deterministic CycloneDX inventory of bundled dependencies."""
 
@@ -436,14 +609,71 @@ def write_sbom(
         )
 
     analysis_dependencies = []
+    if linux_sidecar_provenance is not None:
+        delivered = {leaf["path"]: leaf for leaf in payload_files}
+        zlib_reference = "byo-native:sidecar/libz.so.1"
+        notices = []
+        for selected in linux_sidecar_provenance["files"]:
+            relative = selected["path"]
+            if delivered.get(relative) != selected:
+                raise RuntimeError(
+                    f"Final sidecar zlib inventory differs from staging: {relative}"
+                )
+            if relative == "sidecar/libz.so.1":
+                continue
+            reference = f"byo-native:{relative}"
+            notices.append(reference)
+            add(
+                {
+                    "type": "file",
+                    "bom-ref": reference,
+                    "name": relative,
+                    "hashes": [{"alg": "SHA-256", "content": selected["sha256"]}],
+                }
+            )
+        add(
+            {
+                "type": "library",
+                "bom-ref": zlib_reference,
+                "name": "zlib",
+                "version": linux_sidecar_provenance["version"],
+                "hashes": [
+                    {
+                        "alg": "SHA-256",
+                        "content": delivered["sidecar/libz.so.1"]["sha256"],
+                    }
+                ],
+                "licenses": [
+                    {"license": {"name": linux_sidecar_provenance["license"]}}
+                ],
+                "properties": [
+                    {"name": "byo:bundled-native-file", "value": "true"},
+                    {
+                        "name": "byo:linux:package",
+                        "value": linux_sidecar_provenance["package"],
+                    },
+                    {
+                        "name": "byo:linux:source-rpm",
+                        "value": linux_sidecar_provenance["source_rpm"],
+                    },
+                    *[
+                        {"name": "byo:linux:license-notice", "value": leaf["path"]}
+                        for leaf in linux_sidecar_provenance["files"]
+                        if leaf["kind"] == "license"
+                    ],
+                ],
+            }
+        )
+        analysis_dependencies.append({"ref": zlib_reference, "dependsOn": notices})
     if analysis_provenance is not None:
-        analysis_components, analysis_dependencies = analysis_tools.sbom_components(
+        analysis_components, analyzer_dependencies = analysis_tools.sbom_components(
             analysis_tools.load_lock(target=analysis_tools.host_target()),
             payload_files,
             analysis_provenance,
         )
         for component in analysis_components:
             add(component)
+        analysis_dependencies.extend(analyzer_dependencies)
         native_components, native_dependencies = analysis_tools.native_sbom(
             payload_files, analysis_tools.load_lock(target=analysis_tools.host_target())
         )
@@ -574,6 +804,10 @@ def payload_inventory(bundle: Path) -> list[dict[str, object]]:
         )
         if classified:
             kind, executable = classified
+        elif relative == "sidecar/libz.so.1":
+            kind = "native-dependency"
+        elif relative.startswith("sidecar/licenses/zlib/"):
+            kind = "license"
         if os.name != "nt" and stat.S_IMODE(path.stat().st_mode) != (
             0o755 if executable else 0o644
         ):
@@ -1190,6 +1424,11 @@ def main() -> int:
             shutil.copytree(child, destination)
         else:
             shutil.copy2(child, destination)
+    linux_sidecar_provenance = (
+        stage_linux_sidecar_zlib(bundle, build / "analysis-evidence")
+        if platform.system() == "Linux"
+        else None
+    )
     shutil.copy2(pack, bundle / "workflow/workspace.pack")
     analysis_provenance = None
     if platform.system() == "Windows":
@@ -1269,7 +1508,14 @@ def main() -> int:
             )
 
     files = payload_inventory(bundle)
-    write_sbom(bundle, nuitka_report, args.version, files, analysis_provenance)
+    write_sbom(
+        bundle,
+        nuitka_report,
+        args.version,
+        files,
+        analysis_provenance,
+        linux_sidecar_provenance,
+    )
     if os.name != "nt":
         (bundle / "sbom.cdx.json").chmod(0o644)
     toolchains = toolchain_provenance(args.python, nuitka_report)
