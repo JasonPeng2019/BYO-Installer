@@ -77,7 +77,9 @@ directory through `--analysis-input-dir` or `BYO_ANALYSIS_INPUT_DIR`; it never
 downloads analyzer sources itself.
 
 Native build prerequisites are Rust 1.97.1, Python 3.12, `uv`, CMake 3.22 or
-newer and a native C/C++ toolchain. macOS also needs Xcode command-line tools and
+newer and a native C/C++ toolchain. The locked Windows Cppcheck recipe requires
+Visual Studio 2022 x64; both build workflows select the matching Windows 2022
+image. macOS also needs Xcode command-line tools and
 `lipo`; Linux needs Make, binutils and `patchelf`. The Actions workflow is the
 authoritative setup, including pinned build environments and dependencies.
 
@@ -98,6 +100,21 @@ The builder checks measured compiler/library identities and actual linker-map
 participation; supplied labels alone do not establish provenance. The protected
 Linux release workflow requires `vars.BYO_GCC_RUNTIME_INPUT_DIR` pointing to
 these prepared inputs for its selected compiler.
+
+The Linux builder also needs `ldd`, RPM metadata and an installed x86_64 `zlib`
+package whose library and license-tagged files have SHA-256 RPM digests. Pinned
+Nuitka 2.8.9 excludes zlib from its Linux standalone output. The builder measures
+the library selected for `sidecar/binascii.so`, copies it and its owned notices
+privately, and checks final closure, inventory and SBOM. An unowned or modified
+host copy cannot satisfy that measurement.
+
+The development matrix restores omitted notices by reinstalling the exact
+installed zlib NEVRA with `dnf --setopt=tsflags= --setopt=install_weak_deps=False
+reinstall --assumeyes NEVRA`. Obtain that NEVRA with
+`rpm -q --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' zlib.x86_64`. Provision the
+protected Linux builder with the same complete installed package before starting
+its workflow; its preflight requires regular, nonempty license notices. Package
+acquisition remains outside the assembly script.
 
 For a native developer reproducing a build on their own machine, the assembly
 command is:

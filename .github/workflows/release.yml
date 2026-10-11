@@ -136,7 +136,18 @@ jobs:
         run: |
           rustup toolchain install 1.97.1 --profile minimal
           uv sync --project "Firmware MCP New" --locked --all-groups
-          if test "$RUNNER_OS" = Linux; then test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"; fi
+          if test "$RUNNER_OS" = Linux; then
+            test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
+            command -v ldd
+            rpm -q zlib.x86_64
+            license_notices=$(rpm -q --qf '[%{FILENAMES}\t%{FILEFLAGS:fflags}\n]' zlib.x86_64 | awk -F '\t' '$2 ~ /l/ {print $1}')
+            test -n "$license_notices"
+            while IFS= read -r notice; do
+              test -f "$notice"
+              test -s "$notice"
+              test ! -L "$notice"
+            done <<< "$license_notices"
+          fi
 
       - name: Prepare pinned native analysis inputs
         shell: bash
@@ -229,7 +240,7 @@ jobs:
 
   windows:
     needs: authorize
-    runs-on: windows-2025
+    runs-on: windows-2022 # The locked Cppcheck recipe requires Visual Studio 2022.
     timeout-minutes: 150
     environment: release-production
     permissions:
