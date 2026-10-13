@@ -13,7 +13,9 @@ Run: python release/scripts/test_code_analysis_portable_smoke_controls.py -v
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -568,6 +570,188 @@ class ObservedChildMetadata(unittest.TestCase):
                 owned.sample_once()
                 self.assertEqual(owned.records, {(1, 10.0): root})
                 owned.native.children.assert_not_called()
+
+
+class ListingPs:
+    """psutil shape for Processes.children(): a fixed table of incarnations."""
+
+    class NoSuchProcess(Exception):
+        pass
+
+    class AccessDenied(Exception):
+        pass
+
+    class ZombieProcess(NoSuchProcess):
+        pass
+
+    def __init__(self, table, psutil_children=()):
+        self.table = table
+        self.psutil_children = list(psutil_children)
+        self.children_calls = 0
+
+    def Process(self, pid):  # noqa: N802 - psutil API shape
+        fake = self
+        if pid not in self.table:
+            raise self.NoSuchProcess()
+        row = self.table[pid]
+
+        class P:
+            def __init__(self):
+                self.pid = pid
+
+            def oneshot(self):
+                return contextlib.nullcontext()
+
+            def create_time(self):
+                return row["create_time"]
+
+            def ppid(self):
+                return row["ppid"]
+
+            def exe(self):
+                return row["image"]
+
+            def cmdline(self):
+                return row["argv"]
+
+            def status(self):
+                return row["status"]
+
+            def children(self):
+                fake.children_calls += 1
+                return [fake.Process(kid) for kid in fake.psutil_children]
+
+        return P()
+
+
+class ChildListing(unittest.TestCase):
+    ROOT = {"pid": 1, "create_time": 10.0}
+
+    def table(self):
+        row = {"ppid": 1, "status": "running"}
+        return {
+            1: {
+                **row,
+                "create_time": 10.0,
+                "ppid": 0,
+                "image": "/byo",
+                "argv": ["byo"],
+            },
+            2: {**row, "create_time": 11.0, "image": "/cppcheck", "argv": ["cppcheck"]},
+            3: {**row, "create_time": 9.0, "image": "/old", "argv": ["old"]},
+        }
+
+    def test_kernel_listing_replaces_psutil_host_scan(self):
+        listed = []
+        ps = ListingPs(self.table(), psutil_children=[3])
+        native = smoke.Processes(
+            ps, child_pids=lambda ppid: listed.append(ppid) or [2, 3, 4]
+        )
+        found = native.children(self.ROOT)
+        # 3 predates its parent (reused PID); 4 exited before its identity read.
+        self.assertEqual(
+            found,
+            [
+                {
+                    "pid": 2,
+                    "create_time": 11.0,
+                    "ppid": 1,
+                    "image": "/cppcheck",
+                    "argv": ["cppcheck"],
+                    "status": "running",
+                    "parent_pid": 1,
+                    "parent_create_time": 10.0,
+                }
+            ],
+        )
+        self.assertEqual((listed, ps.children_calls), ([1], 0))
+        self.assertEqual(native.child_listing, "darwin-libproc-ppid")
+
+    def test_failed_kernel_listing_falls_back_to_psutil(self):
+        ps = ListingPs(self.table(), psutil_children=[2])
+        native = smoke.Processes(ps, child_pids=lambda ppid: None)
+        self.assertEqual([r["pid"] for r in native.children(self.ROOT)], [2])
+        self.assertEqual(ps.children_calls, 1)
+
+    def test_other_parent_incarnation_is_never_listed(self):
+        listed = []
+        native = smoke.Processes(
+            ListingPs(self.table()), child_pids=lambda ppid: listed.append(ppid) or [2]
+        )
+        self.assertEqual(native.children({"pid": 1, "create_time": 9.5}), [])
+        self.assertEqual(listed, [])
+
+    def test_injected_psutil_never_loads_host_listing(self):
+        native = smoke.Processes(FakePs("live"))
+        self.assertEqual((native.child_pids, native.child_listing), (None, "psutil"))
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS libproc child listing")
+    def test_darwin_listing_names_live_and_zombie_children(self):
+        try:
+            import psutil  # noqa: PLC0415 - real-process prerequisite
+        except ImportError:
+            self.skipTest("psutil unavailable: macOS listing control UNVERIFIED")
+        self.assertEqual(smoke.Processes().child_listing, "darwin-libproc-ppid")
+        child_pids = smoke.darwin_child_pids()
+        live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        done = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            deadline = time.monotonic() + 10
+            while psutil.Process(done.pid).status() != psutil.STATUS_ZOMBIE:
+                self.assertLess(time.monotonic(), deadline, "child never exited")
+                time.sleep(0.01)
+            listed = child_pids(os.getpid())
+            self.assertIn(live.pid, listed)
+            self.assertIn(done.pid, listed)  # Unreaped zombie stays listed.
+            self.assertEqual(child_pids(live.pid), [])
+        finally:
+            live.kill()
+            live.wait()
+            done.wait()
+
+
+class ForkedBeforeExec(unittest.TestCase):
+    # macOS run 38347225276: the Rust runner's analysis child 37600 was read
+    # stopped before exec (byo image/argv) and next only after it was reaped.
+    PARENT = {
+        "pid": 1,
+        "create_time": 10.0,
+        "image": "/home/bin/byo",
+        "argv": ["byo", "workflow", "tool", "verify"],
+    }
+
+    def child(self, **changes):
+        return {
+            "pid": 2,
+            "create_time": 11.0,
+            "parent_pid": 1,
+            "parent_create_time": 10.0,
+            "image": "/home/bin/byo",
+            "argv": ["byo", "workflow", "tool", "verify"],
+            "status": "sleeping",
+            **changes,
+        }
+
+    def test_exact_fork_copy_of_observed_parent(self):
+        child = self.child()
+        self.assertTrue(smoke.forked_before_exec(child, [self.PARENT, child]))
+
+    def test_other_program_or_parent_incarnation_is_not_a_fork_copy(self):
+        unlinked = {k: v for k, v in self.child().items() if "parent" not in k}
+        for label, child, observed in (
+            ("image", self.child(image="/bin/sh"), [self.PARENT]),
+            ("argv", self.child(argv=["byo", "other"]), [self.PARENT]),
+            (
+                "unknown image",
+                self.child(image=None, argv=None),
+                [{**self.PARENT, "image": None, "argv": None}],
+            ),
+            ("parent unobserved", self.child(), []),
+            ("parent incarnation", self.child(parent_create_time=9.0), [self.PARENT]),
+            ("no parent link", unlinked, [self.PARENT]),
+        ):
+            with self.subTest(label):
+                self.assertFalse(smoke.forked_before_exec(child, [*observed, child]))
 
 
 @unittest.skipIf(not hasattr(smoke, "Processes"), "smoke import failed")
@@ -1238,13 +1422,20 @@ class SourceShape(unittest.TestCase):
     def test_no_windows_only_apis(self):
         text = SCRIPT.read_text(encoding="utf-8")
         for forbidden in (
-            "ctypes",
+            "WinDLL",
+            "windll",
+            "wintypes",
             "OpenProcess",
             "Get-CimInstance",
             "taskkill",
             "/IM ",
         ):
             self.assertNotIn(forbidden, text)
+        # ctypes stays confined to the macOS libproc child listing.
+        self.assertEqual(
+            text.count("ctypes"),
+            inspect.getsource(smoke.darwin_child_pids).count("ctypes"),
+        )
 
     def test_stdout_summary_is_ascii_and_evidence_utf8(self):
         text = SCRIPT.read_text(encoding="utf-8")

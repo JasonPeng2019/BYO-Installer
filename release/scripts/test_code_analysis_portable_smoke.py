@@ -326,6 +326,21 @@ def same_path(left, right) -> bool:
         return False
 
 
+def forked_before_exec(record: dict, observed: list[dict]) -> bool:
+    """A read between fork and exec shows the observed parent's image and argv.
+
+    exec keeps pid and create_time, so it names the same incarnation; the Rust
+    runner holds each analyzer child stopped there (stopped_before_exec).
+    """
+    parent = (record.get("parent_pid"), record.get("parent_create_time"))
+    return bool(record.get("image")) and any(
+        (p["pid"], p["create_time"]) == parent
+        and p.get("image") == record["image"]
+        and p.get("argv") == record.get("argv")
+        for p in observed
+    )
+
+
 def fixture_bytes(relative: str) -> bytes:
     text = ARM_FIXTURE[relative]
     if relative in ARM_CRLF:
@@ -400,13 +415,61 @@ def windows_override_commands(commands: list[list[str]]) -> str:
 # ---------------------------------------------------------------- processes
 
 
+PROC_PPID_ONLY = 6  # <sys/proc_info.h> proc_listpids type
+
+
+def darwin_child_pids():
+    """macOS libproc PPID-only listing (live and zombie children), else None.
+
+    psutil 7.2.2 has no macOS ppid_map: Process.children() reads every host
+    process per call, and on runners that scan missed ~10 ms Cppcheck runs.
+    """
+    if sys.platform != "darwin":
+        return None
+    import ctypes  # noqa: PLC0415 - macOS libproc only
+
+    try:
+        listpids = ctypes.CDLL(
+            "/usr/lib/libSystem.B.dylib", use_errno=True
+        ).proc_listpids
+    except (OSError, AttributeError):
+        return None
+    listpids.argtypes = (
+        ctypes.c_uint32,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    )
+    listpids.restype = ctypes.c_int
+    width = ctypes.sizeof(ctypes.c_int)
+
+    def child_pids(ppid: int) -> list[int] | None:
+        capacity = 256
+        while capacity <= 1 << 16:
+            buffer = (ctypes.c_int * capacity)()
+            ctypes.set_errno(0)
+            size = listpids(PROC_PPID_ONLY, ppid, buffer, capacity * width)
+            if size < 0 or (size == 0 and ctypes.get_errno()):
+                return None  # Failed listing; the caller uses psutil instead.
+            if size < capacity * width:
+                return [pid for pid in buffer[: size // width] if pid > 0]
+            capacity *= 4  # A full buffer may be truncated.
+        return None
+
+    return child_pids
+
+
 class Processes:
     """Exact (pid, create_time) observation through psutil. None means unknown."""
 
-    def __init__(self, psutil_module=None):
+    def __init__(self, psutil_module=None, child_pids=None):
         if psutil_module is None:
             import psutil as psutil_module  # noqa: PLC0415 - explicit prerequisite
+
+            child_pids = child_pids or darwin_child_pids()
         self.ps = psutil_module
+        self.child_pids = child_pids
+        self.child_listing = "darwin-libproc-ppid" if child_pids else "psutil"
 
     def identity(self, pid: int) -> dict | None:
         ps = self.ps
@@ -455,12 +518,14 @@ class Processes:
             process = ps.Process(identity["pid"])
             if process.create_time() != identity["create_time"]:
                 return []
-            kids = process.children()
+            kids = self.child_pids(identity["pid"]) if self.child_pids else None
+            if kids is None:
+                kids = [kid.pid for kid in process.children()]
         except (ps.NoSuchProcess, ps.AccessDenied, OSError):
             return []
         found = []
-        for kid in kids:
-            record = self.identity(kid.pid)
+        for pid in kids:
+            record = self.identity(pid)
             if record and record["create_time"] >= identity["create_time"]:
                 record["parent_pid"] = identity["pid"]
                 record["parent_create_time"] = identity["create_time"]
@@ -649,6 +714,7 @@ class Evidence:
             timeout=forced,
             processes=identities,
             unobserved_leader=owned.unobserved_leader,
+            child_listing=self.native.child_listing,
         )
         write_json(path / "command.json", record)  # Failure facts before cleanup.
         self.cleanup(name, identities)
@@ -1519,7 +1585,11 @@ class Smoke:
             i
             for i in outcome.observed_processes
             if i["pid"] in pids
-            and (i.get("image") is None or same_path(i["image"], self.cppcheck))
+            and (
+                i.get("image") is None
+                or same_path(i["image"], self.cppcheck)
+                or forked_before_exec(i, outcome.observed_processes)
+            )
         ]
         if {i["pid"] for i in observed} != pids:
             raise Unverified(
