@@ -2704,6 +2704,223 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     self.assertEqual(receipt, retained)
                     self.assertEqual(self.calls, [])
 
+    WHEEL_DYLIB = (
+        "sidecar/cmsis_pack_manager/cmsis_pack_manager/libcmsis_pack_manager.dylib"
+    )
+    # Synthetic control ID modelled on the wheel's measured build-host identity.
+    WHEEL_HOST_ID = "/fixture/build/target/release/deps/libcmsis_pack_manager.dylib"
+
+    def wheel_dylib_image(self, install_name: str, **changes) -> bytes:
+        fields = {
+            "executable": False,
+            "install_name": install_name,
+            "loads": ("/usr/lib/libSystem.B.dylib",),
+        }
+        fields.update(changes)
+        return macho_image(self.architecture, **fields)
+
+    def add_wheel_dylib(self, data: bytes) -> Path:
+        path = self.bundle / self.WHEEL_DYLIB
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def wheel_dylib_closure(self) -> dict:
+        return self.native.native_formats.validate_bundle_closure(
+            [
+                {"path": "sidecar/Python", "executable": False},
+                {"path": self.WHEEL_DYLIB, "executable": False},
+                {"path": "sidecar/byo-mcp-sidecar", "executable": True},
+            ],
+            lambda name: (self.bundle / name).read_bytes(),
+            "macos",
+            self.architecture,
+        )
+
+    def test_thin_private_wheel_dylib_identity_and_integrity_receipts(self):
+        for target in MACOS_TARGETS:
+            with self.subTest(target):
+                receipt = self.stage(target)
+                python = self.add_private_python(
+                    self.private_python_image(install_name="@rpath/Python")
+                )
+                retained_python = python.read_bytes()
+                consumer = (python.parent / "byo-mcp-sidecar").read_bytes()
+                before = self.wheel_dylib_image(self.WHEEL_HOST_ID)
+                edited = self.wheel_dylib_image("@rpath/libcmsis_pack_manager.dylib")
+                after = edited + b"fixture adhoc integrity"
+                dylib = self.add_wheel_dylib(before)
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    f"absolute/unportable install name: {self.WHEEL_DYLIB}$",
+                ):
+                    self.wheel_dylib_closure()
+                self.calls.clear()
+                start = len(receipt["commands"])
+                self.normalize_private_python(receipt, edited)
+                self.assertEqual(dylib.read_bytes(), after)
+                self.assertEqual(python.read_bytes(), retained_python)
+                self.assertEqual(
+                    (python.parent / "byo-mcp-sidecar").read_bytes(), consumer
+                )
+                self.wheel_dylib_closure()
+                before_image = self.native.native_formats.macho(
+                    before, self.architecture, False
+                )
+                after_image = self.native.native_formats.macho(
+                    after, self.architecture, False
+                )
+                self.assertEqual(
+                    after_image,
+                    {
+                        **before_image,
+                        "install_name": "@rpath/libcmsis_pack_manager.dylib",
+                    },
+                )
+                self.assertEqual(
+                    receipt["transformations"][-1],
+                    {
+                        "path": self.WHEEL_DYLIB,
+                        "before_sha256": sha256(before),
+                        "normalized_sha256": sha256(edited),
+                        "after_sha256": sha256(after),
+                        "before_install_name": self.WHEEL_HOST_ID,
+                        "after_install_name": "@rpath/libcmsis_pack_manager.dylib",
+                        "before_image": before_image,
+                        "after_image": after_image,
+                        "adhoc_integrity": "verified",
+                    },
+                )
+                install_tool = self.compiler.parent / "install_name_tool"
+                codesign = self.compiler.parent / "codesign"
+                expected = [
+                    [str(codesign), "--display", "--verbose=4", str(dylib)],
+                    [str(codesign), "--verify", "--strict", "--verbose=2", str(dylib)],
+                    [
+                        str(install_tool),
+                        "-id",
+                        "@rpath/libcmsis_pack_manager.dylib",
+                        str(dylib),
+                    ],
+                    [
+                        str(codesign),
+                        "--force",
+                        "--sign",
+                        "-",
+                        "--preserve-metadata=identifier,entitlements,flags",
+                        "--timestamp=none",
+                        str(dylib),
+                    ],
+                    [str(codesign), "--verify", "--strict", "--verbose=2", str(dylib)],
+                ]
+                self.assertEqual(self.calls, expected)
+                commands = receipt["commands"][start:]
+                self.assertEqual([c["argv"] for c in commands], expected)
+                self.assertEqual(
+                    [c["step"] for c in commands],
+                    [
+                        "inspect-private-dylib-signature",
+                        "verify-private-dylib-before-normalization",
+                        "normalize-private-dylib-identity",
+                        "repair-private-dylib-adhoc-integrity",
+                        "verify-private-dylib-after-normalization",
+                    ],
+                )
+                self.assertEqual(
+                    json.loads((self.evidence / "cppcheck-build.json").read_text()),
+                    receipt,
+                )
+
+    def test_private_wheel_images_without_host_identity_are_noops(self):
+        for target in MACOS_TARGETS:
+            with self.subTest(target):
+                receipt = self.stage(target)
+                self.add_private_python(
+                    self.private_python_image(install_name="@rpath/Python")
+                )
+                images = {
+                    self.WHEEL_DYLIB: self.wheel_dylib_image(
+                        "@rpath/libcmsis_pack_manager.dylib"
+                    ),
+                    "sidecar/capstone/lib/libcapstone.dylib": self.wheel_dylib_image(
+                        "@loader_path/libcapstone.dylib"
+                    ),
+                    "sidecar/psutil/_psutil_osx.abi3.so": macho_image(
+                        self.architecture,
+                        filetype=8,
+                        loads=("/usr/lib/libSystem.B.dylib",),
+                        dyld=None,
+                    ),
+                    "sidecar/certifi/cacert.pem": b"fixture data file",
+                }
+                for name, data in images.items():
+                    (self.bundle / name).parent.mkdir(parents=True, exist_ok=True)
+                    (self.bundle / name).write_bytes(data)
+                retained = copy.deepcopy(receipt)
+                self.calls.clear()
+                self.normalize_private_python(
+                    receipt, b"must not be installed", no_tools=True
+                )
+                for name, data in images.items():
+                    self.assertEqual((self.bundle / name).read_bytes(), data)
+                self.assertEqual(receipt, retained)
+                self.assertEqual(self.calls, [])
+
+    def test_private_wheel_dylib_repair_refuses_wrong_cpu_or_mutation(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            self.add_private_python(
+                self.private_python_image(install_name="@rpath/Python")
+            )
+            other = "x86_64" if self.architecture == "aarch64" else "aarch64"
+            other_cpu = {"aarch64": 0x0100000C, "x86_64": 0x01000007}[other]
+            new_id = "@rpath/libcmsis_pack_manager.dylib"
+            for label, before, edited in (
+                (
+                    "cpu",
+                    self.wheel_dylib_image(self.WHEEL_HOST_ID, cpu=other_cpu),
+                    None,
+                ),
+                (
+                    "imports",
+                    self.wheel_dylib_image(self.WHEEL_HOST_ID),
+                    self.wheel_dylib_image(
+                        new_id,
+                        loads=("/usr/lib/libSystem.B.dylib", "/usr/lib/libc++.1.dylib"),
+                    ),
+                ),
+                (
+                    "identity",
+                    self.wheel_dylib_image(self.WHEEL_HOST_ID),
+                    self.wheel_dylib_image("@rpath/other.dylib"),
+                ),
+            ):
+                with self.subTest(target=target, control=label):
+                    dylib = self.add_wheel_dylib(before)
+                    retained = copy.deepcopy(receipt)
+                    self.calls.clear()
+                    with self.assertRaises(RuntimeError) as caught:
+                        self.normalize_private_python(
+                            receipt,
+                            edited or b"must not be installed",
+                            no_tools=edited is None,
+                        )
+                    self.assertFalse(any("--force" in argv for argv in self.calls))
+                    if edited is None:
+                        self.assertIn(
+                            "Wrong Mach-O CPU/file type", str(caught.exception)
+                        )
+                        self.assertEqual(dylib.read_bytes(), before)
+                        self.assertEqual(receipt, retained)
+                        self.assertEqual(self.calls, [])
+                        continue
+                    self.assertIn("changed unexpected fields", str(caught.exception))
+                    pending = receipt["transformations"][-1]
+                    self.assertEqual(pending["path"], self.WHEEL_DYLIB)
+                    self.assertEqual(pending["before_sha256"], sha256(before))
+                    self.assertEqual(pending["normalized_sha256"], sha256(edited))
+                    self.assertNotIn("adhoc_integrity", pending)
+
     def test_valid_private_python_identities_are_byte_and_receipt_noops(self):
         for target in MACOS_TARGETS:
             receipt = self.stage(target)
@@ -3127,6 +3344,84 @@ class MacOSSidecarLibffiBundleClosureTests(unittest.TestCase):
                         self,
                         architecture,
                         cppcheck={"loads": ("/usr/lib/libSystem.B.dylib", self.LIBFFI)},
+                    ).__getitem__,
+                )
+
+
+class MacOSSidecarAppKitBundleClosureTests(unittest.TestCase):
+    """Delivered-bundle closure for the sidecar hidapi AppKit framework import.
+
+    The locked hidapi 0.15.0 macOS wheels' ``hid.cpython-312-darwin.so`` (arm64
+    and x86_64) import ``/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit``
+    and the sidecar bundles ``hid``. The synthetic MH_BUNDLE models that import
+    shape through the byte parser only; it is not measured sidecar bytes or
+    loader evidence.
+    """
+
+    HID = "sidecar/hid.cpython-312-darwin.so"
+    APPKIT = "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"
+
+    def test_bundle_allows_exact_os_appkit_but_analyzers_do_not(self) -> None:
+        import native_formats
+
+        for architecture in ("aarch64", "x86_64"):
+
+            def bundle(name, architecture=architecture):
+                image = macho_image(
+                    architecture,
+                    executable=False,
+                    filetype=8,
+                    loads=(
+                        "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+                        "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+                        name,
+                        "/usr/lib/libSystem.B.dylib",
+                    ),
+                )
+                return native_formats.validate_bundle_closure(
+                    [{"path": self.HID, "executable": False}],
+                    {self.HID: image}.__getitem__,
+                    "macos",
+                    architecture,
+                )
+
+            with self.subTest(architecture, case="exact OS AppKit"):
+                info = bundle(self.APPKIT)["images"][self.HID]
+                self.assertIn(self.APPKIT, info["needed"])
+                self.assertEqual(info["resolved_private_imports"], {})
+            for name in (
+                "/System/Library/Frameworks/AppKit.framework/AppKit",
+                "/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
+                "/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+                "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+                "/System/Library/Frameworks/../../../usr/local/lib/AppKit",
+            ):
+                with (
+                    self.subTest(architecture, case=name),
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        re.escape(
+                            f"Unresolved non-OS Mach-O import: {self.HID}: {name}"
+                        ),
+                    ),
+                ):
+                    bundle(name)
+            # Analyzer closure keeps its narrower OS policy for the same import.
+            with (
+                self.subTest(architecture, case="analyzer refusal"),
+                self.assertRaisesRegex(
+                    RuntimeError,
+                    re.escape(
+                        f"Non-OS absolute/unresolved Mach-O import: {self.APPKIT}"
+                    ),
+                ),
+            ):
+                native_formats.validate_closure(
+                    macos_closure_lock(architecture),
+                    MacOSClosureTests.images(
+                        self,
+                        architecture,
+                        cppcheck={"loads": ("/usr/lib/libSystem.B.dylib", self.APPKIT)},
                     ).__getitem__,
                 )
 

@@ -657,6 +657,18 @@ def _repair_macos_adhoc_image(
     tools.write_json(evidence / "cppcheck-build.json", receipt)
 
 
+def _is_macos_dylib(path: Path) -> bool:
+    """Only a thin little-endian Mach-O 64 MH_DYLIB carries an LC_ID_DYLIB."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    with path.open("rb") as stream:
+        header = stream.read(16)
+    return (
+        header[:4] == b"\xcf\xfa\xed\xfe"
+        and int.from_bytes(header[12:16], "little") == 6
+    )
+
+
 def _normalize_macos_dylib_identity(
     bundle: Path, path: Path, architecture: str, receipt: dict, evidence: Path
 ) -> None:
@@ -771,6 +783,14 @@ def thin_macos_bundle(bundle: Path, lock: dict, receipt: dict, evidence: Path) -
         _normalize_macos_dylib_identity(
             bundle, python, lock["architecture"], receipt, evidence
         )
+    # Nuitka 2.8.9 keeps each copied wheel dylib's LC_ID_DYLIB, which can be a
+    # wheel build-host path (cmsis-pack-manager 0.6.0); repair those the same way.
+    sidecar_root = bundle / "sidecar"
+    for path in sorted(sidecar_root.rglob("*")) if sidecar_root.is_dir() else ():
+        if path != python and _is_macos_dylib(path):
+            _normalize_macos_dylib_identity(
+                bundle, path, lock["architecture"], receipt, evidence
+            )
     sidecar = bundle / "sidecar/byo-mcp-sidecar"
     if sidecar.is_file():
         _normalize_macos_executable_rpath(

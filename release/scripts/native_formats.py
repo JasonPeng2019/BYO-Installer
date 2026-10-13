@@ -354,6 +354,8 @@ def validate_bundle_closure(
         "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
         "/System/Library/Frameworks/Security.framework/Versions/A/Security",
         "/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+        # cython-hidapi links AppKit on macOS (hidapi 0.15.0 hid.cpython-312-darwin.so).
+        "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
     }
     for path, info in images.items():
         origin = posixpath.dirname(path)
