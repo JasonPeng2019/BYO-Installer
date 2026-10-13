@@ -575,6 +575,88 @@ def normalize_modes(bundle: Path, lock: dict) -> None:
         )
 
 
+def _repair_macos_adhoc_image(
+    bundle: Path,
+    path: Path,
+    data: bytes,
+    architecture: str,
+    receipt: dict,
+    evidence: Path,
+    *,
+    role: str,
+    field: str,
+    step: str,
+    edit: list[str],
+    expected: dict,
+) -> None:
+    """Apply one measured load-command edit and repair existing ad hoc integrity."""
+    before = native_formats.macho(data, architecture, role == "executable")
+    for name in ("install_name_tool", "codesign"):
+        receipt["tools"][name] = _tool(name)
+    codesign = receipt["tools"]["codesign"]["path"]
+    signature = _command(
+        [codesign, "--display", "--verbose=4", str(path)],
+        evidence,
+        receipt,
+        f"inspect-private-{role}-signature",
+    )
+    if "Signature=adhoc" not in signature.splitlines():
+        raise RuntimeError(f"Native {role} repair requires an ad hoc signature: {path}")
+    _command(
+        [codesign, "--verify", "--strict", "--verbose=2", str(path)],
+        evidence,
+        receipt,
+        f"verify-private-{role}-before-normalization",
+    )
+    transformation = {
+        "path": path.relative_to(bundle).as_posix(),
+        "before_sha256": tools.sha256(data),
+        f"before_{field}": before[field],
+        "before_image": before,
+    }
+    receipt["transformations"].append(transformation)
+    tools.write_json(evidence / "cppcheck-build.json", receipt)
+    # The load-command edit invalidates Nuitka's ad hoc integrity; repair just
+    # this image, before the existing production identity signing stage.
+    for current, argv in (
+        (step, [receipt["tools"]["install_name_tool"]["path"], *edit, str(path)]),
+        (
+            f"repair-private-{role}-adhoc-integrity",
+            [
+                codesign,
+                "--force",
+                "--sign",
+                "-",
+                "--preserve-metadata=identifier,entitlements,flags",
+                "--timestamp=none",
+                str(path),
+            ],
+        ),
+    ):
+        _command(argv, evidence, receipt, current)
+        data = path.read_bytes()
+        transformation["after_sha256"] = tools.sha256(data)
+        if current == step:
+            transformation["normalized_sha256"] = transformation["after_sha256"]
+        tools.write_json(evidence / "cppcheck-build.json", receipt)
+        after = native_formats.macho(data, architecture, role == "executable")
+        transformation[f"after_{field}"] = after[field]
+        transformation["after_image"] = after
+        tools.write_json(evidence / "cppcheck-build.json", receipt)
+        if after != expected:
+            raise RuntimeError(
+                f"Native {role} normalization changed unexpected fields: {path}"
+            )
+    _command(
+        [codesign, "--verify", "--strict", "--verbose=2", str(path)],
+        evidence,
+        receipt,
+        f"verify-private-{role}-after-normalization",
+    )
+    transformation["adhoc_integrity"] = "verified"
+    tools.write_json(evidence / "cppcheck-build.json", receipt)
+
+
 def _normalize_macos_dylib_identity(
     bundle: Path, path: Path, architecture: str, receipt: dict, evidence: Path
 ) -> None:
@@ -587,87 +669,61 @@ def _normalize_macos_dylib_identity(
         raise RuntimeError(f"Native private dylib has no install name: {path}")
     if identity.startswith(("@rpath/", "@loader_path/")):
         return
-
-    for name in ("install_name_tool", "codesign"):
-        receipt["tools"][name] = _tool(name)
-    codesign = receipt["tools"]["codesign"]["path"]
-    signature = _command(
-        [codesign, "--display", "--verbose=4", str(path)],
-        evidence,
-        receipt,
-        "inspect-private-dylib-signature",
-    )
-    if "Signature=adhoc" not in signature.splitlines():
-        raise RuntimeError(
-            f"Native identity repair requires an ad hoc signature: {path}"
-        )
-    _command(
-        [codesign, "--verify", "--strict", "--verbose=2", str(path)],
-        evidence,
-        receipt,
-        "verify-private-dylib-before-normalization",
-    )
+    # Nuitka 2.8.9 signs its copied Python image ad hoc with the build-host ID.
+    # Change only LC_ID_DYLIB; never change imports or LC_RPATH.
     expected = {**before, "install_name": "@rpath/" + path.name}
-    transformation = {
-        "path": path.relative_to(bundle).as_posix(),
-        "before_sha256": tools.sha256(data),
-        "before_install_name": identity,
-        "before_image": before,
-    }
-    receipt["transformations"].append(transformation)
-    tools.write_json(evidence / "cppcheck-build.json", receipt)
-    # Nuitka 2.8.9 signs its copied Python image ad hoc. Changing LC_ID_DYLIB
-    # invalidates that integrity; repair just this image, before the existing
-    # production identity signing stage. Never change imports or LC_RPATH.
-    for step, argv in (
-        (
-            "normalize-private-dylib-identity",
-            [
-                receipt["tools"]["install_name_tool"]["path"],
-                "-id",
-                expected["install_name"],
-                str(path),
-            ],
-        ),
-        (
-            "repair-private-dylib-adhoc-integrity",
-            [
-                codesign,
-                "--force",
-                "--sign",
-                "-",
-                "--preserve-metadata=identifier,entitlements,flags",
-                "--timestamp=none",
-                str(path),
-            ],
-        ),
-    ):
-        _command(argv, evidence, receipt, step)
-        data = path.read_bytes()
-        transformation["after_sha256"] = tools.sha256(data)
-        if step == "normalize-private-dylib-identity":
-            transformation["normalized_sha256"] = transformation["after_sha256"]
-        tools.write_json(evidence / "cppcheck-build.json", receipt)
-        after = native_formats.macho(data, architecture, False)
-        transformation["after_install_name"] = after["install_name"]
-        transformation["after_image"] = after
-        tools.write_json(evidence / "cppcheck-build.json", receipt)
-        if after != expected:
-            raise RuntimeError(
-                f"Native dylib normalization changed unexpected fields: {path}"
-            )
-    _command(
-        [codesign, "--verify", "--strict", "--verbose=2", str(path)],
-        evidence,
+    _repair_macos_adhoc_image(
+        bundle,
+        path,
+        data,
+        architecture,
         receipt,
-        "verify-private-dylib-after-normalization",
+        evidence,
+        role="dylib",
+        field="install_name",
+        step="normalize-private-dylib-identity",
+        edit=["-id", expected["install_name"]],
+        expected=expected,
     )
-    transformation["adhoc_integrity"] = "verified"
-    tools.write_json(evidence / "cppcheck-build.json", receipt)
+
+
+def _normalize_macos_executable_rpath(
+    bundle: Path, path: Path, architecture: str, receipt: dict, evidence: Path
+) -> None:
+    """Replace Nuitka's ELF-only $ORIGIN search path with the Mach-O loader token."""
+    _regular(path)
+    data = path.read_bytes()
+    before = native_formats.macho(data, architecture, True)
+    rewrites = {
+        rpath: "@loader_path" + rpath.removeprefix("$ORIGIN")
+        for rpath in before["search_paths"]
+        if rpath == "$ORIGIN" or rpath.startswith("$ORIGIN/")
+    }
+    if not rewrites:
+        return
+    search_paths = [rewrites.get(rpath, rpath) for rpath in before["search_paths"]]
+    if len(set(search_paths)) != len(search_paths):
+        raise RuntimeError(f"Native executable search paths would repeat: {path}")
+    # Nuitka 2.8.9 also gives the macOS main binary its ELF "$ORIGIN" LC_RPATH,
+    # which dyld resolves literally against the working directory. For a main
+    # executable @loader_path is its own directory; imports and identity stay.
+    _repair_macos_adhoc_image(
+        bundle,
+        path,
+        data,
+        architecture,
+        receipt,
+        evidence,
+        role="executable",
+        field="search_paths",
+        step="normalize-private-executable-rpath",
+        edit=[arg for old, new in rewrites.items() for arg in ("-rpath", old, new)],
+        expected={**before, "search_paths": search_paths},
+    )
 
 
 def thin_macos_bundle(bundle: Path, lock: dict, receipt: dict, evidence: Path) -> None:
-    """Thin wheel images and repair the staged Python dylib's private identity."""
+    """Thin wheel images and repair staged Nuitka Mach-O loader fields."""
     if tools.host_target() != f"macos-{lock['architecture']}" or os.name != "posix":
         raise RuntimeError("Mach-O thinning requires the matching native macOS host")
     lipo = receipt["tools"]["lipo"]["path"]
@@ -714,5 +770,10 @@ def thin_macos_bundle(bundle: Path, lock: dict, receipt: dict, evidence: Path) -
     if python.is_file():
         _normalize_macos_dylib_identity(
             bundle, python, lock["architecture"], receipt, evidence
+        )
+    sidecar = bundle / "sidecar/byo-mcp-sidecar"
+    if sidecar.is_file():
+        _normalize_macos_executable_rpath(
+            bundle, sidecar, lock["architecture"], receipt, evidence
         )
     tools.write_json(evidence / "cppcheck-build.json", receipt)

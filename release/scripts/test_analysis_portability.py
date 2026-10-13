@@ -2534,6 +2534,176 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     receipt,
                 )
 
+    def sidecar_executable_image(self, *rpaths: str, **changes) -> bytes:
+        fields = {
+            "loads": ("/usr/lib/libSystem.B.dylib", "@rpath/Python"),
+            "rpaths": rpaths,
+        }
+        fields.update(changes)
+        return macho_image(self.architecture, **fields)
+
+    def test_thin_private_executable_origin_rpath_and_integrity_receipts(self):
+        for target in MACOS_TARGETS:
+            with self.subTest(target):
+                receipt = self.stage(target)
+                python = self.add_private_python(
+                    self.private_python_image(install_name="@rpath/Python")
+                )
+                retained_python = python.read_bytes()
+                sidecar = python.parent / "byo-mcp-sidecar"
+                before = self.sidecar_executable_image("$ORIGIN")
+                edited = self.sidecar_executable_image("@loader_path")
+                after = edited + b"fixture adhoc integrity"
+                sidecar.write_bytes(before)
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"host/cwd search: sidecar/byo-mcp-sidecar: \$ORIGIN$",
+                ):
+                    self.private_python_closure()
+                self.calls.clear()
+                start = len(receipt["commands"])
+                self.normalize_private_python(receipt, edited)
+                self.assertEqual(sidecar.read_bytes(), after)
+                self.assertEqual(python.read_bytes(), retained_python)
+                images = self.private_python_closure()["images"]
+                self.assertEqual(
+                    images["sidecar/byo-mcp-sidecar"]["resolved_private_imports"],
+                    {"@rpath/Python": "sidecar/Python"},
+                )
+                before_image = self.native.native_formats.macho(
+                    before, self.architecture, True
+                )
+                after_image = self.native.native_formats.macho(
+                    after, self.architecture, True
+                )
+                self.assertEqual(before_image["search_paths"], ["$ORIGIN"])
+                self.assertEqual(
+                    after_image, {**before_image, "search_paths": ["@loader_path"]}
+                )
+                self.assertEqual(
+                    receipt["transformations"][-1],
+                    {
+                        "path": "sidecar/byo-mcp-sidecar",
+                        "before_sha256": sha256(before),
+                        "normalized_sha256": sha256(edited),
+                        "after_sha256": sha256(after),
+                        "before_search_paths": ["$ORIGIN"],
+                        "after_search_paths": ["@loader_path"],
+                        "before_image": before_image,
+                        "after_image": after_image,
+                        "adhoc_integrity": "verified",
+                    },
+                )
+                install_tool = self.compiler.parent / "install_name_tool"
+                codesign = self.compiler.parent / "codesign"
+                expected = [
+                    [str(codesign), "--display", "--verbose=4", str(sidecar)],
+                    [
+                        str(codesign),
+                        "--verify",
+                        "--strict",
+                        "--verbose=2",
+                        str(sidecar),
+                    ],
+                    [
+                        str(install_tool),
+                        "-rpath",
+                        "$ORIGIN",
+                        "@loader_path",
+                        str(sidecar),
+                    ],
+                    [
+                        str(codesign),
+                        "--force",
+                        "--sign",
+                        "-",
+                        "--preserve-metadata=identifier,entitlements,flags",
+                        "--timestamp=none",
+                        str(sidecar),
+                    ],
+                    [
+                        str(codesign),
+                        "--verify",
+                        "--strict",
+                        "--verbose=2",
+                        str(sidecar),
+                    ],
+                ]
+                self.assertEqual(self.calls, expected)
+                commands = receipt["commands"][start:]
+                self.assertEqual([c["argv"] for c in commands], expected)
+                self.assertEqual(
+                    [c["step"] for c in commands],
+                    [
+                        "inspect-private-executable-signature",
+                        "verify-private-executable-before-normalization",
+                        "normalize-private-executable-rpath",
+                        "repair-private-executable-adhoc-integrity",
+                        "verify-private-executable-after-normalization",
+                    ],
+                )
+                self.assertEqual(
+                    json.loads((self.evidence / "cppcheck-build.json").read_text()),
+                    receipt,
+                )
+
+    def test_private_executable_rpath_repair_refuses_ambiguity_or_mutation(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            python = self.add_private_python(
+                self.private_python_image(install_name="@rpath/Python")
+            )
+            sidecar = python.parent / "byo-mcp-sidecar"
+            for label, rpaths, changes in (
+                ("repeated", ("$ORIGIN", "@loader_path"), None),
+                ("imports", ("$ORIGIN",), {"loads": ("/usr/lib/libSystem.B.dylib",)}),
+                ("unchanged", ("$ORIGIN",), {"rpaths": ("$ORIGIN",)}),
+                ("subdirectory", ("$ORIGIN",), {"rpaths": ("@loader_path/lib",)}),
+            ):
+                with self.subTest(target=target, control=label):
+                    before = self.sidecar_executable_image(*rpaths)
+                    sidecar.write_bytes(before)
+                    edited = self.sidecar_executable_image(
+                        "@loader_path", **(changes or {})
+                    )
+                    retained = copy.deepcopy(receipt)
+                    self.calls.clear()
+                    with self.assertRaises(RuntimeError):
+                        self.normalize_private_python(
+                            receipt, edited, no_tools=changes is None
+                        )
+                    self.assertFalse(any("--force" in argv for argv in self.calls))
+                    if changes is None:
+                        self.assertEqual(sidecar.read_bytes(), before)
+                        self.assertEqual(receipt, retained)
+                        self.assertEqual(self.calls, [])
+                        continue
+                    pending = receipt["transformations"][-1]
+                    self.assertEqual(pending["path"], "sidecar/byo-mcp-sidecar")
+                    self.assertEqual(pending["before_sha256"], sha256(before))
+                    self.assertEqual(pending["normalized_sha256"], sha256(edited))
+                    self.assertNotIn("adhoc_integrity", pending)
+
+    def test_private_executable_valid_search_paths_are_noops(self):
+        for target in MACOS_TARGETS:
+            receipt = self.stage(target)
+            python = self.add_private_python(
+                self.private_python_image(install_name="@rpath/Python")
+            )
+            sidecar = python.parent / "byo-mcp-sidecar"
+            for rpaths in (("@loader_path",), ("@executable_path",), ("$ORIGINAL",)):
+                with self.subTest(target=target, rpaths=rpaths):
+                    before = self.sidecar_executable_image(*rpaths)
+                    sidecar.write_bytes(before)
+                    retained = copy.deepcopy(receipt)
+                    self.calls.clear()
+                    self.normalize_private_python(
+                        receipt, b"must not be installed", no_tools=True
+                    )
+                    self.assertEqual(sidecar.read_bytes(), before)
+                    self.assertEqual(receipt, retained)
+                    self.assertEqual(self.calls, [])
+
     def test_valid_private_python_identities_are_byte_and_receipt_noops(self):
         for target in MACOS_TARGETS:
             receipt = self.stage(target)

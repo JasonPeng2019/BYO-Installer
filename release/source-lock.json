@@ -8,6 +8,6 @@
   "firmware_mcp": {
     "repository": "JasonPeng2019/BYO-Firmware-MCP",
     "branch": "integration/portability/server-20261010",
-    "commit": "ffa5b9235de627b931d4b16ada20e77efd24ae82"
+    "commit": "e9234011d68660d51a65d1f0abd3275baa095501"
   }
 }
