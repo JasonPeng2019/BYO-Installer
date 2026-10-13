@@ -526,6 +526,30 @@ class ObservedChildMetadata(unittest.TestCase):
         self.assertEqual(owned.records[(2, 11.0)], after)
         self.assertEqual(before["image"], "/home/bin/byo")
 
+    def test_exiting_child_keeps_fields_its_live_observation_proved(self):
+        # Linux run 38344299794: the sampled clangd turned zombie before the
+        # server reaped it; psutil exe()/cmdline() then yield None (or "" / []
+        # mid-exit) and overwrote its image, so EOF saw "no clangd identity".
+        root = {"pid": 1, "create_time": 10.0}
+        live = {
+            "pid": 2,
+            "create_time": 11.0,
+            "parent_pid": 1,
+            "parent_create_time": 10.0,
+            "ppid": 1,
+            "image": "/home/analysis/clangd/bin/clangd",
+            "argv": ["clangd", "--query-driver=/arm/bin/arm-none-eabi-g++"],
+            "status": "sleeping",
+        }
+        for image, argv in ((None, None), ("", [])):
+            with self.subTest(image=image):
+                exiting = {**live, "image": image, "argv": argv, "status": "zombie"}
+                owned = self.observer([root, live], [exiting])
+                owned.sample_once()
+                self.assertEqual(set(owned.records), {(1, 10.0), (2, 11.0)})
+                self.assertEqual(owned.records[(2, 11.0)], {**live, "status": "zombie"})
+                self.assertEqual(live["status"], "sleeping")
+
     def test_reused_pid_retains_separate_creation_identities(self):
         root = {"pid": 1, "create_time": 10.0}
         old = {"pid": 2, "create_time": 11.0, "image": "old"}

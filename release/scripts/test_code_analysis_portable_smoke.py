@@ -513,8 +513,21 @@ class Owned:
                     continue
                 for child in self.native.children(record):
                     key = (child["pid"], child["create_time"])
-                    if key not in self.records:
+                    known = self.records.get(key)
+                    if known is None:
                         added = True
+                    else:
+                        # A fresh read refreshes this exact incarnation (exec), but
+                        # an exiting/zombie read yields None, "" or [] for exe and
+                        # cmdline; it must not erase what a live read proved.
+                        child = {
+                            **known,
+                            **{
+                                k: v
+                                for k, v in child.items()
+                                if v not in (None, "", [])
+                            },
+                        }
                     self.records[key] = child
             if not added:
                 return
