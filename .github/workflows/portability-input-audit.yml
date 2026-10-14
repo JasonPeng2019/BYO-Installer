@@ -1,8 +1,7 @@
 name: Portability compiler input audit
 
 on:
-  push:
-    branches: [ci/portability-input-audit-20261010]
+  workflow_dispatch:
 
 permissions:
   contents: read

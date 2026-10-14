@@ -2,7 +2,7 @@ name: ARM test input contracts
 
 on:
   push:
-    branches: [integration/portability/installer-20261010]
+    branches: [V1/C-Check-version]
     paths:
       - 'release/arm-test-toolchains.json'
       - 'release/scripts/acquire_arm_test_toolchain.py'

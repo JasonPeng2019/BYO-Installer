@@ -6,7 +6,7 @@ on:
   push:
     branches:
       - InstallerV1
-      - integration/portability/installer-20261010
+      - V1/C-Check-version
 
 permissions:
   contents: read

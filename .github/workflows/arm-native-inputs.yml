@@ -2,7 +2,7 @@ name: Native ARM test compiler inputs
 
 on:
   push:
-    branches: [integration/portability/installer-20261010]
+    branches: [V1/C-Check-version]
     paths:
       - '.github/workflows/arm-native-inputs.yml'
       - 'release/scripts/check_arm_test_input.py'
