@@ -1018,7 +1018,8 @@ mod tests {
             } else {
                 assert!(format!("{:#}", result.unwrap_err()).contains("fixture doctor failed"));
                 // This is the same recovery used by Command::Update.
-                crate::install::repair(&paths, Some(&paths.versions().join(&working_version))).unwrap();
+                crate::install::repair(&paths, Some(&paths.versions().join(&working_version)))
+                    .unwrap();
                 super::doctor_after_activation(&paths).unwrap();
             }
         }
