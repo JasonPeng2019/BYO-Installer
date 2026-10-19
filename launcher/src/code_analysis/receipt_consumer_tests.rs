@@ -188,6 +188,8 @@ fn fixture(cppcheck_fails: bool, clangd_fails: bool) -> Fixture {
             "license"
         } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path.as_str()) {
             "metadata"
+        } else if path.starts_with("analysis/clangd/lib/") {
+            "analysis-resource"
         } else {
             "analysis-data"
         };

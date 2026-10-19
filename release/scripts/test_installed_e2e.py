@@ -460,12 +460,27 @@ def main() -> int:
         paths = json.loads(invoke([str(byo), "paths"], env=env).stdout)
         if Path(paths["data"]) != home / "data":
             raise AcceptanceFailure("BYO_HOME product path resolution was incorrect")
-        invoke([str(byo), "doctor", "--global", "--json"], env=env)
+        doctor = json.loads(
+            invoke([str(byo), "doctor", "--global", "--json"], env=env).stdout
+        )
         status = json.loads(invoke([str(byo), "status"], env=env).stdout)
         if status.get("runtime_version") != expected_version or bool(
             status.get("development_unsigned")
         ) != bool(manifest.get("development_unsigned")):
             raise AcceptanceFailure("installed runtime status was incorrect")
+        if any(
+            leaf.get("path") == "analysis/runtime.json"
+            for leaf in manifest.get("files", [])
+        ):
+            checks = {check["id"]: check for check in doctor.get("checks", [])}
+            if status.get("analysis", {}).get("status") != "ready" or any(
+                checks.get(f"runtime.analysis.{name}", {}).get("status") != "passed"
+                for name in ("cppcheck", "clangd")
+            ):
+                raise AcceptanceFailure(
+                    f"installed managed analyzers are not ready: {doctor=} {status=}"
+                )
+            phase("managed analyzers ready in doctor and status")
         unsigned_metadata = root / "unsigned-channel.json"
         unsigned_metadata.write_text("{}\n", encoding="utf-8")
         phase("initialize primary project")

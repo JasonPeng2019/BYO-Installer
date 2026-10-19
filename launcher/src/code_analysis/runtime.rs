@@ -550,6 +550,8 @@ pub(super) fn resolve_selected(
                 "license"
             } else if selected_dependencies.contains(name) {
                 "analysis-dependency"
+            } else if selected == "clangd" {
+                "analysis-resource"
             } else {
                 "analysis-data"
             };
@@ -727,7 +729,12 @@ mod tests {
                     .unwrap()
                     .replace('\\', "/");
                 let reference = format!("byo-analysis-file:{path}");
-                components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}]}));
+                let properties = if path.starts_with("analysis/clangd/lib/") {
+                    json!([{"name":"byo:analysis-kind","value":"analysis-resource"},{"name":"byo:analysis-owner","value":owner}])
+                } else {
+                    json!([])
+                };
+                components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}],"properties":properties}));
                 references.push(reference);
             }
             relationships.push(json!({"ref":owner,"dependsOn":references}));
@@ -758,6 +765,8 @@ mod tests {
                 "license"
             } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path.as_str()) {
                 "metadata"
+            } else if path.starts_with("analysis/clangd/lib/") {
+                "analysis-resource"
             } else {
                 "analysis-data"
             };
@@ -773,6 +782,70 @@ mod tests {
         let release: ReleaseManifest = serde_json::from_value(json!({"schema":1,"product":"byo","version":"0.1.8","channel":"development","platform":platform,"architecture":std::env::consts::ARCH,"launcher_protocol":1,"sidecar_protocol":1,"worker_protocol":1,"workflow_protocol":1,"capsule_schema":1,"project_state_schema":1,"development_unsigned":true,"source":{"installer":revision,"agent_workspace":revision,"firmware_mcp":revision},"toolchain":{"rustc":"fixture","cargo":"fixture","python":"unused","nuitka":"unused"},"files":files})).unwrap();
         write_json(&root.join("release-manifest.json"), &release).unwrap();
         Fixture { root, release }
+    }
+
+    #[test]
+    fn clangd_resources_require_the_published_inventory_kind_and_nonexecutable_flag() {
+        for (kind, executable) in [("analysis-data", false), ("analysis-resource", true)] {
+            let mut fixture = fixture();
+            let header = "analysis/clangd/lib/clang/23/include/stddef.h";
+            let leaf = fixture
+                .release
+                .files
+                .iter_mut()
+                .find(|leaf| leaf.path == header)
+                .unwrap();
+            leaf.kind = kind.into();
+            leaf.executable = executable;
+            write_json(
+                &fixture.root.join("release-manifest.json"),
+                &fixture.release,
+            )
+            .unwrap();
+            let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), "clangd")
+                .err()
+                .expect("misclassified resource must fail");
+            assert_eq!(error.code, "analysis/executable-unavailable");
+            assert!(error
+                .message
+                .contains(&format!("Misclassified inventory payload: {header}")));
+        }
+    }
+
+    #[test]
+    fn clangd_resource_sbom_kind_must_match_inventory() {
+        let mut fixture = fixture();
+        let sbom_path = fixture.root.join("sbom.cdx.json");
+        let mut sbom: Value = serde_json::from_slice(&fs::read(&sbom_path).unwrap()).unwrap();
+        let header = "analysis/clangd/lib/clang/23/include/stddef.h";
+        let component = sbom["components"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|component| component["name"] == header)
+            .unwrap();
+        component["properties"][0]["value"] = json!("analysis-data");
+        write_json(&sbom_path, &sbom).unwrap();
+        let leaf = fixture
+            .release
+            .files
+            .iter_mut()
+            .find(|leaf| leaf.path == "sbom.cdx.json")
+            .unwrap();
+        leaf.sha256 = crate::manifest::sha256_file(&sbom_path).unwrap();
+        leaf.size = fs::metadata(&sbom_path).unwrap().len();
+        write_json(
+            &fixture.root.join("release-manifest.json"),
+            &fixture.release,
+        )
+        .unwrap();
+        let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), "clangd")
+            .err()
+            .expect("misclassified SBOM resource must fail");
+        assert_eq!(error.code, "analysis/executable-unavailable");
+        assert!(error.message.contains(&format!(
+            "Analyzer payload SBOM relationship/hash missing: {header}"
+        )));
     }
 
     #[test]
