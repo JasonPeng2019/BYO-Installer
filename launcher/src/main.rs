@@ -1002,7 +1002,8 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("byo-post-doctor-{:032x}", rand::random::<u128>()));
         let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
-        for (version, failure) in [("0.1.9", ""), ("0.1.10", "doctor")] {
+        let [working_version, failing_version] = crate::install::tests::runtime_fixture_versions();
+        for (version, failure) in [(&working_version, ""), (&failing_version, "doctor")] {
             let bundle = root.join(version);
             crate::install::tests::runtime_fixture(&bundle, version, failure);
             crate::install::install_bundle(&bundle, &paths).unwrap();
@@ -1017,7 +1018,7 @@ mod tests {
             } else {
                 assert!(format!("{:#}", result.unwrap_err()).contains("fixture doctor failed"));
                 // This is the same recovery used by Command::Update.
-                crate::install::repair(&paths, Some(&paths.versions().join("0.1.9"))).unwrap();
+                crate::install::repair(&paths, Some(&paths.versions().join(&working_version))).unwrap();
                 super::doctor_after_activation(&paths).unwrap();
             }
         }

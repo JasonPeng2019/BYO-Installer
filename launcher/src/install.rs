@@ -750,6 +750,16 @@ pub(crate) mod tests {
     use super::{remove_public_launcher, start_windows_launcher_cleanup};
 
     #[cfg(all(windows, feature = "development"))]
+    pub(crate) fn runtime_fixture_versions() -> [String; 2] {
+        let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        [1, 2].map(|offset| {
+            let mut version = current.clone();
+            version.patch += offset;
+            version.to_string()
+        })
+    }
+
+    #[cfg(all(windows, feature = "development"))]
     pub(crate) fn runtime_fixture(root: &std::path::Path, version: &str, failure: &str) {
         use std::sync::OnceLock;
         static EXECUTABLE: OnceLock<std::path::PathBuf> = OnceLock::new();
@@ -832,12 +842,13 @@ pub(crate) mod tests {
         let old = root.join("old");
         let new = root.join("new");
         runtime_fixture(&old, env!("CARGO_PKG_VERSION"), "");
-        runtime_fixture(&new, "0.1.9", "");
-        assert_ne!(env!("CARGO_PKG_VERSION"), "0.1.9");
+        let [next_version, _] = runtime_fixture_versions();
+        runtime_fixture(&new, &next_version, "");
+        assert_ne!(env!("CARGO_PKG_VERSION"), next_version.as_str());
         super::install_bundle(&old, &paths).unwrap();
         super::install_bundle(&new, &paths).unwrap();
         let (current, runtime) = crate::manifest::load_current(&paths).unwrap();
-        assert_eq!(current.version, "0.1.9");
+        assert_eq!(current.version, next_version);
         super::repair(&paths, Some(&runtime)).unwrap();
         assert!(
             super::sidecar_self_test(&runtime).is_err(),
@@ -859,11 +870,12 @@ pub(crate) mod tests {
         ));
         let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
         let bundle = root.join("bundle");
-        runtime_fixture(&bundle, "0.1.9", "");
+        let [version, relabelled_version] = runtime_fixture_versions();
+        runtime_fixture(&bundle, &version, "");
         let manifest_path = bundle.join("release-manifest.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["version"] = serde_json::json!("0.1.10");
+        manifest["version"] = serde_json::json!(relabelled_version);
         crate::manifest::write_json(&manifest_path, &manifest).unwrap();
         let error = super::install_bundle(&bundle, &paths).unwrap_err();
         assert!(format!("{error:#}").contains("launcher version does not match"));
@@ -920,7 +932,11 @@ pub(crate) mod tests {
             paths.install_locator(),
         ]
         .map(|p| std::fs::read(p).unwrap());
-        for (version, failure) in [("0.1.9", "protocol"), ("0.1.10", "activation")] {
+        let [protocol_version, activation_version] = runtime_fixture_versions();
+        for (version, failure) in [
+            (&protocol_version, "protocol"),
+            (&activation_version, "activation"),
+        ] {
             let bundle = root.join(version);
             runtime_fixture(&bundle, version, failure);
             let error = super::install_bundle(&bundle, &paths).unwrap_err();
