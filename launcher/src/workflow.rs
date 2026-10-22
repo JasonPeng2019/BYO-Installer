@@ -39,7 +39,7 @@ pub fn print_guidance(project: &Path, skill: &str, paths: &ProductPaths) -> Resu
     if !valid_resource_id(skill) {
         bail!("workflow skill identifier is invalid");
     }
-    let runtime = crate::project::active_runtime(paths)?;
+    let (runtime, _lease) = crate::project::lease_project(project, paths)?;
     let mode_name = crate::project::capsule_mode(project)?;
     let mode = runtime.pack.mode(&mode_name)?;
     let mut sections = Vec::new();
@@ -64,8 +64,7 @@ pub fn print_agent(project: &Path, agent: &str, paths: &ProductPaths) -> Result<
     if !valid_resource_id(agent) {
         bail!("workflow agent identifier is invalid");
     }
-    crate::project::doctor_project(project, paths)?;
-    let runtime = crate::project::active_runtime(paths)?;
+    let (runtime, _lease) = crate::project::lease_project(project, paths)?;
     let output = String::from_utf8(runtime.pack.agent_resource(agent)?)?;
     if output.len() > MAX_GUIDANCE_BYTES {
         bail!("compiled agent guidance exceeds the output bound");
@@ -586,9 +585,6 @@ fn tool_verify(project: &Path, paths: &ProductPaths, arguments: &[String]) -> Re
         .join(format!("verify-{}-local", mode.verify.backend));
     let mut substantive = false;
     if mode.verify.backend == "firmware" {
-        let project_id = crate::project::project_id(project)?;
-        let _lease =
-            crate::lease::RuntimeLeaseGuard::acquire(paths, &runtime.release.version, &project_id)?;
         substantive = true;
         passed &= firmware_checks(
             || {
@@ -856,7 +852,7 @@ pub fn run_tool(
     arguments: &[String],
     paths: &ProductPaths,
 ) -> Result<i32> {
-    crate::project::doctor_project(project, paths)?;
+    let (_runtime, _lease) = crate::project::lease_project(project, paths)?;
     match name {
         "task-path" => tool_task_path(project, arguments),
         "require-mode" => tool_require_mode(project, paths, arguments),
@@ -881,8 +877,8 @@ fn read_hook_payload() -> Result<Value> {
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok(Value::Object(Default::default()));
     }
-    let payload: Value =
-        serde_json::from_slice(&bytes).context("hook input is not valid UTF-8 JSON")?;
+    let payload: Value = crate::project::parse_project_json(&bytes)
+        .context("hook input is not valid unambiguous UTF-8 JSON")?;
     let object = payload
         .as_object()
         .context("hook input must be a JSON object")?;
@@ -894,26 +890,29 @@ fn read_hook_payload() -> Result<Value> {
     Ok(payload)
 }
 
-fn nested_command(payload: &Value, key: &str) -> Option<String> {
-    payload
-        .get(key)
-        .and_then(Value::as_object)
-        .and_then(|value| value.get("command"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-fn extract_command(payload: &Value) -> String {
-    nested_command(payload, "tool_input")
-        .or_else(|| nested_command(payload, "toolInput"))
-        .or_else(|| {
-            payload
-                .get("command")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| nested_command(payload, "input"))
-        .unwrap_or_default()
+fn extract_command(payload: &Value) -> Result<String> {
+    let mut commands = Vec::new();
+    if let Some(command) = payload.get("command") {
+        commands.push(command.as_str().context("command must be a string")?);
+    }
+    for key in ["tool_input", "toolInput", "input"] {
+        if let Some(container) = payload.get(key) {
+            let object = container
+                .as_object()
+                .with_context(|| format!("{key} must be an object"))?;
+            if let Some(command) = object.get("command") {
+                commands.push(
+                    command
+                        .as_str()
+                        .with_context(|| format!("{key}.command must be a string"))?,
+                );
+            }
+        }
+    }
+    if commands.len() > 1 {
+        bail!("hook contains multiple command fields; command is ambiguous");
+    }
+    Ok(commands.first().copied().unwrap_or_default().to_string())
 }
 
 fn normalize_command(command: &str) -> Result<String> {
@@ -1005,11 +1004,30 @@ fn emit_bounded(output: &str) -> Result<()> {
 }
 
 fn hook_guard_dangerous(project: &Path, payload: &Value) -> Result<i32> {
-    let command = normalize_command(&extract_command(payload))?;
+    let command = match extract_command(payload).and_then(|command| normalize_command(&command)) {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("BYO command rejected: {error:#}; blocking.");
+            return Ok(2);
+        }
+    };
     if command.is_empty() {
         return Ok(0);
     }
-    let mode = crate::project::capsule_mode(project)?;
+    // Evaluate unconditional blocks even if a capsule/mode is unavailable. An
+    // unrelated MCP configuration, skill or runtime-doctor failure is not a
+    // reason to turn the denylist off.
+    if let Some(reason) = dangerous_reason(&command, "firmware") {
+        eprintln!("{reason}");
+        return Ok(2);
+    }
+    let mode = match crate::project::guard_mode(project) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("BYO guard cannot verify the project mode: {error:#}; blocking.");
+            return Ok(2);
+        }
+    };
     if let Some(reason) = dangerous_reason(&command, &mode) {
         eprintln!("{reason}");
         return Ok(2);
@@ -1075,7 +1093,11 @@ fn hook_sessionstart(project: &Path, payload: &Value) -> Result<i32> {
 }
 
 pub fn run_hook(project: &Path, hook_name: &str, paths: &ProductPaths) -> Result<i32> {
-    crate::project::doctor_project(project, paths)?;
+    let _project_lease = if hook_name != "guard-dangerous" {
+        Some(crate::project::lease_project(project, paths)?)
+    } else {
+        None
+    };
     let payload = match read_hook_payload() {
         Ok(payload) => payload,
         Err(error) if hook_name == "guard-dangerous" => {
@@ -1097,7 +1119,89 @@ pub fn run_hook(project: &Path, hook_name: &str, paths: &ProductPaths) -> Result
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn review_guard_blocks_malformed_supported_command_fields() {
+        let absent =
+            std::env::temp_dir().join(format!("byo-review-absent-{:032x}", rand::random::<u128>()));
+        for payload in [
+            serde_json::json!({"tool_input": {"command": 42}}),
+            serde_json::json!({"tool_input": {"command": null}}),
+            serde_json::json!({"toolInput": {"command": ["rm -rf /"]}}),
+            serde_json::json!({"command": {"text": "rm -rf /"}}),
+            serde_json::json!({"input": {"command": false}}),
+        ] {
+            assert_eq!(
+                hook_guard_dangerous(&absent, &payload).unwrap(),
+                2,
+                "malformed input was reported as successfully checked: {payload}"
+            );
+        }
+        assert_eq!(
+            hook_guard_dangerous(
+                &absent,
+                &serde_json::json!({"tool_input": {"command": "git reset --hard"}})
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            hook_guard_dangerous(
+                &absent,
+                &serde_json::json!({"tool_input": {"command": "git status"}})
+            )
+            .unwrap(),
+            2,
+            "a well-formed benign command still needs verified project authority"
+        );
+    }
     use super::*;
+    #[test]
+    fn guard_rejects_ambiguous_fields_and_keeps_supported_string_shapes() {
+        for payload in [
+            serde_json::json!({"command":"git status", "tool_input":{"command":"rm -rf /"}}),
+            serde_json::json!({"input":{"command":"git status"}, "toolInput":{"command":"git status"}}),
+            serde_json::json!({"tool_input":null}),
+        ] {
+            assert!(extract_command(&payload).is_err());
+        }
+        for payload in [
+            serde_json::json!({"command":"git status"}),
+            serde_json::json!({"tool_input":{"command":"git status"}}),
+            serde_json::json!({"toolInput":{"command":"git status"}}),
+            serde_json::json!({"input":{"command":"git status"}}),
+        ] {
+            assert_eq!(extract_command(&payload).unwrap(), "git status");
+        }
+        assert_eq!(
+            extract_command(&serde_json::json!({"tool_input":{"path":"note.md"}})).unwrap(),
+            ""
+        );
+        assert!(crate::project::parse_project_json::<Value>(
+            br#"{"command":"rm -rf /","command":"git status"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dangerous_guard_blocks_oversized_and_nul_commands_before_project_loading() {
+        let absent =
+            std::env::temp_dir().join(format!("byo-absent-{:032x}", rand::random::<u128>()));
+        for command in ["x".repeat(33 * 1024), "git status\0rm -rf /".to_string()] {
+            assert_eq!(
+                hook_guard_dangerous(
+                    &absent,
+                    &serde_json::json!({"tool_input": {"command": command}})
+                )
+                .unwrap(),
+                2
+            );
+        }
+        assert_eq!(
+            normalize_command("  git  status\n --short ").unwrap(),
+            "git status --short"
+        );
+    }
 
     #[test]
     fn dangerous_patterns_and_mode_boundaries_are_deterministic() {

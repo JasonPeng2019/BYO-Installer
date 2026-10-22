@@ -224,14 +224,16 @@ fn sidecar_self_test_version(runtime: &Path, launcher_version: &str) -> Result<(
 }
 
 pub fn install_bundle(bundle: &Path, paths: &ProductPaths) -> Result<ReleaseManifest> {
-    let _lock = InstallLock::acquire(paths)?;
-    install_bundle_locked(bundle, paths)
+    let lock = InstallLock::acquire(paths)?;
+    install_bundle_locked(bundle, paths, &lock)
 }
 
 pub(crate) fn install_bundle_locked(
     bundle: &Path,
     paths: &ProductPaths,
+    lock: &InstallLock,
 ) -> Result<ReleaseManifest> {
+    crate::lease::ensure_runtime_inactive(paths)?;
     let bundle = bundle
         .canonicalize()
         .with_context(|| format!("bundle does not exist: {}", bundle.display()))?;
@@ -283,20 +285,70 @@ pub(crate) fn install_bundle_locked(
         })?;
     }
 
-    let manifest_digest = sha256_file(&final_runtime.join("release-manifest.json"))?;
+    activate_runtime_locked(&final_runtime, &source_manifest, paths, lock)?;
+    Ok(source_manifest)
+}
+
+fn project_refresh_support(candidate: &Path) -> Result<bool> {
+    let output = Command::new(launcher_path(candidate))
+        .args(["internal", "project-refresh-protocol"])
+        .env("BYO_HOME", candidate)
+        .stdin(Stdio::null())
+        .output()
+        .context("failed to inspect candidate project-refresh support")?;
+    Ok(output.status.success() && (output.stdout == b"1\n" || output.stdout == b"1\r\n"))
+}
+
+fn read_activation_file(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("cannot preserve activation file {}", path.display())),
+    }
+}
+
+fn activate_runtime_locked(
+    candidate: &Path,
+    release: &ReleaseManifest,
+    paths: &ProductPaths,
+    lock: &InstallLock,
+) -> Result<()> {
+    crate::lease::ensure_runtime_inactive(paths)?;
+    let candidate = candidate.canonicalize()?;
     let current = CurrentRuntime {
         schema: 1,
-        version: source_manifest.version.clone(),
-        relative_runtime: format!("versions/{}", source_manifest.version),
-        manifest_sha256: manifest_digest,
+        version: release.version.clone(),
+        relative_runtime: portable_relative_path(
+            candidate.strip_prefix(paths.data.canonicalize()?)?,
+        )?,
+        manifest_sha256: sha256_file(&candidate.join("release-manifest.json"))?,
     };
-    let launcher = launcher_path(&final_runtime);
-    let bytes = std::fs::read(&launcher)?;
-    let previous_current = std::fs::read(paths.current()).ok();
-    let previous_launcher = std::fs::read(paths.public_launcher()).ok();
-    let previous_locator = std::fs::read(paths.install_locator()).ok();
+    let same_runtime = crate::manifest::load_current(paths).is_ok_and(|(prior, root)| {
+        root == candidate && prior.manifest_sha256 == current.manifest_sha256
+    });
+    // Reconstructing the currently selected launcher does not require a new
+    // target capability; switching to an incapable launcher must still refuse.
+    let refresh_support = project_refresh_support(&candidate)?;
+    if !same_runtime
+        && !refresh_support
+        && crate::project::registered_projects(paths)?
+            .iter()
+            .any(|project| project.path.exists())
+    {
+        bail!("selected launcher predates automatic project refresh. Runtime and projects were left unchanged. Choose a refresh-capable release; to use this older launcher, first remove each registered project's integration with `byo uninstall --project <path>` (PLAN/HANDOFF/.firm are preserved), retry activation, then run the older launcher's `byo init --project <path> --mode <previous-mode>` with --allow-full-access only if previously authorized");
+    }
+    selected_sidecar_self_test(&candidate, release)?;
+    let previous = [
+        read_activation_file(&paths.current())?,
+        read_activation_file(&paths.public_launcher())?,
+        read_activation_file(&paths.install_locator())?,
+    ];
     let switch = (|| -> Result<()> {
-        write_public_launcher(&paths.public_launcher(), &bytes)?;
+        write_public_launcher(
+            &paths.public_launcher(),
+            &std::fs::read(launcher_path(&candidate))?,
+        )?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -307,9 +359,9 @@ pub(crate) fn install_bundle_locked(
         }
         paths.write_install_locator()?;
         write_json(&paths.current(), &current)?;
-        let activated = verify_runtime(&final_runtime)?;
-        selected_sidecar_self_test(&final_runtime, &activated)?;
-        crate::pack::WorkspacePack::load(&final_runtime.join("workflow/workspace.pack"))?;
+        let activated = verify_runtime(&candidate)?;
+        selected_sidecar_self_test(&candidate, &activated)?;
+        crate::pack::WorkspacePack::load(&candidate.join("workflow/workspace.pack"))?;
         if sha256_file(&paths.public_launcher())?
             != activated
                 .files
@@ -320,15 +372,37 @@ pub(crate) fn install_bundle_locked(
         {
             bail!("public launcher verification failed after activation");
         }
+        crate::doctor_after_activation(paths, lock, refresh_support)?;
         Ok(())
     })();
     if let Err(error) = switch {
-        restore_optional_file(&paths.current(), previous_current.as_deref())?;
-        restore_optional_file(&paths.public_launcher(), previous_launcher.as_deref())?;
-        restore_optional_file(&paths.install_locator(), previous_locator.as_deref())?;
-        return Err(error);
+        let mut failures = Vec::new();
+        for (path, payload) in [
+            paths.current(),
+            paths.public_launcher(),
+            paths.install_locator(),
+        ]
+        .into_iter()
+        .zip(previous)
+        {
+            let restored = if path == paths.public_launcher() && payload.is_some() {
+                write_public_launcher(&path, payload.as_deref().unwrap()).map(|_| ())
+            } else {
+                restore_optional_file(&path, payload.as_deref())
+            };
+            if let Err(failure) = restored {
+                failures.push(format!("{}: {failure:#}", path.display()));
+            }
+        }
+        if !failures.is_empty() {
+            bail!(
+                "activation failed ({error:#}); restoration also failed: {}",
+                failures.join("; ")
+            );
+        }
+        return Err(error.context("activation failed; previous pointer/public launcher/locator restored; projects unchanged"));
     }
-    Ok(source_manifest)
+    Ok(())
 }
 
 fn restore_optional_file(path: &Path, payload: Option<&[u8]>) -> Result<()> {
@@ -535,7 +609,7 @@ fn remove_public_launcher(
 }
 
 pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf> {
-    let _lock = InstallLock::acquire(paths)?;
+    let lock = InstallLock::acquire(paths)?;
     let candidate = if let Some(path) = requested {
         path.to_path_buf()
     } else {
@@ -552,56 +626,12 @@ pub fn repair(paths: &ProductPaths, requested: Option<&Path>) -> Result<PathBuf>
             .context("no verified BYO runtime is available for repair")?
     };
     let candidate = candidate.canonicalize()?;
-    let data = paths.data.canonicalize()?;
     let versions = paths.versions().canonicalize()?;
     if !candidate.starts_with(&versions) {
         bail!("repair candidate must be an installed version directory");
     }
     let release = verify_runtime(&candidate)?;
-    selected_sidecar_self_test(&candidate, &release)?;
-    let current = CurrentRuntime {
-        schema: 1,
-        version: release.version.clone(),
-        relative_runtime: portable_relative_path(candidate.strip_prefix(&data)?)?,
-        manifest_sha256: sha256_file(&candidate.join("release-manifest.json"))?,
-    };
-    let launcher = std::fs::read(launcher_path(&candidate))?;
-    let previous_current = std::fs::read(paths.current()).ok();
-    let previous_launcher = std::fs::read(paths.public_launcher()).ok();
-    let previous_locator = std::fs::read(paths.install_locator()).ok();
-    let switch = (|| -> Result<()> {
-        write_public_launcher(&paths.public_launcher(), &launcher)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                paths.public_launcher(),
-                std::fs::Permissions::from_mode(0o700),
-            )?;
-        }
-        paths.write_install_locator()?;
-        write_json(&paths.current(), &current)?;
-        let activated = verify_runtime(&candidate)?;
-        selected_sidecar_self_test(&candidate, &activated)?;
-        crate::pack::WorkspacePack::load(&candidate.join("workflow/workspace.pack"))?;
-        if sha256_file(&paths.public_launcher())?
-            != release
-                .files
-                .iter()
-                .find(|file| file.kind == "launcher")
-                .context("release manifest has no launcher")?
-                .sha256
-        {
-            bail!("public launcher verification failed after repair activation");
-        }
-        Ok(())
-    })();
-    if let Err(error) = switch {
-        restore_optional_file(&paths.current(), previous_current.as_deref())?;
-        restore_optional_file(&paths.public_launcher(), previous_launcher.as_deref())?;
-        restore_optional_file(&paths.install_locator(), previous_locator.as_deref())?;
-        return Err(error);
-    }
+    activate_runtime_locked(&candidate, &release, paths, &lock)?;
     Ok(candidate)
 }
 
@@ -760,11 +790,13 @@ pub(crate) mod tests {
             ));
             std::fs::create_dir_all(&build).unwrap();
             let executable = build.join("fixture.exe");
+            let source = include_str!("../tests/fixtures/runtime-switch/fake_runtime.rs")
+                .replace("args.get(1).map(String::as_str) == Some(\"doctor\")",
+                    "(args.get(1).map(String::as_str) == Some(\"doctor\") || args.get(2).map(String::as_str) == Some(\"activation-doctor\"))");
+            let input = build.join("fake.rs");
+            std::fs::write(&input, source).unwrap();
             let output = std::process::Command::new("rustc")
-                .arg(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/fixtures/runtime-switch/fake_runtime.rs"),
-                )
+                .arg(&input)
                 .args(["-Ctarget-feature=+crt-static", "-o"])
                 .arg(&executable)
                 .output()
@@ -967,15 +999,10 @@ pub(crate) mod tests {
             }),
         )
         .unwrap();
+        let shared = crate::project::test_shared_projections(project, 1);
         crate::manifest::write_json(
             &project.join(".generated/byo/projection-manifest.json"),
-            &serde_json::json!({
-                "schema": 1,
-                "managed_files": [],
-                "agents_block_sha256": "unused-in-test",
-                "codex_server_sha256": "unused-in-test",
-                "codex_hooks_sha256": "unused-in-test"
-            }),
+            &shared,
         )
         .unwrap();
         let project = project.canonicalize().unwrap();
@@ -1122,18 +1149,22 @@ pub(crate) mod tests {
         ));
         let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
         let valid = write_registered_project(&paths, &root.join("valid project"), "project-a");
-        let missing = root.join("missing project");
+        let unsafe_project = root.join("unsafe project");
+        std::fs::create_dir_all(&unsafe_project).unwrap();
         let registry_path = paths.state.join("projects.json");
         let mut registry: std::collections::BTreeMap<String, String> =
             serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
-        registry.insert("project-b".to_string(), missing.display().to_string());
+        registry.insert(
+            "project-b".to_string(),
+            unsafe_project.display().to_string(),
+        );
         crate::manifest::write_json(&registry_path, &registry).unwrap();
         std::fs::write(paths.state.join("path-edits.json"), b"untouched").unwrap();
 
         let error = super::uninstall_global(&paths).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains(&valid.display().to_string()));
-        assert!(message.contains(&missing.display().to_string()));
+        assert!(message.contains(&unsafe_project.display().to_string()));
         assert!(valid.join(".agent-workspace/manifest.json").is_file());
         assert_eq!(
             std::fs::read(paths.state.join("path-edits.json")).unwrap(),
@@ -1151,6 +1182,29 @@ pub(crate) mod tests {
         std::fs::write(&launcher, b"same").unwrap();
         assert!(!write_if_changed(&launcher, b"same").unwrap());
         assert_eq!(std::fs::read(&launcher).unwrap(), b"same");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn global_uninstall_allows_definitely_missing_registered_projects() {
+        let root = std::env::temp_dir().join(format!(
+            "byo-global-missing-{:032x}",
+            rand::random::<u128>()
+        ));
+        let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
+        let valid = write_registered_project(&paths, &root.join("valid"), "valid-id");
+        let registry_path = paths.state.join("projects.json");
+        let mut registry: std::collections::BTreeMap<String, String> =
+            serde_json::from_slice(&std::fs::read(&registry_path).unwrap()).unwrap();
+        registry.insert(
+            "deleted-id".to_string(),
+            root.join("deleted").display().to_string(),
+        );
+        crate::manifest::write_json(&registry_path, &registry).unwrap();
+        let result = super::uninstall_global(&paths).unwrap();
+        assert_eq!(result.project_integrations, vec![valid.clone()]);
+        assert!(!valid.join(".agent-workspace").exists());
+        assert!(!paths.state.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

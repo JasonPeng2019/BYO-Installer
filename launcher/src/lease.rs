@@ -33,7 +33,18 @@ pub struct RuntimeLeaseGuard {
 }
 
 impl RuntimeLeaseGuard {
+    #[cfg(test)]
     pub fn acquire(paths: &ProductPaths, runtime_version: &str, project_id: &str) -> Result<Self> {
+        let lock = crate::install::InstallLock::acquire(paths)?;
+        Self::acquire_locked(paths, runtime_version, project_id, &lock)
+    }
+
+    pub fn acquire_locked(
+        paths: &ProductPaths,
+        runtime_version: &str,
+        project_id: &str,
+        _lock: &crate::install::InstallLock,
+    ) -> Result<Self> {
         let root = paths.leases();
         ensure_private_directory(&root)?;
         let pid = std::process::id();
@@ -86,6 +97,26 @@ fn load_lease(path: &Path) -> Result<RuntimeLease> {
     Ok(lease)
 }
 
+fn is_atomic_lease_temporary(name: &str) -> bool {
+    let Some((lease, nonce)) = name
+        .strip_prefix(".lease-")
+        .and_then(|value| value.split_once(".json.tmp-"))
+    else {
+        return false;
+    };
+    let Some((pid, identity)) = lease.split_once('-') else {
+        return false;
+    };
+    !pid.is_empty()
+        && pid.parse::<u32>().is_ok()
+        && pid.bytes().all(|value| value.is_ascii_digit())
+        && identity.len() == 32
+        && identity.bytes().all(|value| value.is_ascii_hexdigit())
+        && !nonce.is_empty()
+        && nonce.bytes().all(|value| value.is_ascii_digit())
+        && nonce.parse::<u64>().is_ok()
+}
+
 pub fn inspect(paths: &ProductPaths, remove_stale: bool) -> Result<Vec<LeaseStatus>> {
     let root = paths.leases();
     if !root.exists() {
@@ -94,6 +125,15 @@ pub fn inspect(paths: &ProductPaths, remove_stale: bool) -> Result<Vec<LeaseStat
     let mut statuses = Vec::new();
     for entry in std::fs::read_dir(&root)? {
         let path = entry?.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_atomic_lease_temporary)
+        {
+            // A killed atomic writer can leave this exact uncommitted name.
+            // Never hide malformed actual lease records or delete live staging.
+            continue;
+        }
         let lease = load_lease(&path)
             .with_context(|| format!("invalid runtime lease {}", path.display()))?;
         let live = process_start_identity(lease.pid).as_deref()
@@ -118,9 +158,45 @@ pub fn ensure_project_inactive(paths: &ProductPaths, project_id: &str) -> Result
     Ok(())
 }
 
+pub fn ensure_runtime_inactive(paths: &ProductPaths) -> Result<()> {
+    if inspect(paths, true)?.iter().any(|status| status.live) {
+        bail!("an MCP/runtime lease is active; stop BYO sessions before updating or rolling back");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lease_temporaries_do_not_hide_malformed_actual_records() {
+        let root =
+            std::env::temp_dir().join(format!("byo-lease-debris-{:032x}", rand::random::<u128>()));
+        let paths = ProductPaths::from_install_dir(&root).unwrap();
+        std::fs::create_dir_all(paths.leases()).unwrap();
+        let debris = paths
+            .leases()
+            .join(".lease-123-0123456789abcdef0123456789abcdef.json.tmp-456");
+        std::fs::write(&debris, b"unfinished").unwrap();
+        let guard = RuntimeLeaseGuard::acquire(&paths, "test", "project").unwrap();
+        assert_eq!(inspect(&paths, true).unwrap().len(), 1);
+        assert!(debris.is_file());
+        let malformed = paths
+            .leases()
+            .join("lease-123-0123456789abcdef0123456789abcdef.json");
+        std::fs::write(&malformed, b"invalid").unwrap();
+        assert!(inspect(&paths, false)
+            .unwrap_err()
+            .to_string()
+            .contains("invalid runtime lease"));
+        assert!(!is_atomic_lease_temporary(
+            ".lease-123-0123456789abcdef0123456789abcdef.json.tmp-wrong"
+        ));
+        assert!(!is_atomic_lease_temporary(".lease-123-short.json.tmp-456"));
+        drop(guard);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn current_process_identity_is_stable() {

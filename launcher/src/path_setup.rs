@@ -6,8 +6,6 @@
 //! `revert_recorded_edits` undoes precisely those records, so uninstall never
 //! guesses at unrelated PATH entries.
 
-#[cfg(any(not(windows), test))]
-use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -15,6 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::manifest::write_json;
 use crate::paths::{ensure_private_directory, ProductPaths};
+
+#[cfg(any(not(windows), test))]
+mod unix;
+#[cfg(windows)]
+mod windows_registry;
 
 const BEGIN_MARKER: &str = "# >>> BYO installer >>>";
 const END_MARKER: &str = "# <<< BYO installer <<<";
@@ -50,7 +53,13 @@ struct PathEdits {
 /// The result of a PATH-setup attempt, for a one-line user message.
 pub enum PathSetupOutcome {
     AlreadyPresent,
-    Configured { target: String },
+    Configured {
+        target: String,
+    },
+    #[cfg(not(windows))]
+    Manual {
+        instructions: String,
+    },
 }
 
 fn record_path(paths: &ProductPaths) -> PathBuf {
@@ -59,53 +68,24 @@ fn record_path(paths: &ProductPaths) -> PathBuf {
 
 fn load_record(paths: &ProductPaths) -> Result<Option<PathEdits>> {
     let path = record_path(paths);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let record: PathEdits = serde_json::from_slice(&std::fs::read(&path)?)
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()))
+        }
+    };
+    let record: PathEdits = serde_json::from_slice(&bytes)
         .with_context(|| format!("PATH-edit record {} is invalid", path.display()))?;
+    if record.schema != 1 {
+        anyhow::bail!("unsupported PATH-edit record schema");
+    }
     Ok(Some(record))
 }
 
 fn save_record(paths: &ProductPaths, record: &PathEdits) -> Result<()> {
     ensure_private_directory(&paths.state)?;
     write_json(&record_path(paths), record)
-}
-
-// ---- Pure helpers (unit-tested; no I/O) -----------------------------------
-
-/// The shell profile BYO edits, chosen from the login shell. One file keeps the
-/// marked block — and therefore its reversal — unambiguous.
-#[cfg(any(not(windows), test))]
-fn choose_unix_profile(home: &Path, shell: Option<&str>) -> PathBuf {
-    let leaf = shell
-        .and_then(|value| value.rsplit(['/', '\\']).next())
-        .unwrap_or("");
-    let file = if leaf.contains("zsh") {
-        ".zshrc"
-    } else if leaf.contains("bash") {
-        ".bashrc"
-    } else {
-        ".profile"
-    };
-    home.join(file)
-}
-
-/// Append the marked export block for `bin`, unless the block is already present.
-/// Returns the new file contents, or `None` if BYO already configured this file.
-#[cfg(any(not(windows), test))]
-fn insert_block(contents: &str, bin: &str) -> Option<String> {
-    if contents.contains(BEGIN_MARKER) {
-        return None;
-    }
-    let mut updated = String::from(contents);
-    if !updated.is_empty() && !updated.ends_with('\n') {
-        updated.push('\n');
-    }
-    updated.push_str(&format!(
-        "{BEGIN_MARKER}\nexport PATH=\"{bin}:$PATH\"\n{END_MARKER}\n"
-    ));
-    Some(updated)
 }
 
 /// Remove a previously inserted marked block. Returns the new contents, or `None`
@@ -121,19 +101,22 @@ fn remove_block(contents: &str) -> Option<String> {
             tail
         }
     })?;
-    // Drop a single blank separator line immediately before the block, if any,
-    // so repeated add/remove cycles don't accumulate blank lines.
-    let mut start = begin;
-    if contents[..start].ends_with('\n') {
-        let trimmed = contents[..start].trim_end_matches('\n');
-        if trimmed.len() + 1 < start {
-            start = trimmed.len() + 1;
-        }
-    }
     let mut updated = String::with_capacity(contents.len());
-    updated.push_str(&contents[..start]);
+    updated.push_str(&contents[..begin]);
     updated.push_str(&contents[after_end..]);
     Some(updated)
+}
+
+fn has_valid_block(contents: &str) -> Result<bool> {
+    let begins: Vec<_> = contents.match_indices(BEGIN_MARKER).collect();
+    let ends: Vec<_> = contents.match_indices(END_MARKER).collect();
+    match (begins.as_slice(), ends.as_slice()) {
+        ([], []) => Ok(false),
+        ([(begin, _)], [(end, _)]) if begin < end => Ok(true),
+        _ => anyhow::bail!(
+            "profile contains malformed or duplicate BYO PATH markers; original preserved"
+        ),
+    }
 }
 
 // ---- Public operations -----------------------------------------------------
@@ -148,39 +131,14 @@ pub fn add_bin_to_path(paths: &ProductPaths) -> Result<PathSetupOutcome> {
 
     #[cfg(not(windows))]
     {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .context("HOME is required to modify PATH")?;
-        let shell = std::env::var("SHELL").ok();
-        let profile = choose_unix_profile(&home, shell.as_deref());
-        let existing = std::fs::read_to_string(&profile).unwrap_or_default();
-        match insert_block(&existing, &bin) {
-            None => Ok(PathSetupOutcome::AlreadyPresent),
-            Some(updated) => {
-                if let Some(parent) = profile.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&profile, updated)
-                    .with_context(|| format!("failed to update {}", profile.display()))?;
-                record_edit(
-                    paths,
-                    PathEdit {
-                        kind: EditKind::UnixProfile,
-                        target: profile.display().to_string(),
-                        bin,
-                    },
-                )?;
-                Ok(PathSetupOutcome::Configured {
-                    target: profile.display().to_string(),
-                })
-            }
-        }
+        unix::add(paths, &bin)
     }
 
     #[cfg(windows)]
     {
-        let current = windows_user_path()?;
-        if windows_path_contains(&current, &bin) {
+        let previous = windows_registry::user_path()?;
+        let current = previous.as_ref().map_or("", |value| value.text.as_str());
+        if windows_path_contains(current, &bin) {
             // A previous BYO version wrote the registry value without notifying
             // the shell. Repeat the bounded notification even when the value is
             // already present so re-running the installer repairs that state.
@@ -192,15 +150,22 @@ pub fn add_bin_to_path(paths: &ProductPaths) -> Result<PathSetupOutcome> {
         } else {
             format!("{current};{bin}")
         };
-        windows_set_user_path(&updated)?;
-        record_edit(
+        load_record(paths)?; // Refuse a damaged/unreadable record before mutation.
+        let value = windows_registry::PathValue::updated(&previous, updated);
+        windows_registry::set_user_path(Some(&value))?;
+        if let Err(error) = record_edit(
             paths,
             PathEdit {
                 kind: EditKind::WindowsUserPath,
                 target: "HKCU\\Environment\\Path".to_string(),
                 bin,
             },
-        )?;
+        ) {
+            windows_registry::set_user_path(previous.as_ref())
+                .with_context(|| format!("PATH record failed ({error:#}); PATH rollback failed"))?;
+            return Err(error);
+        }
+        windows_notify_environment_change();
         Ok(PathSetupOutcome::Configured {
             target: "the Windows user PATH".to_string(),
         })
@@ -230,11 +195,11 @@ pub fn revert_recorded_edits(paths: &ProductPaths) -> Result<Vec<String>> {
         match edit.kind {
             EditKind::UnixProfile => {
                 let profile = PathBuf::from(&edit.target);
-                if let Ok(contents) = std::fs::read_to_string(&profile) {
+                if let Some(contents) = read_profile(&profile)? {
+                    has_valid_block(&contents)?;
                     if let Some(updated) = remove_block(&contents) {
-                        std::fs::write(&profile, updated).with_context(|| {
-                            format!("failed to revert PATH edit in {}", profile.display())
-                        })?;
+                        backup_profile(paths, &profile, contents.as_bytes())?;
+                        crate::manifest::atomic_write(&profile, updated.as_bytes())?;
                         reverted.push(edit.target.clone());
                     }
                 }
@@ -242,66 +207,54 @@ pub fn revert_recorded_edits(paths: &ProductPaths) -> Result<Vec<String>> {
             EditKind::WindowsUserPath => {
                 #[cfg(windows)]
                 {
-                    let current = windows_user_path()?;
-                    let updated = windows_path_without(&current, &edit.bin);
+                    let previous = windows_registry::user_path()?;
+                    let current = previous.as_ref().map_or("", |value| value.text.as_str());
+                    let updated = windows_path_without(current, &edit.bin);
                     if updated != current {
-                        windows_set_user_path(&updated)?;
+                        let value = windows_registry::PathValue::updated(&previous, updated);
+                        windows_registry::set_user_path(Some(&value))?;
+                        windows_notify_environment_change();
                         reverted.push("the Windows user PATH".to_string());
                     }
                 }
             }
         }
     }
-    let _ = std::fs::remove_file(record_path(paths));
+    std::fs::remove_file(record_path(paths))?;
     Ok(reverted)
 }
 
-// ---- Windows PATH via `reg` (thin; not exercised on non-Windows hosts) ------
-
-#[cfg(windows)]
-fn windows_user_path() -> Result<String> {
-    use std::process::Command;
-    let output = Command::new("reg")
-        .args(["query", "HKCU\\Environment", "/v", "Path"])
-        .output()
-        .context("failed to query the Windows user PATH")?;
-    if !output.status.success() {
-        // No Path value yet.
-        return Ok(String::new());
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
-    for line in text.lines() {
-        if let Some(index) = line.find("REG_") {
-            if let Some(rest) = line[index..].split_once("SZ") {
-                return Ok(rest.1.trim().to_string());
+fn read_profile(path: &std::path::Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // A dangling profile symlink is not an absent profile.
+            match std::fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Ok(_) => anyhow::bail!(
+                    "profile {} has a missing link target; configure PATH manually",
+                    path.display()
+                ),
+                Err(error) => Err(error.into()),
             }
         }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "cannot read {}; original preserved; configure PATH manually",
+                path.display()
+            )
+        }),
     }
-    Ok(String::new())
 }
 
-#[cfg(windows)]
-fn windows_set_user_path(value: &str) -> Result<()> {
-    use std::process::Command;
-    let status = Command::new("reg")
-        .args([
-            "add",
-            "HKCU\\Environment",
-            "/v",
-            "Path",
-            "/t",
-            "REG_EXPAND_SZ",
-            "/d",
-            value,
-            "/f",
-        ])
-        .status()
-        .context("failed to update the Windows user PATH")?;
-    if !status.success() {
-        anyhow::bail!("reg add for the user PATH failed");
-    }
-    windows_notify_environment_change();
-    Ok(())
+fn backup_profile(paths: &ProductPaths, profile: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    ensure_private_directory(&paths.state)?;
+    let root = paths.state.join("path-backups");
+    ensure_private_directory(&root)?;
+    let backup = root.join(format!("{:032x}", rand::random::<u128>()));
+    ensure_private_directory(&backup)?;
+    crate::manifest::atomic_write(&backup.join("profile"), bytes)?;
+    write_json(&backup.join("target.json"), &profile.display().to_string())
 }
 
 /// Tell Windows shells that the user environment changed. Existing processes
@@ -341,7 +294,7 @@ fn windows_path_contains(path: &str, entry: &str) -> bool {
 #[cfg(windows)]
 fn windows_path_without(path: &str, entry: &str) -> String {
     path.split(';')
-        .filter(|segment| !segment.eq_ignore_ascii_case(entry) && !segment.is_empty())
+        .filter(|segment| !segment.eq_ignore_ascii_case(entry))
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -349,45 +302,6 @@ fn windows_path_without(path: &str, entry: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn profile_choice_follows_the_login_shell() {
-        let home = Path::new("/home/dev");
-        assert_eq!(
-            choose_unix_profile(home, Some("/bin/zsh")),
-            home.join(".zshrc")
-        );
-        assert_eq!(
-            choose_unix_profile(home, Some("/usr/bin/bash")),
-            home.join(".bashrc")
-        );
-        assert_eq!(choose_unix_profile(home, None), home.join(".profile"));
-        assert_eq!(
-            choose_unix_profile(home, Some("/usr/bin/fish")),
-            home.join(".profile")
-        );
-    }
-
-    #[test]
-    fn insert_is_idempotent_and_appends_a_marked_block() {
-        let first = insert_block("export EDITOR=vim\n", "/home/dev/.local/bin")
-            .expect("first insert applies");
-        assert!(first.contains(BEGIN_MARKER));
-        assert!(first.contains("export PATH=\"/home/dev/.local/bin:$PATH\""));
-        assert!(first.contains(END_MARKER));
-        // A second insert over already-configured contents is a no-op.
-        assert!(insert_block(&first, "/home/dev/.local/bin").is_none());
-    }
-
-    #[test]
-    fn insert_then_remove_restores_original_contents() {
-        let original = "export EDITOR=vim\n";
-        let inserted = insert_block(original, "/opt/byo/bin").expect("insert applies");
-        let removed = remove_block(&inserted).expect("remove applies");
-        assert_eq!(removed, original);
-        // Nothing left to remove.
-        assert!(remove_block(&removed).is_none());
-    }
 
     #[test]
     fn remove_on_unmanaged_file_is_a_noop() {
@@ -405,6 +319,10 @@ mod tests {
         assert_eq!(
             windows_path_without(path, "C:\\Users\\dev\\AppData\\Local\\BYO\\bin"),
             "C:\\Windows"
+        );
+        assert_eq!(
+            windows_path_without(";C:\\BYO;;C:\\Other;", "c:\\byo"),
+            ";;C:\\Other;"
         );
     }
 }

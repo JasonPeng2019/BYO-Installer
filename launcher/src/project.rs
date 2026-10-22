@@ -15,6 +15,191 @@ use crate::paths::{is_within, ProductPaths};
 
 const BEGIN_MARKER: &str = "<!-- BEGIN BYO MANAGED: agent-bootstrap v1 -->";
 const END_MARKER: &str = "<!-- END BYO MANAGED: agent-bootstrap v1 -->";
+const INTEGRITY_PATH: &str = ".generated/byo/integrity.json";
+
+// Kept as an ordinary inventoried file so schema 1-3 readers can still read a
+// refreshed capsule. Byte hashes remain available to those launchers.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IntegrityBaseline {
+    schema: u32,
+    files: BTreeMap<String, String>,
+    codex_server_semantics_sha256: String,
+}
+
+fn normalized_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n");
+    format!("{}\n", text.trim_end_matches('\n'))
+}
+
+// JSON consumers need not agree which duplicate key wins. Reject ambiguity
+// before comparing semantics, including in nested permissions/hook objects.
+pub(crate) fn parse_project_json<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
+    struct Unique(serde_json::Value);
+    impl<'de> Deserialize<'de> for Unique {
+        fn deserialize<D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> std::result::Result<Self, D::Error> {
+            struct Visitor;
+            impl<'de> serde::de::Visitor<'de> for Visitor {
+                type Value = Unique;
+                fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    formatter.write_str("JSON without duplicate keys")
+                }
+                fn visit_unit<E: serde::de::Error>(self) -> std::result::Result<Unique, E> {
+                    Ok(Unique(serde_json::Value::Null))
+                }
+                fn visit_bool<E: serde::de::Error>(
+                    self,
+                    value: bool,
+                ) -> std::result::Result<Unique, E> {
+                    Ok(Unique(value.into()))
+                }
+                fn visit_i64<E: serde::de::Error>(
+                    self,
+                    value: i64,
+                ) -> std::result::Result<Unique, E> {
+                    Ok(Unique(value.into()))
+                }
+                fn visit_u64<E: serde::de::Error>(
+                    self,
+                    value: u64,
+                ) -> std::result::Result<Unique, E> {
+                    Ok(Unique(value.into()))
+                }
+                fn visit_f64<E: serde::de::Error>(
+                    self,
+                    value: f64,
+                ) -> std::result::Result<Unique, E> {
+                    serde_json::Number::from_f64(value)
+                        .map(|number| Unique(number.into()))
+                        .ok_or_else(|| E::custom("invalid JSON number"))
+                }
+                fn visit_str<E: serde::de::Error>(
+                    self,
+                    value: &str,
+                ) -> std::result::Result<Unique, E> {
+                    Ok(Unique(value.into()))
+                }
+                fn visit_string<E: serde::de::Error>(
+                    self,
+                    value: String,
+                ) -> std::result::Result<Unique, E> {
+                    Ok(Unique(value.into()))
+                }
+                fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                    self,
+                    mut sequence: A,
+                ) -> std::result::Result<Unique, A::Error> {
+                    let mut values = Vec::new();
+                    while let Some(Unique(value)) = sequence.next_element()? {
+                        values.push(value);
+                    }
+                    Ok(Unique(values.into()))
+                }
+                fn visit_map<A: serde::de::MapAccess<'de>>(
+                    self,
+                    mut map: A,
+                ) -> std::result::Result<Unique, A::Error> {
+                    let mut values = serde_json::Map::new();
+                    while let Some((key, Unique(value))) = map.next_entry::<String, Unique>()? {
+                        if values.insert(key.clone(), value).is_some() {
+                            return Err(serde::de::Error::custom(format!(
+                                "duplicate JSON key: {key}"
+                            )));
+                        }
+                    }
+                    Ok(Unique(values.into()))
+                }
+            }
+            deserializer.deserialize_any(Visitor)
+        }
+    }
+    let Unique(value) = serde_json::from_slice(bytes)?;
+    Ok(serde_json::from_value(value)?)
+}
+
+fn parse_project_json_text<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
+    parse_project_json(text.as_bytes())
+}
+
+fn same_owned_text(path: &str, actual: &str, expected: &str) -> Result<bool> {
+    if path.ends_with(".json") {
+        let actual: serde_json::Value = parse_project_json(actual.as_bytes())?;
+        let expected: serde_json::Value = parse_project_json(expected.as_bytes())?;
+        Ok(actual == expected)
+    } else {
+        Ok(normalized_text(actual) == normalized_text(expected))
+    }
+}
+
+fn toml_semantics(item: &Item) -> Result<serde_json::Value> {
+    if let Some(table) = item.as_table_like() {
+        let mut entries = BTreeMap::new();
+        for (key, value) in table.iter() {
+            entries.insert(key, toml_semantics(value)?);
+        }
+        return Ok(serde_json::to_value(entries)?);
+    }
+    if let Some(array) = item.as_array_of_tables() {
+        return array
+            .iter()
+            .map(|table| toml_semantics(&Item::Table(table.clone())))
+            .collect::<Result<Vec<_>>>()
+            .map(serde_json::Value::Array);
+    }
+    let value = item.as_value().context("BYO TOML value is missing")?;
+    Ok(match value {
+        toml_edit::Value::String(value) => serde_json::json!(["string", value.value()]),
+        toml_edit::Value::Integer(value) => serde_json::json!(["integer", value.value()]),
+        toml_edit::Value::Float(value) => serde_json::json!(["float", value.value().to_string()]),
+        toml_edit::Value::Boolean(value) => serde_json::json!(["boolean", value.value()]),
+        toml_edit::Value::Datetime(value) => {
+            serde_json::json!(["datetime", value.value().to_string()])
+        }
+        toml_edit::Value::Array(values) => serde_json::Value::Array(
+            values
+                .iter()
+                .map(|value| toml_semantics(&Item::Value(value.clone())))
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        toml_edit::Value::InlineTable(table) => {
+            let mut entries = BTreeMap::new();
+            for (key, value) in table.iter() {
+                entries.insert(key, toml_semantics(&Item::Value(value.clone()))?);
+            }
+            serde_json::to_value(entries)?
+        }
+    })
+}
+
+fn integrity_baseline(
+    project: &Path,
+    projection: &ProjectionManifest,
+) -> Result<Option<IntegrityBaseline>> {
+    let Some(record) = projection
+        .managed_files
+        .iter()
+        .find(|file| file.path == INTEGRITY_PATH)
+    else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(safe_project_path(project, INTEGRITY_PATH)?)?;
+    let baseline: IntegrityBaseline = parse_project_json(&bytes)?;
+    let canonical = serde_json::to_string_pretty(&baseline)? + "\n";
+    if sha256_bytes(&bytes) != record.sha256 && sha256_bytes(canonical.as_bytes()) != record.sha256
+    {
+        bail!("BYO integrity baseline was modified; restore {INTEGRITY_PATH} from the matching private state/project-backups snapshot before running `byo workspace update`");
+    }
+    if baseline.schema != 1 {
+        bail!("unsupported BYO integrity baseline");
+    }
+    Ok(Some(baseline))
+}
+
+fn owned_edit_error(label: &str) -> anyhow::Error {
+    anyhow::anyhow!("BYO-owned content changed: {label}. Review and undo the BYO-owned changes, or restore this file from its matching private state/project-backups snapshot (locate state with `byo paths`), then run `byo workspace update`. Keep unrelated user settings and text.")
+}
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -111,7 +296,6 @@ enum SkillClient {
 #[derive(Debug)]
 pub(crate) struct ProjectUninstallPlan {
     project: PathBuf,
-    project_id: String,
     purge: bool,
     managed_files: Vec<PathBuf>,
     text_replacements: Vec<TextReplacement>,
@@ -201,7 +385,7 @@ fn read_capsule(project: &Path) -> Result<Option<CapsuleManifest>> {
         return Ok(None);
     }
     let manifest: CapsuleManifest =
-        serde_json::from_slice(&std::fs::read(&path)?).context("capsule manifest is invalid")?;
+        parse_project_json(&std::fs::read(&path)?).context("capsule manifest is invalid")?;
     if manifest.schema != 1 || manifest.product != "byo" || manifest.workflow_protocol != 1 {
         bail!("capsule manifest has an unsupported schema or protocol");
     }
@@ -220,13 +404,41 @@ pub fn capsule_mode(project: &Path) -> Result<String> {
         .mode)
 }
 
+pub(crate) fn guard_mode(project: &Path) -> Result<String> {
+    let capsule = read_capsule(project)?.context("project capsule is not installed")?;
+    let mut projection = read_projection(project)?.context("projection manifest is missing")?;
+    const MODE: &str = ".generated/byo/active-mode.json";
+    if capsule.minimum_mcp_protocol > 1
+        || !projection
+            .managed_files
+            .iter()
+            .any(|file| file.path == MODE)
+    {
+        bail!("guard does not support this capsule/mode protocol");
+    }
+    projection
+        .managed_files
+        .retain(|file| file.path == MODE || file.path == INTEGRITY_PATH);
+    validate_owned_files(project, &projection)?;
+    let mode: serde_json::Value =
+        parse_project_json_text(&read_project_text(&safe_project_path(project, MODE)?)?)?;
+    if mode["schema"].as_u64() != Some(1)
+        || mode["mode"].as_str() != Some(capsule.mode.as_str())
+        || mode["full_access"].as_bool().is_none()
+        || mode["family"].as_str().is_none()
+    {
+        bail!("capsule mode does not match its verified policy");
+    }
+    Ok(capsule.mode)
+}
+
 fn read_projection(project: &Path) -> Result<Option<ProjectionManifest>> {
     let path = project.join(".generated/byo/projection-manifest.json");
     if !path.exists() {
         return Ok(None);
     }
     let manifest: ProjectionManifest =
-        serde_json::from_slice(&std::fs::read(path)?).context("projection manifest is invalid")?;
+        parse_project_json(&std::fs::read(path)?).context("projection manifest is invalid")?;
     if !matches!(manifest.schema, 1..=3) {
         bail!("projection manifest schema is unsupported");
     }
@@ -269,10 +481,35 @@ fn safe_project_path(project: &Path, relative: &str) -> Result<PathBuf> {
 }
 
 fn validate_owned_files(project: &Path, projection: &ProjectionManifest) -> Result<()> {
+    let baseline = integrity_baseline(project, projection)?;
     for managed in &projection.managed_files {
         let target = safe_project_path(project, &managed.path)?;
         if !target.is_file() || sha256_file(&target)? != managed.sha256 {
-            bail!("vendor-owned projection was modified: {}", managed.path);
+            if managed.path == INTEGRITY_PATH && baseline.is_some() {
+                continue; // Already checked against the recorded hash above.
+            }
+            let actual = read_project_text(&target)?;
+            let equivalent = if let Some(expected) =
+                baseline.as_ref().and_then(|b| b.files.get(&managed.path))
+            {
+                same_owned_text(&managed.path, &actual, expected)?
+            } else if managed.path != INTEGRITY_PATH {
+                // Legacy producers wrote LF text with one terminal newline, and
+                // sorted, pretty JSON. These candidates never approve new values.
+                sha256_bytes(normalized_text(&actual).as_bytes()) == managed.sha256
+                    || (managed.path.ends_with(".json")
+                        && parse_project_json_text::<serde_json::Value>(&actual)
+                            .ok()
+                            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+                            .is_some_and(|text| {
+                                sha256_bytes(format!("{text}\n").as_bytes()) == managed.sha256
+                            }))
+            } else {
+                false
+            };
+            if !equivalent {
+                return Err(owned_edit_error(&managed.path));
+            }
         }
     }
     Ok(())
@@ -332,15 +569,19 @@ fn remove_managed_block(original: &str) -> Result<String> {
 fn verify_managed_block(original: &str, label: &str, expected_sha256: &str) -> Result<()> {
     let begin = original
         .find(BEGIN_MARKER)
-        .with_context(|| format!("{label} BYO block is missing"))?;
+        .ok_or_else(|| owned_edit_error(label).context("BYO managed block is missing"))?;
     let end = original
         .find(END_MARKER)
-        .with_context(|| format!("{label} BYO block is malformed"))?
+        .ok_or_else(|| owned_edit_error(label).context("BYO managed block is malformed"))?
         + END_MARKER.len();
-    if original[begin..end].matches(BEGIN_MARKER).count() != 1
-        || sha256_bytes(&original.as_bytes()[begin..end]) != expected_sha256
+    if begin >= end
+        || original.matches(BEGIN_MARKER).count() != 1
+        || original.matches(END_MARKER).count() != 1
+        || (sha256_bytes(&original.as_bytes()[begin..end]) != expected_sha256
+            && sha256_bytes(original[begin..end].replace("\r\n", "\n").as_bytes())
+                != expected_sha256)
     {
-        bail!("{label} BYO managed block was modified");
+        return Err(owned_edit_error(label));
     }
     Ok(())
 }
@@ -356,12 +597,12 @@ fn render_codex_config(original: &str, project: &Path) -> Result<(String, String
     let servers = document
         .entry("mcp_servers")
         .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
+        .as_table_like_mut()
         .context("mcp_servers must be a TOML table")?;
     let byo = servers
         .entry("byo")
         .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
+        .as_table_like_mut()
         .context("mcp_servers.byo must be a TOML table")?;
     if let Some(command) = byo.get("command").and_then(|item| item.as_str()) {
         if command != "byo" {
@@ -371,7 +612,7 @@ fn render_codex_config(original: &str, project: &Path) -> Result<(String, String
             ));
         }
     }
-    byo["command"] = value("byo");
+    byo.insert("command", value("byo"));
     let mut args = Array::new();
     for argument in [
         "mcp",
@@ -383,8 +624,8 @@ fn render_codex_config(original: &str, project: &Path) -> Result<(String, String
     ] {
         args.push(argument);
     }
-    byo["args"] = value(args);
-    let server = byo.to_string();
+    byo.insert("args", value(args));
+    let server = document["mcp_servers"]["byo"].to_string();
     Ok((document.to_string(), sha256_bytes(server.as_bytes())))
 }
 
@@ -397,7 +638,7 @@ fn remove_codex_config(original: &str) -> Result<String> {
         .context(".codex/config.toml is invalid TOML")?;
     if let Some(servers) = document
         .get_mut("mcp_servers")
-        .and_then(|item| item.as_table_mut())
+        .and_then(|item| item.as_table_like_mut())
     {
         servers.remove("byo");
         if servers.is_empty() {
@@ -411,7 +652,7 @@ fn render_claude_mcp(original: &str, project: &Path) -> Result<(String, String)>
     let mut document: serde_json::Value = if original.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str(original).context(".mcp.json is invalid JSON")?
+        parse_project_json_text(original).context(".mcp.json is invalid JSON")?
     };
     let root = document
         .as_object_mut()
@@ -457,7 +698,7 @@ fn remove_claude_mcp(original: &str) -> Result<String> {
         return Ok(String::new());
     }
     let mut document: serde_json::Value =
-        serde_json::from_str(original).context(".mcp.json is invalid JSON")?;
+        parse_project_json_text(original).context(".mcp.json is invalid JSON")?;
     if let Some(servers) = document
         .get_mut("mcpServers")
         .and_then(serde_json::Value::as_object_mut)
@@ -480,7 +721,7 @@ fn remove_claude_mcp_approval(original: &str, label: &str) -> Result<String> {
         return Ok(String::new());
     }
     let mut document: serde_json::Value =
-        serde_json::from_str(original).with_context(|| format!("{label} is invalid JSON"))?;
+        parse_project_json_text(original).with_context(|| format!("{label} is invalid JSON"))?;
     let root = document
         .as_object_mut()
         .with_context(|| format!("{label} must contain a JSON object"))?;
@@ -575,7 +816,7 @@ fn render_hook_configuration(original: &str, label: &str) -> Result<(String, Str
     let mut document = if original.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str(original).with_context(|| format!("{label} is invalid JSON"))?
+        parse_project_json_text(original).with_context(|| format!("{label} is invalid JSON"))?
     };
     remove_byo_hook_entries(&mut document);
     let root = document
@@ -644,7 +885,7 @@ fn remove_hook_configuration(original: &str, label: &str) -> Result<String> {
         return Ok(String::new());
     }
     let mut document: serde_json::Value =
-        serde_json::from_str(original).with_context(|| format!("{label} is invalid JSON"))?;
+        parse_project_json_text(original).with_context(|| format!("{label} is invalid JSON"))?;
     remove_byo_hook_entries(&mut document);
     if document
         .get("hooks")
@@ -662,19 +903,379 @@ fn remove_hook_configuration(original: &str, label: &str) -> Result<String> {
 }
 
 fn atomic_text(path: &Path, text: &str) -> Result<()> {
+    if read_optional_bytes(path)?.as_deref() == Some(text.as_bytes()) {
+        return Ok(());
+    }
     crate::manifest::atomic_write(path, text.as_bytes())
+}
+
+fn read_optional_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("cannot read {}; original preserved", path.display())),
+    }
+}
+
+fn read_project_text(path: &Path) -> Result<String> {
+    match read_optional_bytes(path)? {
+        None => Ok(String::new()),
+        Some(bytes) => String::from_utf8(bytes)
+            .with_context(|| format!("{} is not UTF-8; original preserved", path.display())),
+    }
+}
+
+fn project_registry(paths: &ProductPaths) -> Result<BTreeMap<String, String>> {
+    match read_optional_bytes(&paths.state.join("projects.json"))? {
+        None => Ok(BTreeMap::new()),
+        Some(bytes) => parse_project_json(&bytes).context("project registry is invalid"),
+    }
+}
+
+fn choose_project_id(
+    project: &Path,
+    capsule: Option<&CapsuleManifest>,
+    registry: &BTreeMap<String, String>,
+) -> Result<String> {
+    let location = project
+        .to_str()
+        .context("project path is not valid Unicode")?;
+    if let Some(capsule) = capsule {
+        if registry
+            .get(&capsule.project_id)
+            .is_none_or(|path| path == location)
+        {
+            return Ok(capsule.project_id.clone());
+        }
+    }
+    // A copied capsule must not steal the original path's registration or leases.
+    loop {
+        let id = format!("{:032x}", rand::random::<u128>());
+        if !registry.contains_key(&id) {
+            return Ok(id);
+        }
+    }
+}
+
+// Tests exercise the real publication/error path with deterministic I/O barriers.
+// Production has no fault switch or externally configurable callback.
+#[cfg(test)]
+type PublicationBarrier = Box<dyn FnMut(&str, &Path, &ProductPaths) -> Result<()>>;
+#[cfg(test)]
+std::thread_local! {
+    static PUBLICATION_BARRIER: std::cell::RefCell<Option<PublicationBarrier>> = const { std::cell::RefCell::new(None) };
+}
+fn publication_barrier(_phase: &str, _project: &Path, _paths: &ProductPaths) -> Result<()> {
+    #[cfg(test)]
+    {
+        PUBLICATION_BARRIER.with(|slot| match slot.borrow_mut().as_mut() {
+            Some(callback) => callback(_phase, _project, _paths),
+            None => Ok(()),
+        })
+    }
+    #[cfg(not(test))]
+    {
+        Ok(())
+    }
+}
+
+const PROJECT_BACKUP_RETENTION: usize = 5;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PendingRefresh {
+    schema: u32,
+    project: String,
+    backup: String,
+    targets: Vec<String>,
+    existed: Vec<String>,
+    expected: BTreeMap<String, Option<String>>,
+    registry_aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    registry_before: Option<String>,
+    #[serde(default)]
+    legacy_workspace: bool,
+}
+
+// Caller holds InstallLock. Recovery is idempotent; never consume the record
+// until both the original files and this path's registry aliases are restored.
+fn recover_project_refresh(project: &Path, paths: &ProductPaths) -> Result<()> {
+    let root = project_backup_root(paths, project)?;
+    let pending = root.join("pending.json");
+    let Some(bytes) = read_optional_bytes(&pending)? else {
+        return Ok(());
+    };
+    let record: PendingRefresh =
+        parse_project_json(&bytes).context("invalid interrupted project refresh record")?;
+    if record.schema != 1
+        || Path::new(&record.project) != project
+        || Path::new(&record.backup).components().count() != 1
+        || !matches!(
+            Path::new(&record.backup).components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+        || record
+            .existed
+            .iter()
+            .any(|path| !record.targets.contains(path))
+        || record
+            .registry_aliases
+            .values()
+            .any(|path| Path::new(path) != project)
+    {
+        bail!(
+            "invalid interrupted project refresh identity; private backup retained at {}",
+            root.display()
+        );
+    }
+    let backup = root.join(&record.backup);
+    if std::fs::symlink_metadata(&backup)?.file_type().is_symlink()
+        || backup.canonicalize()?.parent() != Some(root.canonicalize()?.as_path())
+    {
+        bail!("interrupted refresh backup escapes private state");
+    }
+    for relative in &record.targets {
+        safe_project_path(project, relative)?;
+    }
+    for relative in &record.existed {
+        safe_project_path(&backup, relative)?;
+    }
+    for relative in &record.targets {
+        if [
+            ".agent-workspace/manifest.json",
+            ".generated/byo/projection-manifest.json",
+        ]
+        .contains(&relative.as_str())
+        {
+            continue; // Transaction-owned metadata has no user-editable region.
+        }
+        let current = read_optional_bytes(&safe_project_path(project, relative)?)?;
+        let original = read_optional_bytes(&safe_project_path(&backup, relative)?)?;
+        let planned = record
+            .expected
+            .get(relative)
+            .context("interrupted refresh expected-content record is missing")?;
+        if current != original && current.as_ref().map(|bytes| sha256_bytes(bytes)) != *planned {
+            bail!("{} changed after an interrupted refresh; preserving it and the private backup at {}. Review/restore this file before retrying `byo workspace update`", relative, backup.display());
+        }
+    }
+    if let Some(capsule) = read_capsule(project).ok().flatten() {
+        crate::lease::ensure_project_inactive(paths, &capsule.project_id)?;
+    }
+    // Also check the original identity if interruption replaced the capsule.
+    for id in record.registry_aliases.keys() {
+        crate::lease::ensure_project_inactive(paths, id)?;
+    }
+    let mut registry = project_registry(paths)?;
+    for (id, path) in &record.registry_aliases {
+        if registry
+            .get(id)
+            .is_some_and(|registered| registered != path)
+        {
+            bail!("interrupted refresh registry identity belongs to another path; backup retained");
+        }
+    }
+    let legacy_backup = backup.join("legacy-agent-workspace");
+    if record.legacy_workspace && legacy_backup.is_dir() {
+        // An archived workspace can contain user files outside the normal
+        // transaction targets. Refuse new/edited files before replacing it.
+        let live_workspace = safe_project_path(project, ".agent-workspace")?;
+        // Rename can finish before mkdir begins. Only definite absence is an
+        // unedited transaction state; other reads/types must still refuse.
+        let live_directory = match std::fs::symlink_metadata(&live_workspace) {
+            Ok(metadata) if metadata.is_dir() => true,
+            Ok(_) => {
+                bail!("legacy workspace recovery requires a directory; private backup retained")
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => {
+                return Err(error)
+                    .context("cannot inspect live legacy workspace; private backup retained")
+            }
+        };
+        if live_directory {
+            for entry in WalkDir::new(&live_workspace).follow_links(false) {
+                let entry = entry?;
+                if entry.file_type().is_dir() {
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(project)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if entry.file_type().is_symlink() {
+                    bail!("later workspace symlink preserved; backup retained");
+                }
+                if record.targets.contains(&relative) {
+                    continue;
+                }
+                let original = legacy_backup.join(
+                    entry
+                        .path()
+                        .strip_prefix(project.join(".agent-workspace"))?,
+                );
+                if read_optional_bytes(&original)? != read_optional_bytes(entry.path())? {
+                    bail!(
+                        "{} changed after initialization; preserving it and private backup {}",
+                        relative,
+                        backup.display()
+                    );
+                }
+            }
+        }
+    }
+    let before: BTreeMap<String, String> = record
+        .registry_before
+        .as_deref()
+        .map(parse_project_json_text)
+        .transpose()?
+        .unwrap_or_default();
+    restore_backup(project, &backup, &record.targets, &record.existed)?;
+    registry.retain(|_, path| Path::new(path) != project);
+    registry.extend(record.registry_aliases);
+    let registry_path = paths.state.join("projects.json");
+    if registry == before {
+        if let Some(text) = record.registry_before {
+            crate::manifest::atomic_write(&registry_path, text.as_bytes())?;
+        } else if registry_path.is_file() {
+            std::fs::remove_file(&registry_path)?;
+        }
+    } else {
+        write_json(&registry_path, &registry)?;
+    }
+    if record.legacy_workspace && legacy_backup.is_dir() {
+        let generated = safe_project_path(project, ".agent-workspace")?;
+        if generated.is_dir() {
+            std::fs::remove_dir_all(&generated)?;
+        }
+        std::fs::rename(&legacy_backup, &generated)?;
+    }
+    std::fs::remove_file(pending)?;
+    Ok(())
+}
+
+/// Refresh on first use after activation. Lock order is InstallLock, then lease
+/// inspection/publication. Runtime activation never changes project files.
+pub(crate) fn refresh_project_locked(
+    project: &Path,
+    paths: &ProductPaths,
+    _lock: &crate::install::InstallLock,
+) -> Result<()> {
+    recover_project_refresh(project, paths)?;
+    let capsule =
+        read_capsule(project)?.context("project capsule is not installed; run `byo init`")?;
+    let runtime = active_runtime(paths)?;
+    if capsule.workspace_version == runtime.pack.version() {
+        return doctor_project(project, paths);
+    }
+    let projection = read_projection(project)?.context("projection manifest is missing")?;
+    validate_owned_files(project, &projection)?;
+    validate_shared_projections(project, &projection)?;
+    let active_mode_path = ".generated/byo/active-mode.json";
+    if !projection
+        .managed_files
+        .iter()
+        .any(|file| file.path == active_mode_path)
+    {
+        bail!("legacy capsule has no verified mode policy; run `byo init --mode {}` with any required full-access authorization", capsule.mode);
+    }
+    let previous: serde_json::Value = parse_project_json_text(&read_project_text(
+        &safe_project_path(project, active_mode_path)?,
+    )?)?;
+    let mode = runtime.pack.mode(&capsule.mode)?;
+    if previous["schema"].as_u64() != Some(1)
+        || previous["mode"].as_str() != Some(capsule.mode.as_str())
+        || previous["family"].as_str() != Some(mode.family.as_str())
+        || previous["full_access"].as_bool() != Some(mode.full_access)
+        || previous["codex"] != serde_json::to_value(&mode.codex)?
+        || capsule.workflow_protocol != runtime.release.workflow_protocol
+        || capsule.minimum_mcp_protocol > runtime.release.sidecar_protocol
+    {
+        bail!("project mode/permissions are incompatible with the active runtime; review `byo modes`, then explicitly run `byo init --mode {}` with --allow-full-access only if intended", capsule.mode);
+    }
+    init_project_locked(project, &capsule.mode, false, mode.full_access, paths)?;
+    Ok(())
+}
+
+pub(crate) fn lease_project(
+    project: &Path,
+    paths: &ProductPaths,
+) -> Result<(Runtime, crate::lease::RuntimeLeaseGuard)> {
+    let lock = crate::install::InstallLock::acquire(paths)?;
+    refresh_project_locked(project, paths, &lock)?;
+    let runtime = active_runtime(paths)?;
+    let lease = crate::lease::RuntimeLeaseGuard::acquire_locked(
+        paths,
+        &runtime.release.version,
+        &project_id(project)?,
+        &lock,
+    )?;
+    Ok((runtime, lease))
+}
+
+fn project_backup_root(paths: &ProductPaths, project: &Path) -> Result<PathBuf> {
+    let location = project
+        .to_str()
+        .context("project path is not valid Unicode")?;
+    crate::paths::ensure_private_directory(&paths.state)?;
+    let root = paths.state.join("project-backups");
+    crate::paths::ensure_private_directory(&root)?;
+    let root = root.join(sha256_bytes(location.as_bytes()));
+    crate::paths::ensure_private_directory(&root)?;
+    Ok(root)
+}
+
+fn prune_project_backups(root: &Path) -> Result<()> {
+    let mut backups = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        // This namespace is new. Never touch pre-existing .agent-backups history,
+        // symlinks, unknown entries or an archived legacy user workspace.
+        if !name.is_ascii()
+            || name.len() != 33
+            || !name.starts_with("20")
+            || name.as_bytes()[8] != b'T'
+            || &name[15..17] != "Z-"
+            || !name[17..].bytes().all(|b| b.is_ascii_hexdigit())
+            || !name[..8].bytes().all(|b| b.is_ascii_digit())
+            || !name[9..15].bytes().all(|b| b.is_ascii_digit())
+            || !entry.file_type()?.is_dir()
+            || entry.path().join("legacy-agent-workspace").exists()
+        {
+            continue;
+        }
+        backups.push(entry.path());
+    }
+    backups.sort();
+    let remove_count = backups.len().saturating_sub(PROJECT_BACKUP_RETENTION);
+    let canonical_root = root.canonicalize()?;
+    for backup in backups.into_iter().take(remove_count) {
+        let canonical = backup.canonicalize()?;
+        if canonical.parent() != Some(canonical_root.as_path()) {
+            bail!("project backup escaped its private directory");
+        }
+        std::fs::remove_dir_all(&canonical)?;
+    }
+    Ok(())
 }
 
 fn copy_backup(project: &Path, backup: &Path, relatives: &[String]) -> Result<Vec<String>> {
     let mut existed = Vec::new();
     for relative in relatives {
-        let source = project.join(relative);
-        if source.is_file() {
+        let source = safe_project_path(project, relative)?;
+        if let Some(bytes) = read_optional_bytes(&source)? {
             let destination = backup.join(relative);
             if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)?;
+                crate::paths::ensure_private_directory(parent)?;
             }
-            std::fs::copy(&source, destination)?;
+            crate::manifest::atomic_write(&destination, &bytes)?;
+            std::fs::set_permissions(&destination, std::fs::metadata(&source)?.permissions())?;
             existed.push(relative.clone());
         }
     }
@@ -833,6 +1434,25 @@ pub fn init_project(
     allow_full_access: bool,
     paths: &ProductPaths,
 ) -> Result<InitPreview> {
+    // Serialize project/registry publication with global install mutations.
+    let _mutation_lock = if dry_run {
+        None
+    } else {
+        Some(crate::install::InstallLock::acquire(paths)?)
+    };
+    init_project_locked(project, mode, dry_run, allow_full_access, paths)
+}
+
+fn init_project_locked(
+    project: &Path,
+    mode: &str,
+    dry_run: bool,
+    allow_full_access: bool,
+    paths: &ProductPaths,
+) -> Result<InitPreview> {
+    if !dry_run {
+        recover_project_refresh(project, paths)?;
+    }
     let runtime = active_runtime(paths)?;
     let mode_policy = runtime.pack.mode(mode)?;
     let workflow_catalog = runtime.pack.workflow_catalog()?;
@@ -849,6 +1469,7 @@ pub fn init_project(
     let existing_projection = read_projection(project)?;
     if let Some(projection) = &existing_projection {
         validate_owned_files(project, projection)?;
+        validate_shared_projections(project, projection)?;
     }
     let legacy_cleanup = existing_projection
         .as_ref()
@@ -945,29 +1566,31 @@ Available specialist identifiers: {}.\n",
         "structure": mode_policy.structure
     }))? + "\n";
     let agents_path = safe_project_path(project, "AGENTS.md")?;
-    let old_agents = std::fs::read_to_string(&agents_path).unwrap_or_default();
+    let old_agents = read_project_text(&agents_path)?;
     let block = managed_block(&bootstrap);
     let new_agents = replace_managed_block(&old_agents, &block)?;
     let claude_path = safe_project_path(project, "CLAUDE.md")?;
-    let old_claude = std::fs::read_to_string(&claude_path).unwrap_or_default();
+    let old_claude = read_project_text(&claude_path)?;
     let new_claude = replace_managed_block(&old_claude, &block)?;
     let codex_path = safe_project_path(project, ".codex/config.toml")?;
-    let old_codex = std::fs::read_to_string(&codex_path).unwrap_or_default();
+    let old_codex = read_project_text(&codex_path)?;
     let (new_codex, codex_hash) = render_codex_config(&old_codex, project)?;
     let codex_hooks_path = safe_project_path(project, ".codex/hooks.json")?;
-    let old_codex_hooks = std::fs::read_to_string(&codex_hooks_path).unwrap_or_default();
+    let old_codex_hooks = read_project_text(&codex_hooks_path)?;
     let (new_codex_hooks, codex_hooks_hash) =
         render_hook_configuration(&old_codex_hooks, ".codex/hooks.json")?;
     let claude_mcp_path = safe_project_path(project, ".mcp.json")?;
-    let old_claude_mcp = std::fs::read_to_string(&claude_mcp_path).unwrap_or_default();
+    let old_claude_mcp = read_project_text(&claude_mcp_path)?;
     let (new_claude_mcp, claude_server_hash) = render_claude_mcp(&old_claude_mcp, project)?;
     let claude_settings_path = safe_project_path(project, ".claude/settings.json")?;
-    let old_claude_settings = std::fs::read_to_string(&claude_settings_path).unwrap_or_default();
+    let old_claude_settings = read_project_text(&claude_settings_path)?;
     let (new_claude_settings, claude_hooks_hash) =
         render_hook_configuration(&old_claude_settings, ".claude/settings.json")?;
 
     let mut targets = vec![
         ".agent-workspace/manifest.json".to_string(),
+        ".agent-workspace/PLAN.md".to_string(),
+        ".agent-workspace/HANDOFF.md".to_string(),
         ".generated/byo/active-mode.json".to_string(),
         ".generated/byo/projection-manifest.json".to_string(),
         ".codex/config.toml".to_string(),
@@ -981,6 +1604,7 @@ Available specialist identifiers: {}.\n",
     let desired_managed_paths: BTreeSet<String> = [".generated/byo/active-mode.json".to_string()]
         .into_iter()
         .chain(desired_loader_paths.iter().cloned())
+        .chain([INTEGRITY_PATH.to_string()])
         .collect();
     let obsolete_managed_paths: Vec<String> = existing_projection
         .as_ref()
@@ -993,6 +1617,90 @@ Available specialist identifiers: {}.\n",
                 .collect()
         })
         .unwrap_or_default();
+    let mut desired_text: BTreeMap<String, String> = [
+        ("AGENTS.md", new_agents.as_str()),
+        ("CLAUDE.md", new_claude.as_str()),
+        (".codex/config.toml", new_codex.as_str()),
+        (".codex/hooks.json", new_codex_hooks.as_str()),
+        (".mcp.json", new_claude_mcp.as_str()),
+        (".claude/settings.json", new_claude_settings.as_str()),
+        (".agents/skills/byo-firmware/SKILL.md", skill.as_str()),
+        (".claude/skills/byo-firmware/SKILL.md", skill.as_str()),
+        (".generated/byo/active-mode.json", active_mode.as_str()),
+    ]
+    .into_iter()
+    .map(|(path, text)| (path.to_string(), text.to_string()))
+    .collect();
+    for (skill_id, projected) in &projected_skill_loaders {
+        desired_text.insert(
+            format!(".agents/skills/{skill_id}/SKILL.md"),
+            projected.codex_loader.clone(),
+        );
+        desired_text.insert(
+            format!(".agents/skills/{skill_id}/agents/openai.yaml"),
+            projected.codex_policy.clone(),
+        );
+        desired_text.insert(
+            format!(".claude/skills/{skill_id}/SKILL.md"),
+            projected.claude_loader.clone(),
+        );
+    }
+    let codex_document = new_codex.parse::<DocumentMut>()?;
+    let baseline = IntegrityBaseline {
+        schema: 1,
+        files: desired_text
+            .iter()
+            .filter(|(path, _)| desired_managed_paths.contains(*path))
+            .map(|(path, text)| (path.clone(), text.clone()))
+            .collect(),
+        codex_server_semantics_sha256: sha256_bytes(&serde_json::to_vec(&toml_semantics(
+            &codex_document["mcp_servers"]["byo"],
+        )?)?),
+    };
+    let integrity_text = serde_json::to_string_pretty(&baseline)? + "\n";
+    desired_text.insert(INTEGRITY_PATH.to_string(), integrity_text.clone());
+    targets.push(INTEGRITY_PATH.to_string());
+    let mut changed_text = BTreeSet::new();
+    for (relative, text) in &desired_text {
+        if read_optional_bytes(&safe_project_path(project, relative)?)?.as_deref()
+            != Some(text.as_bytes())
+        {
+            changed_text.insert(relative.clone());
+        }
+    }
+    let registry_path = paths.state.join("projects.json");
+    let previous_registry = read_optional_bytes(&registry_path)?;
+    let registry = project_registry(paths)?;
+    let selected_project_id = choose_project_id(project, existing_capsule.as_ref(), &registry)?;
+    let working_templates_missing = [".agent-workspace/PLAN.md", ".agent-workspace/HANDOFF.md"]
+        .iter()
+        .any(|relative| !project.join(relative).is_file());
+    let current_capsule = existing_capsule.as_ref().is_some_and(|capsule| {
+        capsule.workspace_version == runtime.pack.version()
+            && capsule.mode == mode
+            && capsule.project_id == selected_project_id
+    });
+    if !legacy_workspace
+        && current_capsule
+        && existing_projection.is_some()
+        && changed_text.is_empty()
+        && obsolete_managed_paths.is_empty()
+        && !working_templates_missing
+        && registry.get(&selected_project_id).map(String::as_str) == project.to_str()
+    {
+        doctor_project(project, paths)?;
+        return Ok(preview);
+    }
+    crate::lease::ensure_project_inactive(paths, &selected_project_id)?;
+    // Save only files this transaction can actually change, including metadata.
+    targets.retain(|relative| {
+        relative == ".agent-workspace/manifest.json"
+            || relative == ".generated/byo/projection-manifest.json"
+            || changed_text.contains(relative)
+            || ([".agent-workspace/PLAN.md", ".agent-workspace/HANDOFF.md"]
+                .contains(&relative.as_str())
+                && !project.join(relative).is_file())
+    });
     targets.extend(obsolete_managed_paths.iter().cloned());
     targets.sort();
     targets.dedup();
@@ -1045,25 +1753,71 @@ Available specialist identifiers: {}.\n",
             created_dirs.insert(directory.clone());
         }
     }
-    let backup = project.join(format!(
-        ".agent-backups/{}-{:016x}",
+    let backup_root = project_backup_root(paths, project)?;
+    let backup = backup_root.join(format!(
+        "{}-{:016x}",
         Utc::now().format("%Y%m%dT%H%M%SZ"),
         rand::random::<u64>()
     ));
-    let backup_root_existed = project.join(".agent-backups").exists();
+    crate::paths::ensure_private_directory(&backup)?;
     let existed = copy_backup(project, &backup, &targets)?;
-    if !backup_root_existed && project.join(".agent-backups").is_dir() {
-        created_dirs.insert(".agent-backups".to_string());
-    }
     let legacy_backup = backup.join("legacy-agent-workspace");
-    let registry_path = paths.state.join("projects.json");
-    let previous_registry = std::fs::read(&registry_path).ok();
+    // Every publication has the same durable, edit-preserving rollback path.
+    let pending = backup_root.join("pending.json");
+    {
+        write_json(
+            &pending,
+            &PendingRefresh {
+                schema: 1,
+                project: project.display().to_string(),
+                backup: backup
+                    .file_name()
+                    .context("backup name missing")?
+                    .to_string_lossy()
+                    .into_owned(),
+                targets: targets.clone(),
+                existed: existed.clone(),
+                expected: targets
+                    .iter()
+                    .filter(|relative| {
+                        ![
+                            ".agent-workspace/manifest.json",
+                            ".generated/byo/projection-manifest.json",
+                        ]
+                        .contains(&relative.as_str())
+                    })
+                    .map(|relative| {
+                        let digest = desired_text
+                            .get(relative)
+                            .map(|text| sha256_bytes(text.as_bytes()))
+                            .or_else(|| match relative.as_str() {
+                                ".agent-workspace/PLAN.md" => Some(sha256_bytes(&plan)),
+                                ".agent-workspace/HANDOFF.md" => Some(sha256_bytes(&handoff)),
+                                _ => None,
+                            });
+                        (relative.clone(), digest)
+                    })
+                    .collect(),
+                registry_before: previous_registry
+                    .as_ref()
+                    .map(|bytes| String::from_utf8(bytes.clone()))
+                    .transpose()?,
+                legacy_workspace,
+                registry_aliases: registry
+                    .iter()
+                    .filter(|(_, path)| path.as_str() == project.to_string_lossy())
+                    .map(|(id, path)| (id.clone(), path.clone()))
+                    .collect(),
+            },
+        )?;
+    }
 
     let result = (|| -> Result<()> {
         if legacy_workspace {
             std::fs::create_dir_all(&backup)?;
             std::fs::rename(project.join(".agent-workspace"), &legacy_backup)
                 .context("failed to archive the legacy full AgentWorkspace")?;
+            publication_barrier("legacy-archived", project, paths)?;
         }
         for directory in &directory_targets {
             std::fs::create_dir_all(project.join(directory))?;
@@ -1120,6 +1874,8 @@ Available specialist identifiers: {}.\n",
         atomic_text(&codex_hooks_path, &new_codex_hooks)?;
         atomic_text(&claude_mcp_path, &new_claude_mcp)?;
         atomic_text(&claude_settings_path, &new_claude_settings)?;
+        atomic_text(&project.join(INTEGRITY_PATH), &integrity_text)?;
+        publication_barrier("shared-published", project, paths)?;
 
         let mut managed_files = vec![
             ManagedFile {
@@ -1156,6 +1912,10 @@ Available specialist identifiers: {}.\n",
                 ]
             },
         ));
+        managed_files.push(ManagedFile {
+            path: INTEGRITY_PATH.to_string(),
+            sha256: sha256_bytes(integrity_text.as_bytes()),
+        });
         managed_files.sort_by(|left, right| left.path.cmp(&right.path));
         let inventory_bytes = serde_json::to_vec(&managed_files)?;
         let projection = ProjectionManifest {
@@ -1183,69 +1943,54 @@ Available specialist identifiers: {}.\n",
             minimum_launcher: env!("CARGO_PKG_VERSION").to_string(),
             maximum_launcher: "0.x".to_string(),
             minimum_mcp_protocol: 1,
-            project_id: existing_capsule
-                .as_ref()
-                .map(|manifest| manifest.project_id.clone())
-                .unwrap_or_else(|| format!("{:032x}", rand::random::<u128>())),
+            project_id: selected_project_id,
             mode: mode.to_string(),
             installed_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             managed_inventory_sha256: sha256_bytes(&inventory_bytes),
         };
         write_json(&project.join(".agent-workspace/manifest.json"), &capsule)?;
+        publication_barrier("before-registration", project, paths)?;
         register_project(paths, project, &capsule)?;
+        publication_barrier("after-registration", project, paths)?;
         doctor_project(project, paths)?;
         Ok(())
     })();
 
     if let Err(error) = result {
-        let rollback = restore_backup(project, &backup, &targets, &existed);
-        if let Err(rollback_error) = rollback {
-            bail!("{error:#}; rollback also failed: {rollback_error:#}");
+        if let Err(rollback_error) = recover_project_refresh(project, paths) {
+            bail!("{error:#}; rollback preserved later edits and the pending private backup: {rollback_error:#}");
         }
-        if let Some(previous) = previous_registry.as_deref() {
-            crate::manifest::atomic_write(&registry_path, previous)?;
-        } else if registry_path.is_file() {
-            std::fs::remove_file(&registry_path)?;
-        }
-        if legacy_workspace && legacy_backup.is_dir() {
-            let generated = project.join(".agent-workspace");
-            if generated.is_dir() {
-                std::fs::remove_dir_all(&generated)?;
-            }
-            std::fs::rename(&legacy_backup, &generated)?;
-        }
+        prune_project_backups(&backup_root)
+            .with_context(|| format!("initialization failed ({error:#}); original files restored, but backup retention failed"))?;
         return Err(error);
     }
+    if pending.is_file() {
+        std::fs::remove_file(&pending)?;
+    }
+    prune_project_backups(&backup_root)
+        .context("project updated, but private backup retention cleanup failed")?;
     Ok(preview)
 }
 
 fn register_project(paths: &ProductPaths, project: &Path, capsule: &CapsuleManifest) -> Result<()> {
     std::fs::create_dir_all(&paths.state)?;
     let registry_path = paths.state.join("projects.json");
-    let mut registry: BTreeMap<String, String> = if registry_path.exists() {
-        serde_json::from_slice(&std::fs::read(&registry_path)?)
-            .context("project registry is invalid")?
-    } else {
-        BTreeMap::new()
-    };
+    let mut registry = project_registry(paths)?;
     let canonical_path = project
         .to_str()
         .context("project path is not valid Unicode")?;
-    registry.retain(|project_id, path| project_id == &capsule.project_id || path != canonical_path);
+    if registry
+        .get(&capsule.project_id)
+        .is_some_and(|path| path != canonical_path)
+    {
+        bail!("project ID belongs to another location; run `byo init` to assign this copy its own identity");
+    }
+    registry.retain(|_, path| path != canonical_path);
     registry.insert(capsule.project_id.clone(), canonical_path.to_string());
     write_json(&registry_path, &registry)
 }
 
-pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
-    let runtime = active_runtime(paths)?;
-    let capsule = read_capsule(project)?.context("project capsule is not installed")?;
-    if capsule.workspace_version != runtime.pack.version()
-        || capsule.minimum_mcp_protocol > runtime.release.sidecar_protocol
-    {
-        bail!("project capsule is incompatible with the active runtime");
-    }
-    let projection = read_projection(project)?.context("projection manifest is missing")?;
-    validate_owned_files(project, &projection)?;
+fn validate_shared_projections(project: &Path, projection: &ProjectionManifest) -> Result<()> {
     let agents = std::fs::read_to_string(safe_project_path(project, "AGENTS.md")?)
         .context("AGENTS.md managed projection is missing")?;
     verify_managed_block(
@@ -1259,18 +2004,59 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
         .parse::<DocumentMut>()
         .context("Codex MCP configuration is invalid")?;
     let server = document["mcp_servers"]["byo"].to_string();
-    if document["mcp_servers"]["byo"]["command"].as_str() != Some("byo")
-        || sha256_bytes(server.as_bytes()) != projection.codex_server_sha256
-    {
-        bail!("Codex BYO MCP configuration was modified");
+    let baseline = integrity_baseline(project, projection)?;
+    let equivalent = if let Some(baseline) = baseline {
+        sha256_bytes(&serde_json::to_vec(&toml_semantics(
+            &document["mcp_servers"]["byo"],
+        )?)?)
+            == baseline.codex_server_semantics_sha256
+    } else {
+        // The standard legacy entry was emitted command-first, args-second.
+        // Canonical reconstruction also tolerates comments, quotes and key order.
+        let mut canonical = Table::new();
+        if let Some(table) = document["mcp_servers"]["byo"].as_table_like() {
+            for key in ["command", "args"] {
+                if let Some(item) = table.get(key) {
+                    if let Some(text) = item.as_str() {
+                        canonical.insert(key, value(text));
+                    } else if let Some(arguments) = item.as_array() {
+                        let mut array = Array::new();
+                        for argument in arguments.iter() {
+                            array.push(
+                                argument
+                                    .as_str()
+                                    .context("BYO server arguments must be strings")?,
+                            );
+                        }
+                        canonical.insert(key, value(array));
+                    } else {
+                        canonical.insert(key, item.clone());
+                    }
+                }
+            }
+            for (key, item) in table.iter() {
+                if key != "command" && key != "args" {
+                    canonical.insert(key, item.clone());
+                }
+            }
+        }
+        canonical.fmt();
+        sha256_bytes(server.as_bytes()) == projection.codex_server_sha256
+            || sha256_bytes(canonical.to_string().as_bytes()) == projection.codex_server_sha256
+    };
+    if document["mcp_servers"]["byo"]["command"].as_str() != Some("byo") || !equivalent {
+        return Err(owned_edit_error(".codex/config.toml [mcp_servers.byo]"));
     }
-    let hooks: serde_json::Value = serde_json::from_slice(
+    let hooks: serde_json::Value = parse_project_json(
         &std::fs::read(safe_project_path(project, ".codex/hooks.json")?)
             .context("Codex hook configuration is missing")?,
     )
     .context("Codex hook configuration is invalid")?;
-    if verify_byo_hooks(&hooks, ".codex/hooks.json")? != projection.codex_hooks_sha256 {
-        bail!("Codex BYO hook configuration was modified");
+    if verify_byo_hooks(&hooks, ".codex/hooks.json").map_err(|error| {
+        owned_edit_error(".codex/hooks.json BYO hooks").context(format!("{error:#}"))
+    })? != projection.codex_hooks_sha256
+    {
+        return Err(owned_edit_error(".codex/hooks.json BYO hooks"));
     }
     if projection.schema >= 2 {
         let claude_block_hash = projection
@@ -1281,7 +2067,7 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
             .context("CLAUDE.md managed projection is missing")?;
         verify_managed_block(&claude, "CLAUDE.md", claude_block_hash)?;
 
-        let mcp: serde_json::Value = serde_json::from_slice(
+        let mcp: serde_json::Value = parse_project_json(
             &std::fs::read(safe_project_path(project, ".mcp.json")?)
                 .context("Claude MCP configuration is missing")?,
         )
@@ -1289,7 +2075,10 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
         let server = mcp
             .get("mcpServers")
             .and_then(|servers| servers.get("byo"))
-            .context("Claude BYO MCP server is missing")?;
+            .ok_or_else(|| {
+                owned_edit_error(".mcp.json mcpServers.byo")
+                    .context("Claude BYO MCP server is missing")
+            })?;
         if server.get("command").and_then(serde_json::Value::as_str) != Some("byo")
             || sha256_bytes(serde_json::to_string(server)?.as_bytes())
                 != projection
@@ -1297,23 +2086,56 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
                     .as_deref()
                     .context("Claude MCP projection hash is missing")?
         {
-            bail!("Claude BYO MCP configuration was modified");
+            return Err(owned_edit_error(".mcp.json mcpServers.byo"));
         }
 
-        let settings: serde_json::Value = serde_json::from_slice(
+        let settings: serde_json::Value = parse_project_json(
             &std::fs::read(safe_project_path(project, ".claude/settings.json")?)
                 .context("Claude settings are missing")?,
         )
         .context("Claude settings are invalid")?;
-        if verify_byo_hooks(&settings, ".claude/settings.json")?
-            != projection
-                .claude_hooks_sha256
-                .as_deref()
-                .context("Claude hook projection hash is missing")?
+        if verify_byo_hooks(&settings, ".claude/settings.json").map_err(|error| {
+            owned_edit_error(".claude/settings.json BYO hooks").context(format!("{error:#}"))
+        })? != projection
+            .claude_hooks_sha256
+            .as_deref()
+            .context("Claude hook projection hash is missing")?
         {
-            bail!("Claude BYO hook configuration was modified");
+            return Err(owned_edit_error(".claude/settings.json BYO hooks"));
         }
     }
+    Ok(())
+}
+
+pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
+    let runtime = active_runtime(paths)?;
+    let capsule = read_capsule(project)?.context("project capsule is not installed")?;
+    if capsule.workspace_version != runtime.pack.version()
+        || capsule.minimum_mcp_protocol > runtime.release.sidecar_protocol
+    {
+        bail!("project capsule needs refresh for the active runtime; start `byo mcp serve` or run `byo workspace update` (mode and permissions must remain compatible)");
+    }
+    let projection = read_projection(project)?.context("projection manifest is missing")?;
+    validate_owned_files(project, &projection)?;
+    if projection
+        .managed_files
+        .iter()
+        .any(|file| file.path == ".generated/byo/active-mode.json")
+    {
+        let mode: serde_json::Value = parse_project_json_text(&read_project_text(
+            &safe_project_path(project, ".generated/byo/active-mode.json")?,
+        )?)?;
+        let compiled = runtime.pack.mode(&capsule.mode)?;
+        if mode["schema"].as_u64() != Some(1)
+            || mode["mode"].as_str() != Some(capsule.mode.as_str())
+            || mode["family"].as_str() != Some(compiled.family.as_str())
+            || mode["full_access"].as_bool() != Some(compiled.full_access)
+            || mode["codex"] != serde_json::to_value(&compiled.codex)?
+        {
+            bail!("capsule mode/permissions differ from the active runtime policy; run `byo init --mode <mode>` with --allow-full-access only if intended");
+        }
+    }
+    validate_shared_projections(project, &projection)?;
     let firm = project.join(".firm");
     if firm.exists() {
         if std::fs::symlink_metadata(&firm)?.file_type().is_symlink() {
@@ -1325,7 +2147,7 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
         }
     }
     let registry_path = paths.state.join("projects.json");
-    let registry: BTreeMap<String, String> = serde_json::from_slice(
+    let registry: BTreeMap<String, String> = parse_project_json(
         &std::fs::read(&registry_path).context("global project registry is missing")?,
     )
     .context("global project registry is invalid")?;
@@ -1342,13 +2164,7 @@ pub fn doctor_project(project: &Path, paths: &ProductPaths) -> Result<()> {
 }
 
 pub fn registered_projects(paths: &ProductPaths) -> Result<Vec<RegisteredProject>> {
-    let registry_path = paths.state.join("projects.json");
-    if !registry_path.is_file() {
-        return Ok(Vec::new());
-    }
-    let registry: BTreeMap<String, String> =
-        serde_json::from_slice(&std::fs::read(&registry_path)?)
-            .context("global project registry is invalid")?;
+    let registry = project_registry(paths)?;
     Ok(registry
         .into_values()
         .collect::<BTreeSet<_>>()
@@ -1365,13 +2181,15 @@ fn plan_project_uninstall(
     paths: &ProductPaths,
 ) -> Result<ProjectUninstallPlan> {
     let capsule = read_capsule(project)?.context("project capsule is not installed")?;
+    crate::lease::ensure_project_inactive(paths, &capsule.project_id)?;
     let registry_path = paths.state.join("projects.json");
     if registry_path.is_file() {
-        serde_json::from_slice::<BTreeMap<String, String>>(&std::fs::read(&registry_path)?)
+        parse_project_json::<BTreeMap<String, String>>(&std::fs::read(&registry_path)?)
             .context("global project registry is invalid")?;
     }
     let projection = read_projection(project)?.context("projection manifest is missing")?;
     validate_owned_files(project, &projection)?;
+    validate_shared_projections(project, &projection)?;
     let managed_files = projection
         .managed_files
         .iter()
@@ -1580,7 +2398,6 @@ fn plan_project_uninstall(
     };
     Ok(ProjectUninstallPlan {
         project: project.to_path_buf(),
-        project_id: capsule.project_id,
         purge,
         managed_files,
         text_replacements,
@@ -1609,9 +2426,14 @@ pub(crate) fn plan_registered_project_uninstalls(
         unique_paths.insert(entry.path.clone());
     }
     for registered_path in unique_paths {
-        let result = (|| -> Result<ProjectUninstallPlan> {
+        let result = (|| -> Result<Option<ProjectUninstallPlan>> {
             if !registered_path.is_absolute() {
                 bail!("registered project path is not absolute");
+            }
+            match std::fs::symlink_metadata(&registered_path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(error.into()),
+                Ok(_) => {}
             }
             let project = canonical_project(Some(&registered_path), paths)?;
             if project != registered_path {
@@ -1620,16 +2442,17 @@ pub(crate) fn plan_registered_project_uninstalls(
                     project.display()
                 );
             }
-            plan_project_uninstall(&project, true, paths)
+            plan_project_uninstall(&project, true, paths).map(Some)
         })();
         match result {
-            Ok(plan) => {
-                inspections.push((registered_path.clone(), None));
+            Ok(Some(plan)) => {
+                inspections.push((registered_path.clone(), None, false));
                 plans.push(plan);
             }
+            Ok(None) => inspections.push((registered_path.clone(), None, true)),
             Err(error) => {
                 failed = true;
-                inspections.push((registered_path.clone(), Some(format!("{error:#}"))));
+                inspections.push((registered_path.clone(), Some(format!("{error:#}")), false));
             }
         }
     }
@@ -1637,13 +2460,17 @@ pub(crate) fn plan_registered_project_uninstalls(
         let mut message = String::from(
             "global uninstall could not safely remove every registered project integration; no project integrations or PATH edits were changed:\n",
         );
-        for (path, error) in inspections {
+        for (path, error, absent) in inspections {
             match error {
                 Some(error) => {
                     message.push_str(&format!("  {}: {error}\n", path.display()));
                 }
                 None => {
-                    message.push_str(&format!("  {}: ready\n", path.display()));
+                    message.push_str(&format!(
+                        "  {}: {}\n",
+                        path.display(),
+                        if absent { "already absent" } else { "ready" }
+                    ));
                 }
             }
         }
@@ -1657,7 +2484,7 @@ fn text_is_empty_projection(path: &Path, contents: &str) -> bool {
         return true;
     }
     path.extension().and_then(|extension| extension.to_str()) == Some("json")
-        && serde_json::from_str::<serde_json::Value>(contents)
+        && parse_project_json_text::<serde_json::Value>(contents)
             .ok()
             .and_then(|value| value.as_object().cloned())
             .is_some_and(|object| object.is_empty())
@@ -1717,13 +2544,15 @@ fn apply_project_uninstall_plan(
     let registry_path = paths.state.join("projects.json");
     if registry_path.exists() {
         let mut registry: BTreeMap<String, String> =
-            serde_json::from_slice(&std::fs::read(&registry_path)?)
+            parse_project_json(&std::fs::read(&registry_path)?)
                 .context("global project registry is invalid")?;
         let project_path = plan
             .project
             .to_str()
             .context("project path is not valid Unicode")?;
-        registry.retain(|project_id, path| project_id != &plan.project_id && path != project_path);
+        // Legacy copied capsules may still share this ID. Remove this path's
+        // aliases without erasing another location's registration.
+        registry.retain(|_, path| path != project_path);
         write_json(&registry_path, &registry)?;
     }
     let preserved = if plan.purge {
@@ -1790,9 +2619,52 @@ pub fn uninstall_project(
     paths: &ProductPaths,
     purge: bool,
 ) -> Result<ProjectUninstallOutcome> {
+    let _lock = crate::install::InstallLock::acquire(paths)?;
+    recover_project_refresh(project, paths)?;
     let plan = plan_project_uninstall(project, purge, paths)?;
     apply_project_uninstall_plan(plan, paths)
 }
+
+#[cfg(test)]
+pub(crate) fn test_shared_projections(project: &Path, schema: u32) -> ProjectionManifest {
+    let block = managed_block("BYO bootstrap");
+    let (codex, codex_hash) = render_codex_config("", project).unwrap();
+    let (hooks, hooks_hash) = render_hook_configuration("", ".codex/hooks.json").unwrap();
+    let (mcp, mcp_hash) = render_claude_mcp("", project).unwrap();
+    let (settings, settings_hash) = render_hook_configuration("", ".claude/settings.json").unwrap();
+    for (path, text) in [
+        ("AGENTS.md", block.clone() + "\n"),
+        ("CLAUDE.md", block.clone() + "\n"),
+        (".codex/config.toml", codex),
+        (".codex/hooks.json", hooks),
+        (".mcp.json", mcp),
+        (".claude/settings.json", settings),
+    ] {
+        if schema < 2 && ["CLAUDE.md", ".mcp.json", ".claude/settings.json"].contains(&path) {
+            continue;
+        }
+        let target = project.join(path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(target, text).unwrap();
+    }
+    ProjectionManifest {
+        schema,
+        managed_files: Vec::new(),
+        agents_block_sha256: sha256_bytes(block.as_bytes()),
+        codex_server_sha256: codex_hash,
+        codex_hooks_sha256: hooks_hash,
+        claude_block_sha256: (schema >= 2).then(|| sha256_bytes(block.as_bytes())),
+        claude_server_sha256: (schema >= 2).then_some(mcp_hash),
+        claude_hooks_sha256: (schema >= 2).then_some(settings_hash),
+        created_files: Vec::new(),
+        created_dirs: Vec::new(),
+        legacy_cleanup: false,
+    }
+}
+
+#[cfg(test)]
+#[path = "b05_lifecycle_tests.rs"]
+mod b05_lifecycle_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1800,12 +2672,123 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        is_user_invocable, managed_block, register_project, reject_unmanaged_loader_collisions,
-        remove_claude_mcp, remove_claude_mcp_approval, remove_hook_configuration,
-        remove_obsolete_managed_files, render_claude_mcp, render_codex_config,
-        render_codex_skill_policy, render_hook_configuration, render_skill_loader,
-        uninstall_project, CapsuleManifest, ManagedFile, ProjectionManifest, SkillClient,
+        choose_project_id, is_user_invocable, managed_block, project_backup_root, project_registry,
+        prune_project_backups, read_capsule, read_project_text, register_project,
+        reject_unmanaged_loader_collisions, remove_claude_mcp, remove_claude_mcp_approval,
+        remove_hook_configuration, remove_obsolete_managed_files, render_claude_mcp,
+        render_codex_config, render_codex_skill_policy, render_hook_configuration,
+        render_skill_loader, uninstall_project, write_json, CapsuleManifest, ManagedFile,
+        ProjectionManifest, SkillClient, PROJECT_BACKUP_RETENTION,
     };
+
+    #[test]
+    fn project_text_reads_refuse_encoding_and_type_errors_without_mutation() {
+        let root =
+            std::env::temp_dir().join(format!("byo-project-text-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir_all(&root).unwrap();
+        for relative in [
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".codex/config.toml",
+            ".codex/hooks.json",
+            ".mcp.json",
+            ".claude/settings.json",
+        ] {
+            let target = root.join(relative);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            assert_eq!(read_project_text(&target).unwrap(), "");
+            std::fs::write(&target, b"original\xff").unwrap();
+            assert!(read_project_text(&target).is_err());
+            assert_eq!(std::fs::read(&target).unwrap(), b"original\xff");
+        }
+        assert!(read_project_text(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn copied_identity_registration_and_leases_are_independent() {
+        let (root, paths, original) = uninstall_fixture();
+        let capsule = read_capsule(&original).unwrap().unwrap();
+        let copy = root.join("copy");
+        std::fs::create_dir_all(&copy).unwrap();
+        let copy = copy.canonicalize().unwrap();
+        let registry = project_registry(&paths).unwrap();
+        let copy_id = choose_project_id(&copy, Some(&capsule), &registry).unwrap();
+        assert_ne!(copy_id, capsule.project_id);
+        assert!(register_project(&paths, &copy, &capsule).is_err());
+        let mut copied_capsule = capsule.clone();
+        copied_capsule.project_id = copy_id.clone();
+        register_project(&paths, &copy, &copied_capsule).unwrap();
+        let registry = project_registry(&paths).unwrap();
+        assert_eq!(
+            registry.get(&capsule.project_id).unwrap(),
+            original.to_str().unwrap()
+        );
+        assert_eq!(registry.get(&copy_id).unwrap(), copy.to_str().unwrap());
+        let lease =
+            crate::lease::RuntimeLeaseGuard::acquire(&paths, "test", &capsule.project_id).unwrap();
+        assert!(crate::lease::ensure_project_inactive(&paths, &copy_id).is_ok());
+        assert!(crate::lease::ensure_project_inactive(&paths, &capsule.project_id).is_err());
+        drop(lease);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_shared_id_uninstall_preserves_the_other_registered_location() {
+        let (root, paths, original) = uninstall_fixture();
+        let capsule = read_capsule(&original).unwrap().unwrap();
+        let other = root.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let other = other.canonicalize().unwrap();
+        let mut registry = project_registry(&paths).unwrap();
+        registry.insert(capsule.project_id.clone(), other.display().to_string());
+        write_json(&paths.state.join("projects.json"), &registry).unwrap();
+        uninstall_project(&original, &paths, false).unwrap();
+        let registry = project_registry(&paths).unwrap();
+        assert_eq!(
+            registry.get(&capsule.project_id).unwrap(),
+            other.to_str().unwrap()
+        );
+        assert!(!registry
+            .values()
+            .any(|path| path == original.to_str().unwrap()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn private_backup_retention_preserves_legacy_and_unknown_history() {
+        let (root, paths, project) = uninstall_fixture();
+        let backups = project_backup_root(&paths, &project).unwrap();
+        assert!(!backups.starts_with(&project));
+        for number in 0..8 {
+            let backup = backups.join(format!("20260101T00000{number}Z-{number:016x}"));
+            std::fs::create_dir(&backup).unwrap();
+            std::fs::write(backup.join("secret"), b"secret").unwrap();
+        }
+        let legacy = backups.join("20250101T000000Z-0000000000000000");
+        std::fs::create_dir_all(legacy.join("legacy-agent-workspace")).unwrap();
+        std::fs::write(backups.join("user-note"), b"preserve").unwrap();
+        prune_project_backups(&backups).unwrap();
+        assert_eq!(
+            std::fs::read_dir(&backups).unwrap().count(),
+            PROJECT_BACKUP_RETENTION + 2
+        );
+        assert!(legacy.is_dir());
+        assert_eq!(
+            std::fs::read(project.join(".agent-backups/backup/user")).unwrap(),
+            b"backup\n"
+        );
+        assert!(backups.join("user-note").is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&backups).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn uninstall_fixture() -> (PathBuf, crate::paths::ProductPaths, PathBuf) {
         let root = std::env::temp_dir().join(format!(
@@ -1849,6 +2832,7 @@ mod tests {
             br#"{"enabledMcpjsonServers":["byo","customer"],"unrelated":true}"#,
         )
         .unwrap();
+        let shared = super::test_shared_projections(&project, 3);
         let capsule = CapsuleManifest {
             schema: 1,
             product: "byo".to_string(),
@@ -1878,9 +2862,12 @@ mod tests {
                     "path": ".agents/skills/verify/agents/openai.yaml",
                     "sha256": crate::manifest::sha256_bytes(policy)
                 }],
-                "agents_block_sha256": "unused",
-                "codex_server_sha256": "unused",
-                "codex_hooks_sha256": "unused",
+                "agents_block_sha256": shared.agents_block_sha256,
+                "codex_server_sha256": shared.codex_server_sha256,
+                "codex_hooks_sha256": shared.codex_hooks_sha256,
+                "claude_block_sha256": shared.claude_block_sha256,
+                "claude_server_sha256": shared.claude_server_sha256,
+                "claude_hooks_sha256": shared.claude_hooks_sha256,
                 "created_files": ["AGENTS.md"],
                 "created_dirs": [
                     ".agent-workspace",

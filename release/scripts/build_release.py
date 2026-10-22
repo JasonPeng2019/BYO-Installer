@@ -1386,6 +1386,7 @@ def main() -> int:
                 f"--output-dir={nuitka_output}",
                 "--output-filename=byo-mcp-sidecar",
                 "--include-package=pyocd_debug_mcp",
+                "--include-package=pyocd.subcommands",
                 "--include-data-files=src/pyocd_debug_mcp/probe_families.json=pyocd_debug_mcp/probe_families.json",
                 "src/pyocd_debug_mcp/sidecar.py",
             ],

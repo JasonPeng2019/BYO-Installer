@@ -259,6 +259,10 @@ pub struct InternalArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum InternalCommand {
+    /// Machine-readable capability used before switching the public launcher.
+    ProjectRefreshProtocol,
+    /// Read-only post-activation validation; the parent owns InstallLock.
+    ActivationDoctor,
     NativeBuild {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         arguments: Vec<String>,

@@ -32,6 +32,218 @@ class AcceptanceFailure(RuntimeError):
     pass
 
 
+def check_project_preservation(
+    byo: Path, project: Path, root: Path, home: Path, env: dict[str, str]
+) -> Path:
+    """Exercise real init/read refusal/no-op/copy contracts on the installed build."""
+    metadata = [
+        project / ".agent-workspace/manifest.json",
+        project / ".generated/byo/projection-manifest.json",
+    ]
+    before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in metadata]
+    backup_root = home / "state/project-backups"
+    backups = sorted(str(path) for path in backup_root.rglob("*") if path.is_file())
+    for _ in range(2):
+        invoke([str(byo), "init", "--project", str(project)], env=env)
+    after = [(path.read_bytes(), path.stat().st_mtime_ns) for path in metadata]
+    if before != after or backups != sorted(
+        str(path) for path in backup_root.rglob("*") if path.is_file()
+    ):
+        raise AcceptanceFailure("no-op init changed metadata or multiplied backups")
+    if (project / ".agent-backups").exists():
+        raise AcceptanceFailure(
+            "new init exposed configuration backups inside the project"
+        )
+
+    for number, relative in enumerate(
+        (
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".codex/config.toml",
+            ".codex/hooks.json",
+            ".mcp.json",
+            ".claude/settings.json",
+        )
+    ):
+        fixture = root / f"invalid-encoding-{number}"
+        target = fixture / relative
+        target.parent.mkdir(parents=True)
+        original = b"preserve original\n\xff"
+        target.write_bytes(original)
+        invoke([str(byo), "init", "--project", str(fixture)], env=env, expected=11)
+        if (
+            target.read_bytes() != original
+            or (fixture / ".agent-workspace/manifest.json").exists()
+        ):
+            raise AcceptanceFailure(f"init failed to preserve unreadable {relative}")
+
+    copied = root / "copied project"
+    shutil.copytree(project, copied)
+    invoke([str(byo), "init", "--project", str(copied)], env=env)
+    original_id = json.loads(metadata[0].read_bytes())["project_id"]
+    copied_id = json.loads((copied / ".agent-workspace/manifest.json").read_bytes())[
+        "project_id"
+    ]
+    registry = json.loads((home / "state/projects.json").read_bytes())
+    if original_id == copied_id or registry.get(original_id) == registry.get(copied_id):
+        raise AcceptanceFailure("copied init stole the original identity/registration")
+    for selected in (project, copied):
+        invoke([str(byo), "doctor", "--project", str(selected)], env=env)
+    return copied
+
+
+def check_project_semantics(
+    byo: Path, project: Path, env: dict[str, str], version: str
+) -> None:
+    """Real CLI checks: formatting tolerance, meaningful refusal and guard isolation."""
+    for relative in (
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".agents/skills/byo-firmware/SKILL.md",
+        ".claude/skills/byo-firmware/SKILL.md",
+    ):
+        target = project / relative
+        target.write_bytes(
+            target.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+            + b"\r\n"
+        )
+    for relative in (
+        ".generated/byo/active-mode.json",
+        ".generated/byo/integrity.json",
+        ".codex/hooks.json",
+        ".mcp.json",
+        ".claude/settings.json",
+    ):
+        target = project / relative
+        document = json.loads(target.read_bytes())
+        target.write_text(
+            json.dumps(dict(reversed(list(document.items())))), encoding="utf-8"
+        )
+    import tomllib
+
+    codex = project / ".codex/config.toml"
+    document = tomllib.loads(codex.read_text(encoding="utf-8"))
+    server = document["mcp_servers"]["byo"]
+    # The fixture's owned table contains only command/args. Retain all customer
+    # configuration before its header while reversing/annotating BYO keys.
+    original = codex.read_text(encoding="utf-8")
+    prefix, _, _ = original.partition("[mcp_servers.byo]")
+    codex.write_text(
+        prefix
+        + "[mcp_servers.byo]\n# formatter comment\nargs = "
+        + json.dumps(server["args"])
+        + "\ncommand = 'byo'\n",
+        encoding="utf-8",
+    )
+    invoke([str(byo), "doctor", "--project", str(project)], env=env)
+    mcp = start_initialized_mcp(byo, project, env, version)
+    stop_mcp(mcp)
+
+    malformed_guard_inputs = [
+        {"tool_input": {"command": 42}},
+        {"tool_input": {"command": None}},
+        {"toolInput": {"command": ["rm -rf /"]}},
+        {"command": {"text": "rm -rf /"}},
+        {"input": {"command": False}},
+        {"command": "git status", "tool_input": {"command": "rm -rf /"}},
+        {"input": {"command": "git status"}, "toolInput": {"command": "git status"}},
+    ]
+
+    def check_guard_payloads() -> None:
+        for payload in malformed_guard_inputs:
+            invoke(
+                [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+                env=env,
+                stdin=json.dumps(payload),
+                expected=2,
+            )
+        invoke(
+            [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+            env=env,
+            stdin='{"command":"rm -rf /","command":"git status"}',
+            expected=2,
+        )
+        for key in ("command", "tool_input", "toolInput", "input"):
+            payload = {
+                key: "git status" if key == "command" else {"command": "git status"}
+            }
+            invoke(
+                [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+                env=env,
+                stdin=json.dumps(payload),
+            )
+        invoke(
+            [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+            env=env,
+            stdin='{"tool_input":{"path":"notes.md"}}',
+        )
+
+    check_guard_payloads()
+    healthy = codex.read_bytes()
+    try:
+        codex.write_bytes(healthy + b"broken = [\n")
+        invoke([str(byo), "doctor", "--project", str(project)], env=env, expected=31)
+        check_guard_payloads()
+        for command, expected in (
+            ("git status", 0),
+            ("git reset --hard", 2),
+            ("west flash", 2),
+            ("x" * (33 * 1024), 2),
+            ("git status\0rm -rf /", 2),
+        ):
+            invoke(
+                [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+                env=env,
+                stdin=json.dumps({"tool_input": {"command": command}}),
+                expected=expected,
+            )
+    finally:
+        codex.write_bytes(healthy)
+    try:
+        changed = healthy.replace(b"command = 'byo'", b"command = 'other'")
+        codex.write_bytes(changed)
+        refusal = invoke(
+            [str(byo), "workspace", "update", "--project", str(project)],
+            env=env,
+            expected=11,
+        )
+        if codex.read_bytes() != changed or "project-backups" not in refusal.stderr:
+            raise AcceptanceFailure(
+                "meaningful command edit was overwritten or lacked recovery guidance"
+            )
+    finally:
+        codex.write_bytes(healthy)
+    invoke([str(byo), "workspace", "update", "--project", str(project)], env=env)
+    invoke([str(byo), "doctor", "--project", str(project)], env=env)
+    capsule_path = project / ".agent-workspace/manifest.json"
+    capsule = json.loads(capsule_path.read_bytes())
+    original_identity = (capsule["project_id"], capsule["mode"])
+    notes = {
+        name: (project / ".agent-workspace" / name).read_bytes()
+        for name in ("PLAN.md", "HANDOFF.md")
+    }
+    # A persisted compatible v1 capsule needs no retained prior-runtime payload.
+    # This fixture changes only its version, exercising the real serve refresh
+    # boundary; native Rust fixtures separately use two different verified packs.
+    capsule["workspace_version"] = version + "-prior-compatibility-fixture"
+    capsule_path.write_text(json.dumps(capsule), encoding="utf-8")
+    mcp = start_initialized_mcp(byo, project, env, version)
+    stop_mcp(mcp)
+    refreshed = json.loads(capsule_path.read_bytes())
+    if (
+        refreshed["workspace_version"] != version
+        or (refreshed["project_id"], refreshed["mode"]) != original_identity
+    ):
+        raise AcceptanceFailure(
+            "serve did not refresh a compatible old capsule in place"
+        )
+    if any(
+        (project / ".agent-workspace" / name).read_bytes() != content
+        for name, content in notes.items()
+    ):
+        raise AcceptanceFailure("automatic refresh changed working notes")
+
+
 def locked_analysis_resources(manifest: dict, lock_path: Path = ANALYSIS_LOCK) -> dict:
     """Exact-target locked analyzer resource leaves: runtime path -> identity.
 
@@ -495,6 +707,12 @@ def main() -> int:
             "NO_PROXY": "",
         }
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
+        phase("verify init preservation, no-op backups and copied project identity")
+        copied_project = check_project_preservation(
+            byo, project, root, home, offline_env
+        )
+        phase("verify semantic formatting and dangerous guard isolation")
+        check_project_semantics(byo, project, offline_env, expected_version)
         invoke(
             [str(byo), "doctor", "--project", str(project), "--json"],
             env=env,
@@ -669,6 +887,13 @@ def main() -> int:
             stdin='{"schema":1,"command":"git reset --hard"}',
             expected=2,
         )
+        for command in ("x" * (33 * 1024), "git status\0rm -rf /"):
+            invoke(
+                [str(byo), "hook", "guard-dangerous", "--project", str(project)],
+                env=env,
+                stdin=json.dumps({"schema": 1, "command": command}),
+                expected=2,
+            )
         invoke(
             [str(byo), "mode", "firmware-full", "--project", str(project)],
             env=env,
@@ -755,6 +980,28 @@ def main() -> int:
                 env=env,
                 expected=11,
             )
+            # All public mutation routes must respect the same live session.
+            capsule_before = (project / ".agent-workspace/manifest.json").read_bytes()
+            registry_before = (home / "state/projects.json").read_bytes()
+            pointer_before = (home / "data/current.json").read_bytes()
+            invoke(
+                [str(byo), "uninstall", "--project", str(project)], env=env, expected=42
+            )
+            invoke([str(byo), "repair"], env=env, expected=21)
+            invoke(
+                [str(byo), "install-runtime", "--bundle", str(bundle)],
+                env=env,
+                expected=24,
+            )
+            if (
+                (project / ".agent-workspace/manifest.json").read_bytes()
+                != capsule_before
+                or (home / "state/projects.json").read_bytes() != registry_before
+                or (home / "data/current.json").read_bytes() != pointer_before
+            ):
+                raise AcceptanceFailure(
+                    "lease-blocked public mutation changed project/runtime state"
+                )
             blocked_uninstall = invoke(
                 [str(byo), "uninstall", "--global"], env=env, expected=42
             )
@@ -887,7 +1134,7 @@ def main() -> int:
         invoke([str(byo), "init", "--project", str(project)], env=offline_env)
         if not firm_marker.is_file():
             raise AcceptanceFailure("reinstall over preserved state removed .firm data")
-        registered_projects = (project, unicode_project, nested_project)
+        registered_projects = (project, unicode_project, nested_project, copied_project)
         receipt_paths = tuple(
             Path(os.path.realpath(registered_project))
             for registered_project in registered_projects

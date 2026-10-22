@@ -66,7 +66,15 @@ The checksum command must report `OK`. These preview bundles are not signed or
 notarized, so use the offline `--bundle` / `-Bundle` path shown above. Signed
 network installation and automatic updates are not available yet.
 
-Installation adds BYO to `PATH` automatically. On macOS/Linux, open a new
+Installation configures `PATH` for Windows, bash, zsh and fish. Other shells
+receive manual setup instructions and the absolute launcher path. Unix profile
+read or encoding errors stop the edit and preserve the original. Originals are
+backed up under the private BYO state directory's `path-backups`; uninstall
+reverses recorded blocks. Bash on macOS uses its first existing login profile
+(or creates `.bash_profile`), zsh honors `ZDOTDIR`, and fish uses
+`$XDG_CONFIG_HOME/fish/config.fish` (default `~/.config/fish/config.fish`).
+Windows retains Unicode entries and the existing registry string type.
+On macOS/Linux, open a new
 terminal after installation. On Windows, the installer refreshes the Windows
 environment and makes `byo` available immediately when the installer is run
 inline; restart other terminal apps that were already open.
@@ -82,6 +90,14 @@ byo init --dry-run
 byo init
 byo codex firmware
 ```
+
+Repeated initialization with unchanged projections keeps capsule timestamps and
+does not create another backup. Changed files are backed up in private BYO state
+under `project-backups`, outside the project; five ordinary snapshots are kept
+per project location. Legacy workspace archives are retained for manual recovery.
+Existing project-local `.agent-backups` history is left alone. Unreadable or
+invalid-encoding user files stop initialization before replacement. Initialize
+a copied project to give it an independent ID, registry entry and runtime leases.
 
 The dry run is optional. `byo init` creates the project capsule, registers the
 project, configures both clients to launch the MCP server through
@@ -124,6 +140,51 @@ requires `--allow-full-access`; use it only in a trusted or isolated environment
 `byo workspace update` changes one project's managed projection. `byo update`
 changes the shared product runtime and requires a configured signed release
 channel; the current unsigned preview has no public update channel.
+
+Updates and rollbacks keep project files on their previous complete projection
+until the next `byo mcp serve`, advisory hook, or managed helper use. That use
+refreshes the project automatically under the installation lock. Its mode,
+full-access grant, PLAN/HANDOFF, `.firm`, user text and other client settings are
+preserved. A changed permission policy needs an explicit `byo init --mode <mode>`
+decision (and `--allow-full-access` when applicable). Stop active MCP sessions
+before activation or a project refresh. A failed or interrupted refresh restores
+its private snapshot before retrying. If user text changed after publication,
+recovery preserves that text and the pending snapshot, names the file to
+review/restore, and requires another retry. `byo doctor` remains a read-only check
+and identifies projects awaiting refresh.
+
+Managed text tolerates CRLF and terminal newlines. Owned JSON and Codex TOML
+accept equivalent formatting/key order; TOML comments and quoting can change.
+Commands, arguments, permissions, modes and skill instructions remain checked.
+Duplicate keys refuse. New projects retain a hash-checked semantic baseline in
+`.generated/byo/integrity.json`, independent of whether the old runtime is still
+installed. Legacy byte-only records accept standard LF/JSON/TOML normalization;
+an unusual old TOML layout may need its original owned section restored once.
+For a meaningful-edit refusal, review and undo the named BYO-owned change or
+restore the file from its matching `state/project-backups` snapshot (`byo paths`
+shows state), retaining unrelated user settings, then run `byo workspace update`.
+The dangerous-command guard checks its denylist and verified project mode even
+when unrelated projections or runtime doctor checks fail; invalid commands and
+unverifiable modes block with client exit code 2. Codex hook protocol support
+remains unverified.
+
+Update, rollback, repair and direct installation share the same activation
+checks and restore the prior pointer, public launcher and locator if the selected
+runtime fails its post-activation doctor. They refuse live runtime leases.
+Project init, refresh, ordinary uninstall and runtime lease publication share
+the installation lock; uninstall also checks the chosen project lease.
+
+When switching runtimes, the selected embedded launcher must support automatic
+refresh when existing projects are registered. Activation refuses an older
+launcher before changing runtime/project state if that capability is absent. To roll back to a pre-refresh release, first
+run `byo uninstall --project <path>` for each registered project, retry rollback,
+then run that release's `byo init --project <path> --mode <previous-mode>` with
+the prior full-access authorization if needed. Ordinary project uninstall keeps
+PLAN/HANDOFF and `.firm`. Initial installs and empty registries need no capability
+upgrade. Repairing or reinstalling the exact selected runtime remains supported.
+Capable launchers run a read-only internal activation doctor under the parent
+lock. An allowed pre-refresh target uses its legacy public doctor; that older
+binary does not gain automatic project refresh or new locking behavior.
 
 ## Uninstall
 

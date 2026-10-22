@@ -117,6 +117,7 @@ pub struct UpdateOutcome {
     /// BYO-owned scratch directories actually removed by `--clean`, as strings
     /// for the JSON receipt. Empty on a dry run or when nothing needed clearing.
     pub cleaned: Vec<String>,
+    pub project_refresh: &'static str,
 }
 
 fn read_metadata(arguments: &UpdateArgs) -> Result<Vec<u8>> {
@@ -580,7 +581,7 @@ fn clear_transient_caches(paths: &ProductPaths) -> Result<Vec<PathBuf>> {
 }
 
 pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOutcome> {
-    let _lock = install::InstallLock::acquire(paths)?;
+    let lock = install::InstallLock::acquire(paths)?;
     validate_channel_name(&arguments.channel)?;
     let metadata_bytes = read_metadata(arguments)?;
     let (metadata, signed_sha256) = verify_channel_document(&metadata_bytes)?;
@@ -615,10 +616,12 @@ pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOut
         dry_run: arguments.dry_run,
         clean: arguments.clean,
         cleaned: Vec::new(),
+        project_refresh: "on next MCP serve or advisory hook; incompatible/edited/leased projects refuse without replacing their prior capsule",
     };
     if arguments.dry_run {
         return Ok(outcome);
     }
+    crate::lease::ensure_runtime_inactive(paths)?;
 
     let archive = download(&artifact.url, artifact.archive_size + 1)?;
     if archive.len() as u64 != artifact.archive_size {
@@ -652,7 +655,7 @@ pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOut
         {
             bail!("extracted release manifest digest does not match signed channel metadata");
         }
-        install::install_bundle_locked(&bundle, paths)?;
+        install::install_bundle_locked(&bundle, paths, &lock)?;
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&staging);
@@ -678,6 +681,8 @@ pub fn perform(arguments: &UpdateArgs, paths: &ProductPaths) -> Result<UpdateOut
 }
 
 pub fn rollback(paths: &ProductPaths, requested: Option<&str>) -> Result<PathBuf> {
+    let lock = install::InstallLock::acquire(paths)?;
+    crate::lease::ensure_runtime_inactive(paths)?;
     let (current, _) = manifest::load_current(paths)?;
     let mut candidates = Vec::new();
     for entry in std::fs::read_dir(paths.versions())? {
@@ -707,7 +712,11 @@ pub fn rollback(paths: &ProductPaths, requested: Option<&str>) -> Result<PathBuf
         .pop()
         .map(|(_, path)| path)
         .context("no verified prior runtime is available for rollback")?;
-    install::repair(paths, Some(&candidate))
+    // install_bundle_locked reuses the verified immutable installed directory,
+    // with the same atomic pointer/launcher restoration as normal installation.
+    install::install_bundle_locked(&candidate, paths, &lock)?;
+    drop(lock);
+    Ok(candidate)
 }
 
 #[cfg(test)]

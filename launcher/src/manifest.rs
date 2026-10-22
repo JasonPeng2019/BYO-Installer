@@ -391,6 +391,12 @@ pub(crate) fn retry_transient_io<T>(
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    struct TemporaryFile(PathBuf);
+    impl Drop for TemporaryFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
     let parent = path.parent().context("atomic target has no parent")?;
     std::fs::create_dir_all(parent)
         .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -401,9 +407,27 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             .unwrap_or("byo"),
         rand::random::<u64>()
     ));
+    let permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
-        let mut file = retry_transient_io(|| File::create(&temporary))
-            .with_context(|| format!("failed to create {}", temporary.display()))?;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(permissions.as_ref().map_or(0o600, |value| value.mode()));
+    }
+    let file = retry_transient_io(|| options.open(&temporary))
+        .with_context(|| format!("failed to create {}", temporary.display()))?;
+    // Own cleanup only after exclusive creation. Close before cleanup on Windows.
+    let _cleanup = TemporaryFile(temporary.clone());
+    {
+        let mut file = file;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
         file.write_all(bytes)?;
         file.sync_all()?;
     }
@@ -423,6 +447,37 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     use super::*;
+
+    #[test]
+    fn failed_atomic_replacement_preserves_target_and_removes_owned_temporary() {
+        let root = std::env::temp_dir().join(format!("byo-atomic-{:032x}", rand::random::<u128>()));
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("sentinel"), b"original").unwrap();
+        assert!(atomic_write(&target, b"replacement").is_err());
+        assert_eq!(std::fs::read(target.join("sentinel")).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_replacement_preserves_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("byo-atomic-mode-{:032x}", rand::random::<u128>()));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("secret");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        atomic_write(&target, b"new").unwrap();
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(std::fs::read(target).unwrap(), b"new");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn canonical_json_is_independent_of_object_key_order() {

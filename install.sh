@@ -247,6 +247,6 @@ else
 fi
 status=$?
 if [ "$status" -eq 0 ]; then
-  echo "BYO installed and added to PATH. Open a new shell, then run 'byo'."
+  echo "BYO installed. Follow the PATH result above before opening a new shell and running 'byo'."
 fi
 exit "$status"

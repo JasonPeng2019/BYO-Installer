@@ -57,11 +57,15 @@ struct Check {
     identity: Option<serde_json::Value>,
 }
 
-fn doctor_after_activation(paths: &ProductPaths) -> Result<()> {
+fn doctor_after_activation(
+    paths: &ProductPaths,
+    _lock: &install::InstallLock,
+    refresh_support: bool,
+) -> Result<()> {
     let (_, runtime) = manifest::load_current(paths)?;
     let release = manifest::verify_runtime(&runtime)?;
     if release.version == env!("CARGO_PKG_VERSION") {
-        return global_doctor(paths).map(|_| ());
+        return global_doctor_checks(paths, false).map(|_| ());
     }
     // The mutating process still has the previous version loaded. Run doctor
     // through the newly selected launcher so exact active-version checks stay
@@ -79,7 +83,13 @@ fn doctor_after_activation(paths: &ProductPaths) -> Result<()> {
     }
     paths.verify_install_locator()?;
     let mut command = ProcessCommand::new(&launcher);
-    command.args(["doctor", "--global", "--json"]);
+    if refresh_support {
+        command.args(["internal", "activation-doctor"]);
+    } else {
+        // Pre-B05 doctor does not acquire InstallLock. Such a target is only
+        // allowed for an empty registry or intentional same-runtime repair.
+        command.args(["doctor", "--global", "--json"]);
+    }
     command.env_remove("BYO_HOME");
     // Explicitly preserve an isolated/custom product home. Default per-user
     // layouts instead resolve from the verified locator beside this EXE.
@@ -102,9 +112,14 @@ fn doctor_after_activation(paths: &ProductPaths) -> Result<()> {
 }
 
 fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
+    let _lock = install::InstallLock::acquire(paths)?;
+    global_doctor_checks(paths, true)
+}
+
+// The activation child performs no lease/state publication or stale cleanup.
+fn global_doctor_checks(paths: &ProductPaths, remove_stale: bool) -> Result<Vec<Check>> {
     let (_, runtime) = manifest::load_current(paths)?;
     let release = manifest::verify_runtime(&runtime)?;
-    let _lease = lease::RuntimeLeaseGuard::acquire(paths, &release.version, "global-doctor")?;
     let analysis = managed_analysis_status(&runtime, &release)?;
     install::sidecar_self_test(&runtime)?;
     let pack = pack::WorkspacePack::load(&runtime.join("workflow/workspace.pack"))?;
@@ -124,7 +139,7 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
         bail!("public BYO launcher does not match the active runtime");
     }
     paths.verify_install_locator()?;
-    let leases = lease::inspect(paths, true)?;
+    let leases = lease::inspect(paths, remove_stale)?;
     let live_lease_count = leases.iter().filter(|status| status.live).count();
     let stale_lease_count = leases.len() - live_lease_count;
     let mut checks = vec![
@@ -170,9 +185,23 @@ fn global_doctor(paths: &ProductPaths) -> Result<Vec<Check>> {
             } else {
                 "warning".to_string()
             },
-            code: (stale_lease_count != 0).then(|| "STALE_LEASES_REMOVED".to_string()),
+            code: (stale_lease_count != 0).then(|| {
+                if remove_stale {
+                    "STALE_LEASES_REMOVED"
+                } else {
+                    "STALE_LEASES_FOUND"
+                }
+                .to_string()
+            }),
             remedy: (stale_lease_count != 0).then(|| {
-                format!("{stale_lease_count} stale lease(s) were removed; {live_lease_count} live")
+                format!(
+                    "{stale_lease_count} stale lease(s) {}; {live_lease_count} live",
+                    if remove_stale {
+                        "were removed"
+                    } else {
+                        "found"
+                    }
+                )
             }),
             identity: None,
         },
@@ -420,13 +449,20 @@ fn serve_mcp(argument: &ProjectArg, paths: &ProductPaths) -> Result<i32> {
         project::canonical_project(argument.project.as_deref(), paths),
         ExitCategory::ProjectRoot,
     )?;
+    let mutation_lock = install::InstallLock::acquire(paths)?;
     categorize(
-        project::doctor_project(&project, paths),
+        project::refresh_project_locked(&project, paths, &mutation_lock),
         ExitCategory::Doctor,
     )?;
     let runtime = project::active_runtime(paths)?;
     let project_id = project::project_id(&project)?;
-    let _lease = lease::RuntimeLeaseGuard::acquire(paths, &runtime.release.version, &project_id)?;
+    let _lease = lease::RuntimeLeaseGuard::acquire_locked(
+        paths,
+        &runtime.release.version,
+        &project_id,
+        &mutation_lock,
+    )?;
+    drop(mutation_lock);
     let sidecar = install::sidecar_path(&runtime.root);
     let mut command = ProcessCommand::new(&sidecar);
     command
@@ -460,17 +496,36 @@ fn serve_mcp(argument: &ProjectArg, paths: &ProductPaths) -> Result<i32> {
 }
 
 fn run_helper(command: InternalCommand, paths: &ProductPaths) -> Result<i32> {
+    if matches!(command, InternalCommand::ActivationDoctor) {
+        print_doctor(&global_doctor_checks(paths, false)?, true)?;
+        return Ok(0);
+    }
+    if matches!(command, InternalCommand::ProjectRefreshProtocol) {
+        println!("1");
+        return Ok(0);
+    }
     let selected_project = categorize(
         project::canonical_project(None, paths),
         ExitCategory::ProjectRoot,
     )?;
+    let mutation_lock = install::InstallLock::acquire(paths)?;
     categorize(
-        project::doctor_project(&selected_project, paths),
+        project::refresh_project_locked(&selected_project, paths, &mutation_lock),
         ExitCategory::Doctor,
     )?;
     let runtime = project::active_runtime(paths)?;
+    let _lease = lease::RuntimeLeaseGuard::acquire_locked(
+        paths,
+        &runtime.release.version,
+        &project::project_id(&selected_project)?,
+        &mutation_lock,
+    )?;
+    drop(mutation_lock);
     let sidecar = install::sidecar_path(&runtime.root);
     let (name, arguments) = match command {
+        InternalCommand::ProjectRefreshProtocol | InternalCommand::ActivationDoctor => {
+            unreachable!("handled before project resolution")
+        }
         InternalCommand::NativeBuild { arguments } => ("native-build", arguments),
         InternalCommand::CollectArtifacts { arguments } => ("collect-artifacts", arguments),
         InternalCommand::PackRepair { arguments } => ("pack-repair", arguments),
@@ -556,13 +611,13 @@ fn run() -> Result<i32> {
             );
         }
         Command::Status(argument) => {
+            let _lock = install::InstallLock::acquire(&paths)?;
             let (_, runtime) =
                 categorize(manifest::load_current(&paths), ExitCategory::RuntimeMissing)?;
             let release = categorize(
                 manifest::verify_runtime(&runtime),
                 ExitCategory::RuntimeIntegrity,
             )?;
-            let _lease = lease::RuntimeLeaseGuard::acquire(&paths, &release.version, "status")?;
             let analysis = categorize(
                 managed_analysis_status(&runtime, &release),
                 ExitCategory::RuntimeIntegrity,
@@ -623,6 +678,10 @@ fn run() -> Result<i32> {
                     {
                         path_setup::PathSetupOutcome::AlreadyPresent => {
                             println!("PATH already includes {}", paths.bin.display());
+                        }
+                        #[cfg(not(windows))]
+                        path_setup::PathSetupOutcome::Manual { instructions } => {
+                            println!("PATH requires manual setup: {instructions}");
                         }
                         path_setup::PathSetupOutcome::Configured { target } => {
                             println!(
@@ -774,30 +833,7 @@ fn run() -> Result<i32> {
             }
         },
         Command::Update(arguments) => {
-            let previous = manifest::load_current(&paths)
-                .ok()
-                .map(|(_, runtime)| runtime);
             let outcome = categorize(update::perform(&arguments, &paths), ExitCategory::Update)?;
-            if !arguments.dry_run {
-                if let Err(doctor_error) = doctor_after_activation(&paths) {
-                    if let Some(previous) = previous.as_deref() {
-                        if let Err(rollback_error) = install::repair(&paths, Some(previous)) {
-                            return Err(error::fail(
-                                ExitCategory::UpdateRolledBack,
-                                format!(
-                                    "updated runtime failed doctor ({doctor_error:#}); rollback also failed: {rollback_error:#}"
-                                ),
-                            ));
-                        }
-                    }
-                    return Err(error::fail(
-                        ExitCategory::UpdateRolledBack,
-                        format!(
-                            "updated runtime failed doctor and the previous runtime was restored: {doctor_error:#}"
-                        ),
-                    ));
-                }
-            }
             println!("{}", serde_json::to_string_pretty(&outcome)?);
         }
         Command::Rollback(arguments) => {
@@ -805,15 +841,13 @@ fn run() -> Result<i32> {
                 update::rollback(&paths, arguments.version.as_deref()),
                 ExitCategory::UpdateRolledBack,
             )?;
-            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
-            println!("BYO runtime rolled back to {}", selected.display());
+            println!("BYO runtime rolled back to {}. Compatible projects refresh on their next MCP serve or advisory hook.", selected.display());
         }
         Command::Repair(arguments) => {
             let repaired = categorize(
                 install::repair(&paths, arguments.runtime.as_deref()),
                 ExitCategory::RuntimeIntegrity,
             )?;
-            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
             if let Some(raw_project) = arguments.project.as_deref() {
                 let project = project::canonical_project(Some(raw_project), &paths)?;
                 categorize(
@@ -879,7 +913,6 @@ fn run() -> Result<i32> {
                 install::install_bundle(&arguments.bundle, &paths),
                 ExitCategory::Installer,
             )?;
-            categorize(doctor_after_activation(&paths), ExitCategory::Doctor)?;
             println!(
                 "Installed BYO {} at {}",
                 manifest.version,
@@ -892,6 +925,10 @@ fn run() -> Result<i32> {
                 match categorize(path_setup::add_bin_to_path(&paths), ExitCategory::Installer)? {
                     path_setup::PathSetupOutcome::AlreadyPresent => {
                         println!("PATH already includes {}", paths.bin.display());
+                    }
+                    #[cfg(not(windows))]
+                    path_setup::PathSetupOutcome::Manual { instructions } => {
+                        println!("PATH requires manual setup: {instructions}");
                     }
                     path_setup::PathSetupOutcome::Configured { target } => {
                         println!(
@@ -1002,25 +1039,36 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("byo-post-doctor-{:032x}", rand::random::<u128>()));
         let paths = crate::paths::ProductPaths::from_install_dir(&root.join("product")).unwrap();
-        for (version, failure) in [("0.1.9", ""), ("0.1.10", "doctor")] {
-            let bundle = root.join(version);
-            crate::install::tests::runtime_fixture(&bundle, version, failure);
-            crate::install::install_bundle(&bundle, &paths).unwrap();
-            let result = super::doctor_after_activation(&paths);
-            if failure.is_empty() {
-                result.unwrap();
-                // Tampered public bytes must fail before executing doctor.
-                std::fs::write(paths.public_launcher(), b"changed launcher").unwrap();
-                let error = super::doctor_after_activation(&paths).unwrap_err();
-                assert!(format!("{error:#}").contains("does not match the selected runtime"));
-                crate::install::repair(&paths, Some(&paths.versions().join(version))).unwrap();
-            } else {
-                assert!(format!("{:#}", result.unwrap_err()).contains("fixture doctor failed"));
-                // This is the same recovery used by Command::Update.
-                crate::install::repair(&paths, Some(&paths.versions().join("0.1.9"))).unwrap();
-                super::doctor_after_activation(&paths).unwrap();
-            }
+        let healthy = root.join("0.1.9");
+        crate::install::tests::runtime_fixture(&healthy, "0.1.9", "");
+        crate::install::install_bundle(&healthy, &paths).unwrap();
+        let before = [
+            paths.current(),
+            paths.public_launcher(),
+            paths.install_locator(),
+        ]
+        .map(|path| std::fs::read(path).unwrap());
+        {
+            let lock = crate::install::InstallLock::acquire(&paths).unwrap();
+            super::doctor_after_activation(&paths, &lock, true).unwrap();
+            std::fs::write(paths.public_launcher(), b"changed launcher").unwrap();
+            let error = super::doctor_after_activation(&paths, &lock, true).unwrap_err();
+            assert!(format!("{error:#}").contains("does not match the selected runtime"));
         }
+        crate::install::repair(&paths, Some(&paths.versions().join("0.1.9"))).unwrap();
+        let bad = root.join("0.1.10");
+        crate::install::tests::runtime_fixture(&bad, "0.1.10", "doctor");
+        let error = crate::install::install_bundle(&bad, &paths).unwrap_err();
+        assert!(format!("{error:#}").contains("fixture doctor failed"));
+        assert_eq!(
+            [
+                paths.current(),
+                paths.public_launcher(),
+                paths.install_locator()
+            ]
+            .map(|path| std::fs::read(path).unwrap()),
+            before
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
