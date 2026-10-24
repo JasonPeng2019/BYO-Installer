@@ -11,6 +11,7 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -118,32 +119,139 @@ def record_stages(path):
     return int(bool(gaps))
 
 
+def command_identity(pid, birth=None):
+    """Read OS facts only; never poll/wait/reap/signal or infer a role from a name."""
+    import psutil
+
+    facts = {
+        "pid": pid,
+        "expected_creation_time": birth,
+        "at_monotonic": time.monotonic(),
+        "observer_pid": os.getpid(),
+    }
+    try:
+        process = psutil.Process(pid)
+        actual = process.create_time()
+        facts["creation_time"] = actual
+        if birth is not None and actual != birth:
+            return {**facts, "identity": "reused", "gap": "PID birth changed; no attribution"}
+        facts["identity"] = "observed" if birth is None else "same_birth"
+        for name in ("ppid", "cmdline", "exe", "status"):
+            try:
+                facts[name] = getattr(process, name)()
+            except (OSError, psutil.Error) as exc:
+                facts[name] = {"unavailable": type(exc).__name__, "error": str(exc)}
+        facts["birth_after_queries"] = psutil.Process(pid).create_time()
+        if facts["birth_after_queries"] != actual:
+            facts["identity"] = "changed_during_observation"
+    except psutil.NoSuchProcess:
+        facts["identity"] = "missing" if "creation_time" not in facts else "gone_during_observation"
+    except (OSError, psutil.Error) as exc:
+        facts.update(identity="unavailable", error=type(exc).__name__, detail=str(exc))
+    return facts
+
+
+def command_state(facts):
+    birth = facts.get("expected_creation_time")
+    if type(birth) not in (int, float) or not math.isfinite(birth) or birth <= 0:
+        return "unknown"
+    if facts.get("identity") == "missing":
+        return "gone"
+    if (
+        facts.get("identity") == "same_birth"
+        and facts.get("creation_time") == birth
+        and facts.get("birth_after_queries") == birth
+    ):
+        status = facts.get("status")
+        if status in ("zombie", "dead"):
+            return "terminal"
+        if isinstance(status, str) and status:
+            return "live"
+    return "unknown"
+
+
+def capture_command_descendants(pid, birth, owned, observations):
+    """Contemporaneous tree/parent/argv/image facts, with no cleanup authority."""
+    import psutil
+
+    root = command_identity(pid, birth)
+    if root.get("identity") == "missing":
+        observations.append(
+            {"boundary": "during command", "root": root, "terminal_race": birth is not None}
+        )
+        return  # The owner's actual wait decides exit; no later PID attribution.
+    if birth is None or root.get("identity") != "same_birth":
+        observations.append({"boundary": "during command", "root": root})
+        return
+    try:
+        for process in psutil.Process(pid).children(recursive=True):
+            try:
+                child_birth = process.create_time()
+                facts = command_identity(process.pid, child_birth)
+                parent_pid = facts.get("ppid")
+                parent = (
+                    command_identity(parent_pid)
+                    if type(parent_pid) is int
+                    else {"gap": "Parent PID unavailable during capture"}
+                )
+                capture = {
+                    "identity": facts,
+                    "parent_identity": parent,
+                    "root_identity": root,
+                    "boundary": "during command",
+                    "at_monotonic": time.monotonic(),
+                    "observer_pid": os.getpid(),
+                    "ownership_role": "observed recursive command descendant",
+                    "role": "unknown; no exact functional-role receipt",
+                    "role_gap": "No role inference from argv, image or a later PID lookup",
+                }
+                entry = owned.setdefault((process.pid, child_birth), {"first_capture": capture})
+                entry["last_capture"] = capture
+                gaps = []
+                if facts.get("identity") != "same_birth":
+                    gaps.append("Child identity changed or unavailable during capture")
+                if parent.get("identity") != "observed":
+                    gaps.append("Parent identity unavailable during capture")
+                for field in ("ppid", "cmdline", "exe", "status"):
+                    if not facts.get(field) or isinstance(facts[field], dict):
+                        gaps.append("Child " + field + " unavailable during capture")
+                if gaps:
+                    entry.setdefault("evidence_gaps", []).extend(gaps)
+            except (OSError, psutil.Error) as exc:
+                observations.append(
+                    {"pid": process.pid, "boundary": "during command",
+                     "error": type(exc).__name__, "detail": str(exc)}
+                )
+        after = command_identity(pid, birth)
+        if after.get("identity") not in ("same_birth", "missing"):
+            observations.append({"boundary": "after tree capture", "root": after})
+    except (OSError, psutil.Error) as exc:
+        observations.append(
+            {"boundary": "during command", "error": type(exc).__name__, "detail": str(exc)}
+        )
+
+
 def run_finite(command, cwd, out, err, timeout):
     import psutil
 
     child = subprocess.Popen(command, cwd=cwd, stdout=out, stderr=err)
     owned, observations = {}, []
-    try:
-        root = psutil.Process(child.pid)
-        root_birth = root.create_time()
-    except psutil.NoSuchProcess:
-        root, root_birth = None, None
-        observations.append("root exited before process observation")
+    root = command_identity(child.pid)
+    root_birth = root.get("creation_time")
+    if root.get("identity") != "observed":
+        observations.append({"gap": "Root identity unavailable at dispatch", "identity": root})
     deadline = time.monotonic() + timeout
     timed_out = False
+    timeout_intervention = None
     while child.poll() is None:
-        try:
-            if (
-                root is not None
-                and root.is_running()
-                and root.create_time() == root_birth
-            ):
-                for process in root.children(recursive=True):
-                    owned[(process.pid, process.create_time())] = process
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-            observations.append(type(exc).__name__)
+        capture_command_descendants(child.pid, root_birth, owned, observations)
         if time.monotonic() >= deadline:
             timed_out = True
+            timeout_intervention = {
+                "kind": "timeout-command.kill",
+                "identity": command_identity(child.pid, root_birth),
+                "at_monotonic": time.monotonic(),
+            }
             child.kill()
             break
         try:
@@ -151,35 +259,85 @@ def run_finite(command, cwd, out, err, timeout):
         except subprocess.TimeoutExpired:
             pass
     child.wait(timeout=15)
+    command_exited = time.monotonic()
+    immediate = {key: command_identity(*key) for key in owned}
+    finalization_gaps = {
+        key: facts for key, facts in immediate.items() if command_state(facts) == "unknown"
+    }
+    finalization_deadline = command_exited + 5.0
+    while True:
+        final = {key: command_identity(*key) for key in owned}
+        for key, facts in final.items():
+            if command_state(facts) == "unknown":
+                finalization_gaps.setdefault(key, facts)
+        if (
+            timed_out
+            or all(command_state(facts) in ("gone", "terminal") for facts in final.values())
+            or time.monotonic() >= finalization_deadline
+        ):
+            break
+        time.sleep(0.05)
+    judgment = time.monotonic()
     cleanup = []
-    for (pid, birth), process in reversed(list(owned.items())):
-        try:
-            live = (
-                process.is_running()
-                and process.create_time() == birth
-                and process.status() != psutil.STATUS_ZOMBIE
+    for (pid, birth), capture in reversed(list(owned.items())):
+        facts = final[(pid, birth)]
+        state = command_state(facts)
+        record = {
+            "pid": pid,
+            "creation_time": birth,
+            **capture,
+            "at_command_exit": immediate[(pid, birth)],
+            "command_exit_monotonic": command_exited,
+            "at_final_boundary": facts,
+            "judgment_monotonic": judgment,
+            "survived_command": state == "live",
+            "final_state": state,
+            "command_exit": child.returncode,
+            "timed_out": timed_out,
+            "timeout_intervention": timeout_intervention,
+            "normal_wait_completed": not timed_out,
+            "intervention": None,
+            "cleanup": "unconfirmed",
+        }
+        cleanup.append(record)
+        if (pid, birth) in finalization_gaps:
+            record.setdefault("evidence_gaps", []).append(
+                {"boundary": "passive post-command observation",
+                 "identity": finalization_gaps[(pid, birth)]}
             )
-            if live:
+        if state == "unknown":
+            record.setdefault("evidence_gaps", []).append("Unknown/reused/unavailable final identity")
+        try:
+            if state == "live":
+                # The final failed judgment above is immutable. Recheck a fresh
+                # birth before the owner's explicit emergency signal.
+                before = command_identity(pid, birth)
+                process = psutil.Process(pid)
+                if command_state(before) != "live" or process.create_time() != birth:
+                    record["intervention_gap"] = before
+                    continue
+                record["intervention"] = {
+                    "kind": "post-command-emergency-kill",
+                    "at_monotonic": time.monotonic(),
+                    "before": before,
+                }
                 process.kill()
                 process.wait(timeout=15)
-            cleanup.append(
-                {
-                    "pid": pid,
-                    "creation_time": birth,
-                    "survived_command": live,
-                    "cleanup": "gone",
-                }
-            )
+            if state in ("gone", "terminal"):
+                record["cleanup"] = "gone"
         except psutil.NoSuchProcess:
-            cleanup.append({"pid": pid, "creation_time": birth, "cleanup": "gone"})
-        except (psutil.AccessDenied, psutil.TimeoutExpired) as exc:
-            cleanup.append(
-                {
-                    "pid": pid,
-                    "creation_time": birth,
-                    "cleanup": "unconfirmed",
-                    "error": str(exc),
-                }
+            pass
+        except (OSError, psutil.Error) as exc:
+            record["error"] = {"type": type(exc).__name__, "message": str(exc)}
+        finally:
+            record["after_cleanup"] = command_identity(pid, birth)
+            if command_state(record["after_cleanup"]) in ("gone", "terminal"):
+                record["cleanup"] = "gone"
+            record["natural_terminal"] = (
+                not timed_out
+                and state in ("gone", "terminal")
+                and record["intervention"] is None
+                and (pid, birth) not in finalization_gaps
             )
     return child.returncode, timed_out, cleanup, observations
 
@@ -772,8 +930,9 @@ def main():
                 state = "TIMEOUT" if timed_out else ("PASS" if code == 0 else "FAIL")
                 if any(
                     item.get("survived_command") or item.get("cleanup") != "gone"
+                    or item.get("evidence_gaps")
                     for item in cleanup
-                ):
+                ) or any(not item.get("terminal_race") for item in observation_errors):
                     state = "ERROR" if state == "PASS" else state
                 reason = None
             except subprocess.TimeoutExpired as exc:

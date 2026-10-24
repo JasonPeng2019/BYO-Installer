@@ -38,6 +38,8 @@ def main():
             "Release ledger requires an actual selected release test script"
         )
     source = installer / "Firmware MCP New/tests/final_acceptance_suite.py"
+    # The file-loaded driver imports its real test siblings before selection.
+    sys.path.insert(0, str(source.parent))
     spec = importlib.util.spec_from_file_location("frozen_firmware_ledger", source)
     ledger = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ledger)
