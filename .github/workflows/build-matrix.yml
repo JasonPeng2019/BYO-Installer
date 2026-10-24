@@ -107,10 +107,19 @@ jobs:
         run: |
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
 
-      - name: Run Windows launcher cleanup regressions
-        if: runner.os == 'Windows'
+      - name: Acquire exact official U5 acceptance pack
+        id: official-pack
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
         shell: bash
-        run: cargo test --manifest-path launcher/Cargo.toml --locked 'install::tests::windows_'
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" \
+            --acquire-official-pack "$RUNNER_TEMP/byo-official-pack/Keil.STM32U5xx_DFP.3.2.0.pack" \
+            --evidence release/build/final-acceptance/official-pack
+
+      - name: Run Windows launcher cleanup regressions
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.build-deps.outcome == 'success' }}
+        shell: bash
+        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group windows-cleanup --evidence release/build/final-acceptance/windows-cleanup
 
       - name: Prepare pinned analysis archives
         id: analysis-inputs
@@ -201,7 +210,12 @@ jobs:
         if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
         shell: bash
         run: |
-          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" --workspace-source AgentWorkspace --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json --evidence "$RUNNER_TEMP/final-firmware-suite"
+          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" \
+            --workspace-source AgentWorkspace --installer-source . \
+            --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" \
+            --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json \
+            --official-pack-receipt release/build/final-acceptance/official-pack/official-pack-acquisition.json \
+            --evidence release/build/final-acceptance/firmware-source
 
       - name: Record native stage prerequisites and exact checkout metadata
         if: always()
@@ -231,8 +245,7 @@ jobs:
           path: |
             release/build/analysis-evidence/
             release/build/final-acceptance/
-            ${{ runner.temp }}/final-firmware-suite/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90
 
       # Retain the stripped dSYM/PDB/.debug separately from the shipped bundle,
@@ -319,6 +332,16 @@ jobs:
           "$BYO_BUILD_PYTHON" -m pip install --disable-pip-version-check uv==0.11.20
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           uv sync --project "Firmware MCP New" --locked --all-groups
+
+      - name: Acquire exact official Linux U5 acceptance pack
+        id: official-pack
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" \
+            --acquire-official-pack "$RUNNER_TEMP/byo-official-pack/Keil.STM32U5xx_DFP.3.2.0.pack" \
+            --evidence release/build/final-acceptance/official-pack
 
       - name: Prepare pinned Linux analyzer and GCC runtime inputs
         id: analysis-inputs
@@ -441,7 +464,12 @@ jobs:
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" --workspace-source AgentWorkspace --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json --evidence "$RUNNER_TEMP/final-firmware-suite"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" \
+            --workspace-source AgentWorkspace --installer-source . \
+            --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" \
+            --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json \
+            --official-pack-receipt release/build/final-acceptance/official-pack/official-pack-acquisition.json \
+            --evidence release/build/final-acceptance/firmware-source
 
       - name: Record Linux stage prerequisites and exact checkout metadata
         if: always()
@@ -471,8 +499,7 @@ jobs:
           path: |
             release/build/analysis-evidence/
             release/build/final-acceptance/
-            ${{ runner.temp }}/final-firmware-suite/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 90
 
       # See the note in the build job: retain stripped symbols separately, keyed

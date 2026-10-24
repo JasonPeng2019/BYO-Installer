@@ -1235,14 +1235,26 @@ pub(crate) mod tests {
     #[test]
     fn windows_cleanup_helper_child_process() {
         let Some(target) = std::env::var_os("BYO_TEST_LIVE_CLEANUP_TARGET") else {
+            crate::final_child_receipt!("helper-declaration", serde_json::json!({
+                "child_name": "install::tests::windows_cleanup_helper_child_process",
+                "reason": "No private cleanup target supplied; helper body did not execute"
+            }));
             return;
         };
+        crate::final_child_receipt!("helper-start", serde_json::json!({
+            "child_name": "install::tests::windows_cleanup_helper_child_process",
+            "phase": "live-cleanup-target"
+        }));
         start_windows_launcher_cleanup(std::path::Path::new(&target), Some(std::process::id()))
             .unwrap();
         if let Some(ready) = std::env::var_os("BYO_TEST_LIVE_CLEANUP_READY") {
             std::fs::write(ready, b"ready").unwrap();
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
+        crate::final_child_receipt!("helper-complete", serde_json::json!({
+            "child_name": "install::tests::windows_cleanup_helper_child_process",
+            "phase": "live-cleanup-target"
+        }));
     }
 
     #[cfg(windows)]
@@ -1256,6 +1268,12 @@ pub(crate) mod tests {
         let tombstone = container.join(".byo-uninstall-live-test.exe");
         std::fs::copy(std::env::current_exe().unwrap(), &tombstone).unwrap();
         let ready = container.join("helper-ready");
+        crate::final_child_receipt!("dispatch", serde_json::json!({
+            "outer_test": "install::tests::windows_cleanup_helper_deletes_an_exited_executable",
+            "child_name": "install::tests::windows_cleanup_helper_child_process",
+            "phase": "live-cleanup-target", "executable": tombstone,
+            "argv": ["--exact", "install::tests::windows_cleanup_helper_child_process"]
+        }));
         let mut child = std::process::Command::new(&tombstone)
             .args([
                 "--exact",
@@ -1263,8 +1281,14 @@ pub(crate) mod tests {
             ])
             .env("BYO_TEST_LIVE_CLEANUP_TARGET", &tombstone)
             .env("BYO_TEST_LIVE_CLEANUP_READY", &ready)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .unwrap();
+        crate::final_child_receipt!("child-spawned", serde_json::json!({
+            "child_name": "install::tests::windows_cleanup_helper_child_process",
+            "phase": "live-cleanup-target", "child_pid": child.id()
+        }));
         for _ in 0..100 {
             if ready.is_file() {
                 break;
@@ -1276,8 +1300,13 @@ pub(crate) mod tests {
         assert!(tombstone.is_file());
         std::thread::sleep(std::time::Duration::from_secs(1));
         assert!(tombstone.is_file());
-        let status = child.wait().unwrap();
-        assert!(status.success());
+        let output = child.wait_with_output().unwrap();
+        crate::final_child_receipt!("command-complete", serde_json::json!({
+            "outer_test": "install::tests::windows_cleanup_helper_deletes_an_exited_executable",
+            "child_name": "install::tests::windows_cleanup_helper_child_process",
+            "phase": "live-cleanup-target", "exit": output.status.code(), "success": output.status.success()
+        }), &output.stdout, &output.stderr);
+        assert!(output.status.success());
         for _ in 0..1300 {
             if !tombstone.exists() {
                 break;

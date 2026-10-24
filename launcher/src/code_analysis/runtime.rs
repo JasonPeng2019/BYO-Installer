@@ -550,6 +550,9 @@ pub(super) fn resolve_selected(
                 "license"
             } else if selected_dependencies.contains(name) {
                 "analysis-dependency"
+            } else if selected == "clangd" {
+                // Remaining clangd leaves are restricted to the mapped resource directory above.
+                "analysis-resource"
             } else {
                 "analysis-data"
             };
@@ -635,13 +638,49 @@ pub(super) fn resolve_selected(
 mod tests {
     use super::*;
 
+    const RESOURCE: &str = "analysis/clangd/lib/clang/23/include/__clang_cuda_builtin_vars.h";
+
     struct Fixture {
         root: PathBuf,
         release: ReleaseManifest,
     }
+    impl Fixture {
+        fn save_release(&self) {
+            write_json(&self.root.join("release-manifest.json"), &self.release).unwrap();
+        }
+
+        fn edit_sbom(&mut self, edit: impl FnOnce(&mut Value)) {
+            let path = self.root.join("sbom.cdx.json");
+            let mut sbom: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            edit(&mut sbom);
+            write_json(&path, &sbom).unwrap();
+            let leaf = self
+                .release
+                .files
+                .iter_mut()
+                .find(|leaf| leaf.path == "sbom.cdx.json")
+                .unwrap();
+            leaf.sha256 = crate::manifest::sha256_file(&path).unwrap();
+            leaf.size = fs::metadata(&path).unwrap().len();
+            self.save_release();
+        }
+    }
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    fn fixture_kind(path: &str, executable: bool) -> &'static str {
+        if executable {
+            "analysis-executable"
+        } else if path.contains("/licenses/") || path.ends_with("LICENSE.TXT") {
+            "license"
+        } else if path.starts_with("analysis/clangd/lib/clang/") {
+            "analysis-resource"
+        } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path) {
+            "metadata"
+        } else {
+            "analysis-data"
         }
     }
     fn fixture() -> Fixture {
@@ -699,11 +738,9 @@ mod tests {
             } else {
                 program["resource_dir"] = json!("analysis/clangd/lib/clang/23");
                 fs::create_dir_all(root.join("analysis/clangd/lib/clang/23/include")).unwrap();
-                fs::write(
-                    root.join("analysis/clangd/lib/clang/23/include/stddef.h"),
-                    b"fixture header",
-                )
-                .unwrap();
+                for path in ["analysis/clangd/lib/clang/23/include/stddef.h", RESOURCE] {
+                    fs::write(root.join(path), b"fixture header").unwrap();
+                }
             }
             mapping["programs"][name] = program;
         }
@@ -727,7 +764,8 @@ mod tests {
                     .unwrap()
                     .replace('\\', "/");
                 let reference = format!("byo-analysis-file:{path}");
-                components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}]}));
+                let kind = fixture_kind(&path, path == target.executable(name));
+                components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}],"properties":[{"name":"byo:analysis-owner","value":owner},{"name":"byo:analysis-kind","value":kind}]}));
                 references.push(reference);
             }
             relationships.push(json!({"ref":owner,"dependsOn":references}));
@@ -752,15 +790,7 @@ mod tests {
                 .replace('\\', "/");
             let executable =
                 [target.executable("cppcheck"), target.executable("clangd")].contains(&path);
-            let kind = if executable {
-                "analysis-executable"
-            } else if path.contains("/licenses/") || path.ends_with("LICENSE.TXT") {
-                "license"
-            } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path.as_str()) {
-                "metadata"
-            } else {
-                "analysis-data"
-            };
+            let kind = fixture_kind(&path, executable);
             files.push(ReleaseFile {
                 path,
                 sha256: crate::manifest::sha256_file(entry.path()).unwrap(),
@@ -776,19 +806,273 @@ mod tests {
     }
 
     #[test]
-    fn selected_payload_failure_does_not_invalidate_the_other_analyzer() {
+    fn selected_analyzers_admit_producer_resource_and_data_kinds() {
         let fixture = fixture();
         let budget = Budget::new();
-        resolve_selected(&fixture.root, &fixture.release, &budget, "clangd").unwrap();
-        fs::write(
+        for (selected, path, kind, version, directory) in [
+            (
+                "clangd",
+                RESOURCE,
+                "analysis-resource",
+                "23.1.0",
+                "analysis/clangd/lib/clang/23",
+            ),
+            (
+                "cppcheck",
+                "analysis/cppcheck/cfg/std.cfg",
+                "analysis-data",
+                "2.22.0",
+                "analysis/cppcheck/cfg",
+            ),
+        ] {
+            let leaf = fixture.release.files.iter().find(|f| f.path == path).unwrap();
+            assert_eq!(leaf.kind, kind);
+            assert!(!leaf.executable);
+            let program =
+                resolve_selected(&fixture.root, &fixture.release, &budget, selected).unwrap();
+            assert_eq!(program.version, version);
+            let key = if selected == "clangd" {
+                "resource_dir"
+            } else {
+                "cfg_dir"
+            };
+            assert_eq!(
+                program.fields["data_paths"][key],
+                json!(fixture.root.join(directory))
+            );
+            assert_eq!(
+                program.fields["runtime_manifest_sha256"],
+                crate::manifest::sha256_file(&fixture.root.join("release-manifest.json")).unwrap()
+            );
+            program.recheck(&budget).unwrap();
+        }
+    }
+
+    #[test]
+    fn selected_admission_rejects_data_resource_kind_substitution() {
+        for (selected, path, wrong_kind) in [
+            ("clangd", RESOURCE, "analysis-data"),
+            ("clangd", RESOURCE, "license"),
+            ("cppcheck", "analysis/cppcheck/cfg/std.cfg", "analysis-resource"),
+            (
+                "cppcheck",
+                "analysis/cppcheck/platforms/target.xml",
+                "analysis-resource",
+            ),
+        ] {
+            let mut fixture = fixture();
             fixture
-                .root
-                .join("analysis/clangd/lib/clang/23/include/stddef.h"),
-            b"changed resource",
-        )
-        .unwrap();
-        resolve(&fixture.root, &fixture.release, &budget).unwrap();
-        assert!(resolve_selected(&fixture.root, &fixture.release, &budget, "clangd").is_err());
+                .release
+                .files
+                .iter_mut()
+                .find(|f| f.path == path)
+                .unwrap()
+                .kind = wrong_kind.into();
+            fixture.save_release();
+            let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), selected)
+                .err()
+                .expect("Wrong manifest kind must fail admission");
+            assert_eq!(error.code, "analysis/executable-unavailable");
+            assert!(
+                error.message.contains("Misclassified inventory payload"),
+                "{error:?}"
+            );
+            assert!(error.message.contains(path), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn selected_clangd_rejects_executable_resource_flag() {
+        let mut fixture = fixture();
+        fixture
+            .release
+            .files
+            .iter_mut()
+            .find(|f| f.path == RESOURCE)
+            .unwrap()
+            .executable = true;
+        fixture.save_release();
+        let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), "clangd")
+            .err()
+            .expect("A resource cannot be classified executable");
+        assert_eq!(error.code, "analysis/executable-unavailable");
+        assert!(
+            error.message.contains("Misclassified inventory payload"),
+            "{error:?}"
+        );
+        assert!(error.message.contains(RESOURCE), "{error:?}");
+    }
+
+    #[test]
+    fn selected_admission_rejects_conflicting_sbom_kind() {
+        for (selected, path, wrong_kind) in [
+            ("clangd", RESOURCE, "analysis-data"),
+            ("cppcheck", "analysis/cppcheck/cfg/std.cfg", "analysis-resource"),
+        ] {
+            let mut fixture = fixture();
+            fixture.edit_sbom(|sbom| {
+                let component = sbom["components"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|c| c["name"] == path)
+                    .unwrap();
+                let property = component["properties"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p["name"] == "byo:analysis-kind")
+                    .unwrap();
+                property["value"] = json!(wrong_kind);
+            });
+            let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), selected)
+                .err()
+                .expect("A conflicting SBOM kind must fail admission");
+            assert_eq!(error.code, "analysis/executable-unavailable");
+            assert!(error.message.contains("Analyzer payload SBOM"), "{error:?}");
+            assert!(error.message.contains(path), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn selected_clangd_preserves_optional_sbom_property_semantics() {
+        let mut fixture = fixture();
+        fixture.edit_sbom(|sbom| {
+            let component = sbom["components"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|c| c["name"] == RESOURCE)
+                .unwrap();
+            component.as_object_mut().unwrap().remove("properties");
+        });
+        let budget = Budget::new();
+        resolve_selected(&fixture.root, &fixture.release, &budget, "clangd")
+            .unwrap()
+            .recheck(&budget)
+            .unwrap();
+    }
+
+    #[test]
+    fn selected_clangd_rejects_sbom_resource_hash_or_owner_change() {
+        for corrupt_hash in [false, true] {
+            let mut fixture = fixture();
+            fixture.edit_sbom(|sbom| {
+                let component = sbom["components"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|c| c["name"] == RESOURCE)
+                    .unwrap();
+                if corrupt_hash {
+                    component["hashes"][0]["content"] = json!("0".repeat(64));
+                } else {
+                    let property = component["properties"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|p| p["name"] == "byo:analysis-owner")
+                        .unwrap();
+                    property["value"] = json!("byo-analysis:cppcheck");
+                }
+            });
+            let error = resolve_selected(&fixture.root, &fixture.release, &Budget::new(), "clangd")
+                .err()
+                .expect("A resource's SBOM hash and ownership must agree");
+            assert_eq!(error.code, "analysis/executable-unavailable");
+            assert!(error.message.contains("Analyzer payload SBOM"), "{error:?}");
+            assert!(error.message.contains(RESOURCE), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn selected_clangd_receipt_and_admission_reject_tampered_or_missing_resource() {
+        for missing in [false, true] {
+            let fixture = fixture();
+            let budget = Budget::new();
+            let program =
+                resolve_selected(&fixture.root, &fixture.release, &budget, "clangd").unwrap();
+            if missing {
+                fs::remove_file(fixture.root.join(RESOURCE)).unwrap();
+            } else {
+                // Same length: the hash/identity must detect this change.
+                fs::write(fixture.root.join(RESOURCE), b"changed header").unwrap();
+            }
+            assert_eq!(
+                program.recheck(&budget).unwrap_err().code,
+                "analysis/configuration-changed"
+            );
+            assert!(resolve_selected(&fixture.root, &fixture.release, &budget, "clangd").is_err());
+            resolve(&fixture.root, &fixture.release, &budget).unwrap();
+        }
+    }
+
+    #[test]
+    fn selected_clangd_rejects_unapproved_namespace_even_with_resource_metadata() {
+        for (path, inventoried) in [
+            ("analysis/clangd/lib/clang/23/include/unlisted.h", false),
+            ("analysis/clangd/unapproved.h", true),
+            ("analysis/clangd/lib/clang/22/include/stddef.h", true),
+        ] {
+            let mut fixture = fixture();
+            let budget = Budget::new();
+            let program =
+                resolve_selected(&fixture.root, &fixture.release, &budget, "clangd").unwrap();
+            let full = fixture.root.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, b"unapproved header").unwrap();
+            if inventoried {
+                let digest = crate::manifest::sha256_file(&full).unwrap();
+                fixture.release.files.push(ReleaseFile {
+                    path: path.into(),
+                    sha256: digest.clone(),
+                    size: fs::metadata(&full).unwrap().len(),
+                    kind: "analysis-resource".into(),
+                    executable: false,
+                });
+                fixture.edit_sbom(|sbom| {
+                    let reference = format!("byo-analysis-file:{path}");
+                    sbom["components"].as_array_mut().unwrap().push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":digest}],"properties":[{"name":"byo:analysis-owner","value":"byo-analysis:clangd"},{"name":"byo:analysis-kind","value":"analysis-resource"}]}));
+                    let relationship = sbom["dependencies"]
+                        .as_array_mut()
+                        .unwrap()
+                        .iter_mut()
+                        .find(|d| d["ref"] == "byo-analysis:clangd")
+                        .unwrap();
+                    relationship["dependsOn"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(json!(reference));
+                });
+            }
+            assert_eq!(
+                program.recheck(&budget).unwrap_err().code,
+                "analysis/configuration-changed"
+            );
+            let error = resolve_selected(&fixture.root, &fixture.release, &budget, "clangd")
+                .err()
+                .expect("Resource metadata cannot approve an out-of-mapping or unlisted path");
+            assert_eq!(error.code, "analysis/executable-unavailable");
+            assert!(
+                error.message.contains("unapproved analyzer namespace payload"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_payload_failure_does_not_invalidate_the_other_analyzer() {
+        for (selected, other, path) in [
+            ("clangd", "cppcheck", RESOURCE),
+            ("cppcheck", "clangd", "analysis/cppcheck/cfg/std.cfg"),
+        ] {
+            let fixture = fixture();
+            let budget = Budget::new();
+            resolve_selected(&fixture.root, &fixture.release, &budget, selected).unwrap();
+            fs::write(fixture.root.join(path), b"changed payload").unwrap();
+            resolve_selected(&fixture.root, &fixture.release, &budget, other).unwrap();
+            assert!(resolve_selected(&fixture.root, &fixture.release, &budget, selected).is_err());
+        }
     }
 
     #[test]
