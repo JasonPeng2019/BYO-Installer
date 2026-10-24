@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 
 import final_acceptance_checks as command_observer
+import psutil
 
 
 PROBE = """import os
@@ -45,7 +46,9 @@ if __name__ == "__main__":
 
 class ReleaseLedgerEntrypointContracts(unittest.TestCase):
     def setUp(self):
-        self.assertEqual(os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control")
+        self.assertEqual(
+            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
+        )
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -70,7 +73,9 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         (self.tests / "ledger_selection_probe.py").write_text(PROBE, encoding="utf-8")
         retained = os.environ.get("BYO_FINAL_CHILD_EVIDENCE")
         self.evidence = (
-            Path(retained) / self._testMethodName if retained else self.root / "evidence"
+            Path(retained) / self._testMethodName
+            if retained
+            else self.root / "evidence"
         )
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
         self.marker = self.root / "body.txt"
@@ -114,11 +119,14 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         result = json.loads((self.evidence / "result.json").read_text(encoding="utf-8"))
         start = json.loads((self.evidence / "start.json").read_text(encoding="utf-8"))
         self.assertEqual(
-            start["ledger_source"], str(self.tests / "final_acceptance_suite.py")
+            start["ledger_source"],
+            str((self.tests / "final_acceptance_suite.py").resolve()),
         )
         self.assertEqual(
             start["ledger_sha256"],
-            hashlib.sha256((self.tests / "final_acceptance_suite.py").read_bytes()).hexdigest(),
+            hashlib.sha256(
+                (self.tests / "final_acceptance_suite.py").read_bytes()
+            ).hexdigest(),
         )
         self.assertLessEqual(start["at_monotonic"], result["at_monotonic"])
         return completed, result
@@ -131,7 +139,9 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         self.assertEqual(
             [e["id"] for e in events if e["kind"] == "start"], suite["loaded"]
         )
-        self.assertEqual([e["id"] for e in events if e["kind"] == "stop"], suite["loaded"])
+        self.assertEqual(
+            [e["id"] for e in events if e["kind"] == "stop"], suite["loaded"]
+        )
         self.assertEqual(set(suite["methods"]), set(suite["loaded"]))
         self.assertEqual(suite["testsRun"], len(suite["loaded"]))
         self.assertFalse(suite["fixture_outcomes"])
@@ -178,12 +188,13 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         self.assertEqual(suite["loaded"], [selected])
         self.assertEqual(suite["methods"], {selected: "PASS"})
         self.assertEqual(
-            [e["parent"] for e in events if e["kind"] == "subtest"], [selected, selected]
+            [e["parent"] for e in events if e["kind"] == "subtest"],
+            [selected, selected],
         )
 
     def test_standalone_script_does_not_invent_declared_method_execution(self):
         self.script.write_text(
-            'import os\nfrom pathlib import Path\n'
+            "import os\nfrom pathlib import Path\n"
             'def test_declared_but_unexecuted():\n    raise AssertionError("must not run")\n'
             'if __name__ == "__main__":\n'
             '    Path(os.environ["FR08_BODY_MARKER"]).write_text("command ran", '
@@ -205,7 +216,9 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         self.assertEqual(completed.returncode, 7, completed.stderr)
         self.assertEqual(result["exit"], 7)
         self.assertEqual(result["suites"], [])
-        self.assertEqual(result["evidence_gaps"], ["No actual unittest runner invocation"])
+        self.assertEqual(
+            result["evidence_gaps"], ["No actual unittest runner invocation"]
+        )
 
     def test_zero_exit_without_promised_unittest_runner_is_nonpass(self):
         self.script.write_text("raise SystemExit(0)\n", encoding="utf-8")
@@ -213,10 +226,12 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertEqual(result["exit"], 0)
         self.assertEqual(result["suites"], [])
-        self.assertEqual(result["evidence_gaps"], ["No actual unittest runner invocation"])
+        self.assertEqual(
+            result["evidence_gaps"], ["No actual unittest runner invocation"]
+        )
 
 
-COMMAND_DESCENDANT_PROBE = r'''
+COMMAND_DESCENDANT_PROBE = r"""
 import json
 import os
 from pathlib import Path
@@ -255,20 +270,28 @@ else:
     elif mode != "leak":
         (directory / "release").touch()
         raise SystemExit(child.wait(timeout=10) or (7 if mode == "failure" else 0))
-'''
+"""
 
 
 class CapturedCommandDescendantContracts(unittest.TestCase):
     def setUp(self):
-        self.assertEqual(os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only controls")
+        self.assertEqual(
+            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only controls"
+        )
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        shutil.copyfile(Path(command_observer.__file__), self.root / "final_acceptance_checks.py")
+        shutil.copyfile(
+            Path(command_observer.__file__), self.root / "final_acceptance_checks.py"
+        )
         self.script = self.root / "command_probe.py"
         self.script.write_text(COMMAND_DESCENDANT_PROBE, encoding="utf-8")
         retained = os.environ.get("BYO_FINAL_CHILD_EVIDENCE")
-        self.evidence = Path(retained) / self._testMethodName if retained else self.root / "evidence"
+        self.evidence = (
+            Path(retained) / self._testMethodName
+            if retained
+            else self.root / "evidence"
+        )
         self.evidence.mkdir(parents=True)
         self.addCleanup(self.emergency_fixture_cleanup)
 
@@ -280,7 +303,11 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
             for path in self.evidence.glob("*/" + name):
                 try:
                     data = json.loads(path.read_bytes())
-                    facts = data["identity"] if isinstance(data.get("identity"), dict) else data
+                    facts = (
+                        data["identity"]
+                        if isinstance(data.get("identity"), dict)
+                        else data
+                    )
                     pid, birth = facts["pid"], facts["creation_time"]
                     current = command_observer.command_identity(pid, birth)
                     if command_observer.command_state(current) == "live":
@@ -296,23 +323,41 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         (self.evidence / "fixture-emergency-cleanup.json").write_text(
             json.dumps(actions, indent=2) + "\n", encoding="utf-8"
         )
-        self.assertFalse(actions, "fixture emergency intervention is a failed control: " + repr(actions))
+        self.assertFalse(
+            actions,
+            "fixture emergency intervention is a failed control: " + repr(actions),
+        )
 
     def invoke(self, mode, timeout=15):
         directory = self.evidence / mode
         directory.mkdir()
         command = [sys.executable, "-B", str(self.script), mode, str(directory)]
-        with (directory / "stdout.log").open("wb") as out, (directory / "stderr.log").open("wb") as err:
+        with (
+            (directory / "stdout.log").open("wb") as out,
+            (directory / "stderr.log").open("wb") as err,
+        ):
             code, timed_out, cleanup, gaps = command_observer.run_finite(
                 command, self.root, out, err, timeout
             )
-        record = {"command": command, "cwd": str(self.root), "exit": code,
-                  "timed_out": timed_out, "cleanup": cleanup, "gaps": gaps}
-        (directory / "result.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        record = {
+            "command": command,
+            "cwd": str(self.root),
+            "exit": code,
+            "timed_out": timed_out,
+            "cleanup": cleanup,
+            "gaps": gaps,
+        }
+        (directory / "result.json").write_text(
+            json.dumps(record, indent=2) + "\n", encoding="utf-8"
+        )
         self.assertFalse([gap for gap in gaps if not gap.get("terminal_race")], record)
         ready = json.loads((directory / "child-ready.json").read_bytes())
-        exact = [row for row in cleanup if row["pid"] == ready["pid"]
-                 and row["creation_time"] == ready["creation_time"]]
+        exact = [
+            row
+            for row in cleanup
+            if row["pid"] == ready["pid"]
+            and row["creation_time"] == ready["creation_time"]
+        ]
         self.assertEqual(len(exact), 1, record)
         row = exact[0]
         captured = row["first_capture"]
@@ -332,14 +377,18 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         self.assertEqual(row["timed_out"], timed_out)
         return directory, code, timed_out, row, cleanup
 
-    def test_normal_child_exit_retains_exact_attribution_and_nonzero_command_then_continues(self):
+    def test_normal_child_exit_retains_exact_attribution_and_nonzero_command_then_continues(
+        self,
+    ):
         for mode, expected in (("failure", 7), ("pass", 0)):
             with self.subTest(mode=mode):
                 directory, code, timed_out, row, cleanup = self.invoke(mode)
                 self.assertEqual(code, expected)
                 self.assertFalse(timed_out)
-                self.assertEqual((directory / "child-finished.json").read_text(encoding="utf-8"),
-                                 "normal child exit")
+                self.assertEqual(
+                    (directory / "child-finished.json").read_text(encoding="utf-8"),
+                    "normal child exit",
+                )
                 self.assertTrue(row["normal_wait_completed"])
                 self.assertTrue(row["natural_terminal"])
                 self.assertFalse(row["survived_command"])
@@ -347,7 +396,9 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
                 self.assertTrue(all(item["cleanup"] == "gone" for item in cleanup))
                 self.assertTrue(all(item["natural_terminal"] for item in cleanup))
 
-    def test_helper_shaped_leak_retains_zero_exit_failed_judgment_and_emergency_facts(self):
+    def test_helper_shaped_leak_retains_zero_exit_failed_judgment_and_emergency_facts(
+        self,
+    ):
         directory, code, timed_out, row, cleanup = self.invoke("leak")
         self.assertEqual(code, 0)
         self.assertFalse(timed_out)
@@ -355,14 +406,31 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         self.assertTrue(row["survived_command"])
         self.assertEqual(row["final_state"], "live")
         self.assertFalse(row["natural_terminal"])
-        self.assertIn("multiprocessing.resource_tracker", row["first_capture"]["identity"]["cmdline"])
+        self.assertIn(
+            "multiprocessing.resource_tracker",
+            row["first_capture"]["identity"]["cmdline"],
+        )
         self.assertEqual(row["intervention"]["kind"], "post-command-emergency-kill")
-        self.assertLessEqual(row["judgment_monotonic"], row["intervention"]["at_monotonic"])
-        self.assertEqual(command_observer.command_state(row["intervention"]["before"]), "live")
-        self.assertTrue(all(command_observer.command_state(item["after_cleanup"]) in ("gone", "terminal")
-                            for item in cleanup))
+        self.assertLessEqual(
+            row["judgment_monotonic"], row["intervention"]["at_monotonic"]
+        )
+        self.assertEqual(
+            command_observer.command_state(row["intervention"]["before"]), "live"
+        )
+        self.assertTrue(
+            all(
+                command_observer.command_state(item["after_cleanup"])
+                in ("gone", "terminal")
+                for item in cleanup
+            )
+        )
         # This is the release command's actual final aggregate condition.
-        self.assertTrue(any(item["survived_command"] or item["cleanup"] != "gone" for item in cleanup))
+        self.assertTrue(
+            any(
+                item["survived_command"] or item["cleanup"] != "gone"
+                for item in cleanup
+            )
+        )
 
     def test_timeout_preserves_intervention_and_never_claims_normal_finalization(self):
         _, code, timed_out, row, cleanup = self.invoke("timeout", timeout=2)
@@ -371,30 +439,154 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         self.assertFalse(row["normal_wait_completed"])
         self.assertFalse(row["natural_terminal"])
         self.assertEqual(row["timeout_intervention"]["kind"], "timeout-command.kill")
-        self.assertTrue(all(command_observer.command_state(item["after_cleanup"]) in ("gone", "terminal")
-                            for item in cleanup))
+        self.assertTrue(
+            all(
+                command_observer.command_state(item["after_cleanup"])
+                in ("gone", "terminal")
+                for item in cleanup
+            )
+        )
+
+    def test_unavailable_diagnostic_metadata_keeps_real_natural_exit_and_failure_code(
+        self,
+    ):
+        actual = command_observer.command_identity
+
+        def missing_diagnostics(pid, birth=None):
+            facts = actual(pid, birth)
+            if facts.get("identity") in ("observed", "same_birth"):
+                facts.update(
+                    exe={"unavailable": "controlled metadata fault"},
+                    cmdline={"unavailable": "controlled metadata fault"},
+                )
+            return facts
+
+        for mode, expected in (("pass", 0), ("failure", 7)):
+            with self.subTest(mode=mode):
+                directory = self.evidence / (mode + "-metadata")
+                directory.mkdir()
+                with (
+                    mock.patch.object(
+                        command_observer, "command_identity", missing_diagnostics
+                    ),
+                    (directory / "stdout.log").open("wb") as out,
+                    (directory / "stderr.log").open("wb") as err,
+                ):
+                    code, timed_out, cleanup, gaps = command_observer.run_finite(
+                        [sys.executable, "-B", str(self.script), mode, str(directory)],
+                        self.root,
+                        out,
+                        err,
+                        15,
+                    )
+                record = {
+                    "exit": code,
+                    "timed_out": timed_out,
+                    "cleanup": cleanup,
+                    "gaps": gaps,
+                }
+                (directory / "result.json").write_text(
+                    json.dumps(record, indent=2), encoding="utf-8"
+                )
+                self.assertEqual(code, expected)
+                self.assertFalse(timed_out)
+                self.assertTrue(cleanup)
+                self.assertTrue(any(row.get("evidence_gaps") for row in cleanup))
+                self.assertFalse(
+                    command_observer.command_observation_failed(cleanup, gaps), record
+                )
+                self.assertTrue(all(row["natural_terminal"] for row in cleanup))
+
+    def test_unreadable_zombie_birth_is_unavailable_and_never_absence(self):
+        with mock.patch(
+            "psutil.Process", side_effect=psutil.ZombieProcess(os.getpid())
+        ):
+            facts = command_observer.command_identity(os.getpid(), 1.0)
+        self.assertEqual(facts["identity"], "unavailable")
+        self.assertEqual(facts["error"], "ZombieProcess")
+        self.assertEqual(command_observer.command_state(facts), "unknown")
+
+    def test_old_birth_retirement_requires_complete_prior_witness_and_never_owns_replacement(
+        self,
+    ):
+        original = command_observer.command_identity(os.getpid())
+        birth = original["creation_time"]
+        exact = command_observer.command_identity(os.getpid(), birth)
+        # A directed record-level fault control, not a claim of observed PID reuse.
+        changed = {**exact, "identity": "reused", "creation_time": birth + 1}
+        capture = {"first_capture": {"identity": exact}}
+        with mock.patch(
+            "psutil.Process.kill", side_effect=AssertionError("replacement signal")
+        ):
+            self.assertEqual(command_observer.command_state(changed), "unknown")
+            self.assertEqual(
+                command_observer.captured_identity_state(changed, capture),
+                "retired_exact_identity",
+            )
+            self.assertEqual(
+                command_observer.captured_identity_state(
+                    changed, {"first_capture": {"identity": {}}}
+                ),
+                "unknown",
+            )
+            self.assertEqual(
+                command_observer.captured_identity_state(
+                    {**changed, "creation_time": float("nan")}, capture
+                ),
+                "unknown",
+            )
 
     def test_identity_queries_cannot_reap_signal_or_accept_reuse_as_absence(self):
         identity = command_observer.command_identity(os.getpid())
         with (
-            mock.patch("psutil.Process.wait", side_effect=AssertionError("observer wait")),
-            mock.patch("psutil.Process.kill", side_effect=AssertionError("observer kill")),
-            mock.patch("psutil.Process.terminate", side_effect=AssertionError("observer terminate")),
-            mock.patch("os.waitpid", create=True, side_effect=AssertionError("observer reap")),
+            mock.patch(
+                "psutil.Process.wait", side_effect=AssertionError("observer wait")
+            ),
+            mock.patch(
+                "psutil.Process.kill", side_effect=AssertionError("observer kill")
+            ),
+            mock.patch(
+                "psutil.Process.terminate",
+                side_effect=AssertionError("observer terminate"),
+            ),
+            mock.patch(
+                "os.waitpid", create=True, side_effect=AssertionError("observer reap")
+            ),
         ):
-            exact = command_observer.command_identity(os.getpid(), identity["creation_time"])
-            reused = command_observer.command_identity(os.getpid(), identity["creation_time"] + 1)
+            exact = command_observer.command_identity(
+                os.getpid(), identity["creation_time"]
+            )
+            reused = command_observer.command_identity(
+                os.getpid(), identity["creation_time"] + 1
+            )
             owned, gaps = {}, []
-            command_observer.capture_command_descendants(os.getpid(), identity["creation_time"], owned, gaps)
-        record = {"exact": exact, "reused": reused, "captured": list(owned.values()), "gaps": gaps}
-        (self.evidence / "identities.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+            command_observer.capture_command_descendants(
+                os.getpid(), identity["creation_time"], owned, gaps
+            )
+        record = {
+            "exact": exact,
+            "reused": reused,
+            "captured": list(owned.values()),
+            "gaps": gaps,
+        }
+        (self.evidence / "identities.json").write_text(
+            json.dumps(record, indent=2), encoding="utf-8"
+        )
         self.assertEqual(command_observer.command_state(exact), "live")
         self.assertEqual(command_observer.command_state(reused), "unknown")
-        self.assertEqual(command_observer.command_state({"identity": "unavailable"}), "unknown")
-        self.assertEqual(command_observer.command_state({"identity": "missing"}), "unknown")
-        self.assertEqual(command_observer.command_state({"identity": "same_birth", "status": "running"}), "unknown")
+        self.assertEqual(
+            command_observer.command_state({"identity": "unavailable"}), "unknown"
+        )
+        self.assertEqual(
+            command_observer.command_state({"identity": "missing"}), "unknown"
+        )
+        self.assertEqual(
+            command_observer.command_state(
+                {"identity": "same_birth", "status": "running"}
+            ),
+            "unknown",
+        )
         self.assertFalse(gaps, record)
-
 
 
 if __name__ == "__main__":

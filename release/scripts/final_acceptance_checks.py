@@ -134,7 +134,11 @@ def command_identity(pid, birth=None):
         actual = process.create_time()
         facts["creation_time"] = actual
         if birth is not None and actual != birth:
-            return {**facts, "identity": "reused", "gap": "PID birth changed; no attribution"}
+            return {
+                **facts,
+                "identity": "reused",
+                "gap": "PID birth changed; no attribution",
+            }
         facts["identity"] = "observed" if birth is None else "same_birth"
         for name in ("ppid", "cmdline", "exe", "status"):
             try:
@@ -144,8 +148,12 @@ def command_identity(pid, birth=None):
         facts["birth_after_queries"] = psutil.Process(pid).create_time()
         if facts["birth_after_queries"] != actual:
             facts["identity"] = "changed_during_observation"
+    except psutil.ZombieProcess as exc:
+        facts.update(identity="unavailable", error=type(exc).__name__, detail=str(exc))
     except psutil.NoSuchProcess:
-        facts["identity"] = "missing" if "creation_time" not in facts else "gone_during_observation"
+        facts["identity"] = (
+            "missing" if "creation_time" not in facts else "gone_during_observation"
+        )
     except (OSError, psutil.Error) as exc:
         facts.update(identity="unavailable", error=type(exc).__name__, detail=str(exc))
     return facts
@@ -170,14 +178,69 @@ def command_state(facts):
     return "unknown"
 
 
+def captured_identity_state(facts, capture):
+    """Retirement of an old witnessed birth is distinct from the current PID owner."""
+    state = command_state(facts)
+    expected, actual = facts.get("expected_creation_time"), facts.get("creation_time")
+    witnessed = any(
+        item.get("identity", {}).get("identity") == "same_birth"
+        and item["identity"].get("creation_time") == expected
+        and item["identity"].get("birth_after_queries") == expected
+        for item in (capture["first_capture"], capture.get("last_capture", {}))
+    )
+    if (
+        witnessed
+        and facts.get("identity") == "reused"
+        and type(expected) in (int, float)
+        and math.isfinite(expected)
+        and expected > 0
+        and type(actual) in (int, float)
+        and math.isfinite(actual)
+        and actual > 0
+        and expected != actual
+    ):
+        return "retired_exact_identity"
+    return state
+
+
+def terminal_root_race(facts, birth):
+    return (
+        type(birth) in (int, float)
+        and math.isfinite(birth)
+        and birth > 0
+        and (
+            facts.get("identity") == "missing"
+            or (
+                facts.get("identity") == "gone_during_observation"
+                and facts.get("creation_time") == birth
+            )
+        )
+    )
+
+
+def command_observation_failed(cleanup, observations):
+    # Diagnostic image/argv gaps remain raw qualifications. Actual ownership or
+    # lifecycle gaps, intervention and survivors still prevent successful proof.
+    return any(
+        item.get("survived_command")
+        or not item.get("natural_terminal")
+        or item.get("cleanup") != "gone"
+        for item in cleanup
+    ) or any(not item.get("terminal_race") for item in observations)
+
+
 def capture_command_descendants(pid, birth, owned, observations):
     """Contemporaneous tree/parent/argv/image facts, with no cleanup authority."""
     import psutil
 
     root = command_identity(pid, birth)
-    if root.get("identity") == "missing":
+    if terminal_root_race(root, birth):
         observations.append(
-            {"boundary": "during command", "root": root, "terminal_race": birth is not None}
+            {
+                "boundary": "during command",
+                "root": root,
+                "terminal_race": birth is not None,
+            }
         )
         return  # The owner's actual wait decides exit; no later PID attribution.
     if birth is None or root.get("identity") != "same_birth":
@@ -205,7 +268,9 @@ def capture_command_descendants(pid, birth, owned, observations):
                     "role": "unknown; no exact functional-role receipt",
                     "role_gap": "No role inference from argv, image or a later PID lookup",
                 }
-                entry = owned.setdefault((process.pid, child_birth), {"first_capture": capture})
+                entry = owned.setdefault(
+                    (process.pid, child_birth), {"first_capture": capture}
+                )
                 entry["last_capture"] = capture
                 gaps = []
                 if facts.get("identity") != "same_birth":
@@ -219,15 +284,32 @@ def capture_command_descendants(pid, birth, owned, observations):
                     entry.setdefault("evidence_gaps", []).extend(gaps)
             except (OSError, psutil.Error) as exc:
                 observations.append(
-                    {"pid": process.pid, "boundary": "during command",
-                     "error": type(exc).__name__, "detail": str(exc)}
+                    {
+                        "pid": process.pid,
+                        "boundary": "during command",
+                        "error": type(exc).__name__,
+                        "detail": str(exc),
+                    }
                 )
         after = command_identity(pid, birth)
-        if after.get("identity") not in ("same_birth", "missing"):
-            observations.append({"boundary": "after tree capture", "root": after})
+        if after.get("identity") != "same_birth":
+            observations.append(
+                {
+                    "boundary": "after tree capture",
+                    "root": after,
+                    "terminal_race": terminal_root_race(after, birth),
+                }
+            )
     except (OSError, psutil.Error) as exc:
+        after = command_identity(pid, birth)
         observations.append(
-            {"boundary": "during command", "error": type(exc).__name__, "detail": str(exc)}
+            {
+                "boundary": "during command",
+                "error": type(exc).__name__,
+                "detail": str(exc),
+                "root_after_error": after,
+                "terminal_race": terminal_root_race(after, birth),
+            }
         )
 
 
@@ -239,7 +321,9 @@ def run_finite(command, cwd, out, err, timeout):
     root = command_identity(child.pid)
     root_birth = root.get("creation_time")
     if root.get("identity") != "observed":
-        observations.append({"gap": "Root identity unavailable at dispatch", "identity": root})
+        observations.append(
+            {"gap": "Root identity unavailable at dispatch", "identity": root}
+        )
     deadline = time.monotonic() + timeout
     timed_out = False
     timeout_intervention = None
@@ -262,7 +346,9 @@ def run_finite(command, cwd, out, err, timeout):
     command_exited = time.monotonic()
     immediate = {key: command_identity(*key) for key in owned}
     finalization_gaps = {
-        key: facts for key, facts in immediate.items() if command_state(facts) == "unknown"
+        key: facts
+        for key, facts in immediate.items()
+        if command_state(facts) == "unknown"
     }
     finalization_deadline = command_exited + 5.0
     while True:
@@ -272,7 +358,11 @@ def run_finite(command, cwd, out, err, timeout):
                 finalization_gaps.setdefault(key, facts)
         if (
             timed_out
-            or all(command_state(facts) in ("gone", "terminal") for facts in final.values())
+            or all(
+                captured_identity_state(facts, owned[key])
+                in ("gone", "terminal", "retired_exact_identity")
+                for key, facts in final.items()
+            )
             or time.monotonic() >= finalization_deadline
         ):
             break
@@ -281,7 +371,7 @@ def run_finite(command, cwd, out, err, timeout):
     cleanup = []
     for (pid, birth), capture in reversed(list(owned.items())):
         facts = final[(pid, birth)]
-        state = command_state(facts)
+        state = captured_identity_state(facts, capture)
         record = {
             "pid": pid,
             "creation_time": birth,
@@ -292,6 +382,9 @@ def run_finite(command, cwd, out, err, timeout):
             "judgment_monotonic": judgment,
             "survived_command": state == "live",
             "final_state": state,
+            "retirement_witness": "Previously witnessed old birth retired; replacement PID remains unknown and unsignalled"
+            if state == "retired_exact_identity"
+            else None,
             "command_exit": child.returncode,
             "timed_out": timed_out,
             "timeout_intervention": timeout_intervention,
@@ -302,11 +395,15 @@ def run_finite(command, cwd, out, err, timeout):
         cleanup.append(record)
         if (pid, birth) in finalization_gaps:
             record.setdefault("evidence_gaps", []).append(
-                {"boundary": "passive post-command observation",
-                 "identity": finalization_gaps[(pid, birth)]}
+                {
+                    "boundary": "passive post-command observation",
+                    "identity": finalization_gaps[(pid, birth)],
+                }
             )
         if state == "unknown":
-            record.setdefault("evidence_gaps", []).append("Unknown/reused/unavailable final identity")
+            record.setdefault("evidence_gaps", []).append(
+                "Unknown/reused/unavailable final identity"
+            )
         try:
             if state == "live":
                 # The final failed judgment above is immutable. Recheck a fresh
@@ -323,7 +420,7 @@ def run_finite(command, cwd, out, err, timeout):
                 }
                 process.kill()
                 process.wait(timeout=15)
-            if state in ("gone", "terminal"):
+            if state in ("gone", "terminal", "retired_exact_identity"):
                 record["cleanup"] = "gone"
         except psutil.NoSuchProcess:
             pass
@@ -331,13 +428,16 @@ def run_finite(command, cwd, out, err, timeout):
             record["error"] = {"type": type(exc).__name__, "message": str(exc)}
         finally:
             record["after_cleanup"] = command_identity(pid, birth)
-            if command_state(record["after_cleanup"]) in ("gone", "terminal"):
+            if captured_identity_state(record["after_cleanup"], capture) in (
+                "gone",
+                "terminal",
+                "retired_exact_identity",
+            ):
                 record["cleanup"] = "gone"
             record["natural_terminal"] = (
                 not timed_out
-                and state in ("gone", "terminal")
+                and state in ("gone", "terminal", "retired_exact_identity")
                 and record["intervention"] is None
-                and (pid, birth) not in finalization_gaps
             )
     return child.returncode, timed_out, cleanup, observations
 
@@ -669,6 +769,7 @@ def rust_ledger(stdout, inventory=False):
 
 def child_receipts(directory):
     records, errors = [], []
+    images = {}
     for path in sorted(directory.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -677,6 +778,33 @@ def child_receipts(directory):
                 "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                 **data,
             }
+            executable = Path(data["executable"]).resolve()
+            image = executable.stat()
+            image_key = (str(executable), image.st_size, image.st_mtime_ns)
+            if data.get("executable_hash_method") == "collector-after-command":
+                if (
+                    data["executable_bytes"],
+                    int(data["executable_modified_unix_nanos"]),
+                ) != (image.st_size, image.st_mtime_ns):
+                    raise RuntimeError(
+                        "Child executable image changed before collection: "
+                        + str(executable)
+                    )
+            if image_key not in images:
+                digest = hashlib.sha256()
+                with executable.open("rb") as source:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                after = executable.stat()
+                if (after.st_size, after.st_mtime_ns) != image_key[1:]:
+                    raise RuntimeError("Child executable changed during hashing")
+                images[image_key] = digest.hexdigest()
+            if data.get("executable_sha256") not in (None, images[image_key]):
+                raise RuntimeError("Child executable digest mismatch")
+            record["collected_executable_sha256"] = images[image_key]
+            record["executable_hash_qualification"] = (
+                "Actual image hashed after command; raw child size/mtime and stable hash-time image checked. No synthetic child completion."
+            )
             for stream in ("stdout", "stderr"):
                 source = Path(data[stream])
                 if (
@@ -928,11 +1056,7 @@ def main():
                     command, cwd, out, err, args.timeout
                 )
                 state = "TIMEOUT" if timed_out else ("PASS" if code == 0 else "FAIL")
-                if any(
-                    item.get("survived_command") or item.get("cleanup") != "gone"
-                    or item.get("evidence_gaps")
-                    for item in cleanup
-                ) or any(not item.get("terminal_race") for item in observation_errors):
+                if command_observation_failed(cleanup, observation_errors):
                     state = "ERROR" if state == "PASS" else state
                 reason = None
             except subprocess.TimeoutExpired as exc:

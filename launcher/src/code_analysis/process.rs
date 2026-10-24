@@ -32,11 +32,19 @@ macro_rules! final_child_receipt {
             std::fs::write(&stdout, out).unwrap();
             std::fs::write(&stderr, err).unwrap();
             let executable = std::env::current_exe().unwrap();
+            let image = std::fs::metadata(&executable).unwrap();
+            let modified = image.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos().to_string();
             let record = serde_json::json!({
                 "schema": "fr05-rust-child/v1", "kind": $kind,
                 "pid": std::process::id(), "at_unix_nanos": now,
                 "executable": executable,
-                "executable_sha256": hex::encode(sha2::Sha256::digest(std::fs::read(&executable).unwrap())),
+                // Hashing the large debug image inside each timed fixture can
+                // consume its behavioral deadline. The collector hashes once
+                // after the command, checks these image facts, and preserves
+                // this raw pending-hash receipt alongside its measured result.
+                "executable_sha256": null,
+                "executable_hash_method": "collector-after-command",
+                "executable_bytes": image.len(), "executable_modified_unix_nanos": modified,
                 "details": $details, "stdout": stdout, "stderr": stderr,
                 "stdout_sha256": hex::encode(sha2::Sha256::digest(out)),
                 "stderr_sha256": hex::encode(sha2::Sha256::digest(err)),
