@@ -1093,8 +1093,22 @@ fn review_legacy_archive_error_before_directory_recreation_restores_originals() 
 #[test]
 fn legacy_archive_recovery_subprocess() {
     let Some(case_file) = std::env::var_os("BYO_B05_LEGACY_RECOVERY_CASE") else {
+        crate::final_child_receipt!(
+            "helper-declaration",
+            serde_json::json!({
+                "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
+                "reason": "No private case supplied; helper body did not execute"
+            })
+        );
         return;
     };
+    crate::final_child_receipt!(
+        "helper-start",
+        serde_json::json!({
+            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
+            "phase": std::env::var("BYO_FINAL_CHILD_PHASE").ok(), "case_file": PathBuf::from(&case_file)
+        })
+    );
     let case: serde_json::Value = parse_project_json(&std::fs::read(case_file).unwrap()).unwrap();
     let project = PathBuf::from(case["project"].as_str().unwrap());
     let paths: ProductPaths = serde_json::from_value(case["paths"].clone()).unwrap();
@@ -1124,6 +1138,11 @@ fn legacy_archive_recovery_subprocess() {
                         write_json(&paths.state.join("projects.json"), &registry)?;
                         // Abrupt process exit bypasses the caught-error rollback
                         // and all Rust destructors, leaving the real durable state.
+                        crate::final_child_receipt!("interruption-boundary", serde_json::json!({
+                            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
+                            "phase": "archive", "expected_exit": 73,
+                            "boundary": "legacy-archived; real pending journal retained"
+                        }));
                         std::process::exit(73);
                     }
                     Ok(())
@@ -1139,6 +1158,13 @@ fn legacy_archive_recovery_subprocess() {
         }
         phase => panic!("unexpected legacy recovery fixture phase {phase}"),
     }
+    crate::final_child_receipt!(
+        "helper-complete",
+        serde_json::json!({
+            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
+            "phase": std::env::var("BYO_FINAL_CHILD_PHASE").ok()
+        })
+    );
 }
 
 #[cfg(feature = "development")]
@@ -1177,20 +1203,38 @@ fn legacy_archive_interruption_recovers_real_journal_in_fresh_process() {
         &serde_json::json!({"project":project, "paths":paths, "other":other}),
     )
     .unwrap();
-    let child = |phase: &str| {
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
-                "--nocapture",
-                "--test-threads=1",
-            ])
+    let child = |phase: &str, observation: &str| {
+        let argv = [
+            "--exact",
+            "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
+            "--nocapture",
+            "--test-threads=1",
+        ];
+        let details = serde_json::json!({
+            "outer_test": "project::b05_lifecycle_tests::legacy_archive_interruption_recovers_real_journal_in_fresh_process",
+            "child_name": argv[1], "argv": argv, "phase": observation,
+            "helper_phase": phase, "case_file": case_file
+        });
+        crate::final_child_receipt!("dispatch", &details);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(argv)
             .env("BYO_B05_LEGACY_RECOVERY_CASE", &case_file)
             .env("BYO_B05_LEGACY_RECOVERY_PHASE", phase)
+            .env("BYO_FINAL_CHILD_PHASE", observation)
             .output()
-            .unwrap()
+            .unwrap();
+        let mut completed = details;
+        completed["exit"] = serde_json::json!(output.status.code());
+        completed["success"] = serde_json::json!(output.status.success());
+        crate::final_child_receipt!(
+            "command-complete",
+            completed,
+            &output.stdout,
+            &output.stderr
+        );
+        output
     };
-    let interrupted = child("archive");
+    let interrupted = child("archive", "archive");
     assert_eq!(
         interrupted.status.code(),
         Some(73),
@@ -1222,7 +1266,7 @@ fn legacy_archive_interruption_recovers_real_journal_in_fresh_process() {
     // A later file at the missing directory's path must never be mistaken for
     // definite absence. Refusal retains both it and the real pending archive.
     std::fs::write(project.join(".agent-workspace"), b"later user text\n").unwrap();
-    let refused = child("recover");
+    let refused = child("recover", "refusal");
     assert!(!refused.status.success());
     assert_eq!(
         std::fs::read(project.join(".agent-workspace")).unwrap(),
@@ -1231,8 +1275,8 @@ fn legacy_archive_interruption_recovers_real_journal_in_fresh_process() {
     assert!(pending.is_file());
     assert!(archive.is_dir());
     std::fs::remove_file(project.join(".agent-workspace")).unwrap();
-    for _ in 0..2 {
-        let recovered = child("recover");
+    for attempt in 0..2 {
+        let recovered = child("recover", &format!("recovery-{}", attempt + 1));
         assert!(
             recovered.status.success(),
             "{}",

@@ -6,6 +6,8 @@ use super::*;
 use crate::manifest::{ReleaseFile, ReleaseManifest};
 use std::sync::OnceLock;
 
+const RESOURCE: &str = "analysis/clangd/lib/clang/23/include/__clang_cuda_builtin_vars.h";
+
 // argv[0] selects the role; FAIL keeps both output streams useful.
 const FAKE: &str = r#"
 fn main() {
@@ -78,6 +80,20 @@ impl Drop for Fixture {
     }
 }
 
+fn fixture_kind(path: &str, executable: bool) -> &'static str {
+    if executable {
+        "analysis-executable"
+    } else if path.contains("/licenses/") || path.ends_with("LICENSE.TXT") {
+        "license"
+    } else if path.starts_with("analysis/clangd/lib/clang/") {
+        "analysis-resource"
+    } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path) {
+        "metadata"
+    } else {
+        "analysis-data"
+    }
+}
+
 /// Minimal complete inventoried runtime, following runtime.rs's fixture.
 fn fixture(cppcheck_fails: bool, clangd_fails: bool) -> Fixture {
     let root = std::env::temp_dir().join(format!(
@@ -134,11 +150,9 @@ fn fixture(cppcheck_fails: bool, clangd_fails: bool) -> Fixture {
         } else {
             program["resource_dir"] = json!("analysis/clangd/lib/clang/23");
             fs::create_dir_all(root.join("analysis/clangd/lib/clang/23/include")).unwrap();
-            fs::write(
-                root.join("analysis/clangd/lib/clang/23/include/stddef.h"),
-                b"fixture header",
-            )
-            .unwrap();
+            for path in ["analysis/clangd/lib/clang/23/include/stddef.h", RESOURCE] {
+                fs::write(root.join(path), b"fixture header").unwrap();
+            }
         }
         mapping["programs"][name] = program;
     }
@@ -163,7 +177,8 @@ fn fixture(cppcheck_fails: bool, clangd_fails: bool) -> Fixture {
             }
             let path = relative(entry.path());
             let reference = format!("byo-analysis-file:{path}");
-            components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}]}));
+            let kind = fixture_kind(&path, path == target.executable(name));
+            components.push(json!({"type":"file","bom-ref":reference,"name":path,"hashes":[{"alg":"SHA-256","content":crate::manifest::sha256_file(entry.path()).unwrap()}],"properties":[{"name":"byo:analysis-owner","value":owner},{"name":"byo:analysis-kind","value":kind}]}));
             references.push(reference);
         }
         relationships.push(json!({"ref":owner,"dependsOn":references}));
@@ -182,15 +197,7 @@ fn fixture(cppcheck_fails: bool, clangd_fails: bool) -> Fixture {
         let path = relative(entry.path());
         let executable =
             [target.executable("cppcheck"), target.executable("clangd")].contains(&path);
-        let kind = if executable {
-            "analysis-executable"
-        } else if path.contains("/licenses/") || path.ends_with("LICENSE.TXT") {
-            "license"
-        } else if ["analysis/runtime.json", "sbom.cdx.json"].contains(&path.as_str()) {
-            "metadata"
-        } else {
-            "analysis-data"
-        };
+        let kind = fixture_kind(&path, executable);
         files.push(ReleaseFile {
             path,
             sha256: crate::manifest::sha256_file(entry.path()).unwrap(),
@@ -282,11 +289,49 @@ fn assert_unavailable(fixture: &Fixture, error: &Problem, phases: &[(&str, i64)]
     assert_history(receipts(&doctor["owned_processes"]), fixture, phases);
 }
 
+fn assert_resource_and_data_inventory(status: &Value, fixture: &Fixture) {
+    assert_eq!(
+        status["runtime_manifest_sha256"],
+        crate::manifest::sha256_file(&fixture.root.join("release-manifest.json")).unwrap()
+    );
+    assert_eq!(
+        status["analysis_mapping_sha256"],
+        crate::manifest::sha256_file(&fixture.root.join("analysis/runtime.json")).unwrap()
+    );
+    for (name, path, kind) in [
+        ("clangd", RESOURCE, "analysis-resource"),
+        ("cppcheck", "analysis/cppcheck/cfg/std.cfg", "analysis-data"),
+        (
+            "cppcheck",
+            "analysis/cppcheck/platforms/target.xml",
+            "analysis-data",
+        ),
+    ] {
+        let leaf = status["programs"][name]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|leaf| leaf["path"] == path)
+            .unwrap();
+        assert_eq!(leaf["kind"], kind, "{status}");
+        assert_eq!(leaf["executable"], false, "{status}");
+        assert_eq!(
+            leaf["sha256"],
+            crate::manifest::sha256_file(&fixture.root.join(path)).unwrap()
+        );
+    }
+    assert_eq!(
+        status["programs"]["clangd"]["data_paths"]["resource_dir"],
+        json!(fixture.root.join("analysis/clangd/lib/clang/23"))
+    );
+}
+
 #[test]
 fn ready_status_retains_cppcheck_and_clangd_probe_receipts() {
     let fixture = fixture(false, false);
     let status = runtime_status(&fixture.root, &fixture.release).unwrap();
     assert_eq!(status["status"], "ready", "{status}");
+    assert_resource_and_data_inventory(&status, &fixture);
     let all = receipts(&status["owned_processes"]);
     assert_history(all, &fixture, &[("version", 0), ("clangd-version", 0)]);
     let cppcheck = &status["programs"]["cppcheck"]["version_probe"];
@@ -308,6 +353,7 @@ fn ready_status_retains_cppcheck_and_clangd_probe_receipts() {
 
     let doctor = crate::managed_analysis_status(&fixture.root, &fixture.release).unwrap();
     assert_eq!(doctor["status"], "ready", "{doctor}");
+    assert_resource_and_data_inventory(&doctor, &fixture);
     let forwarded = receipts(&doctor["owned_processes"]);
     assert_history(
         forwarded,
@@ -324,6 +370,81 @@ fn ready_status_retains_cppcheck_and_clangd_probe_receipts() {
         json!(&forwarded[2..]),
         "{doctor}"
     );
+}
+
+#[test]
+fn resource_kind_mismatch_reaches_status_and_doctor_without_probe_receipts() {
+    for sbom_mismatch in [false, true] {
+        let mut fixture = fixture(false, false);
+        if sbom_mismatch {
+            let path = fixture.root.join("sbom.cdx.json");
+            let mut sbom: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            let component = sbom["components"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|c| c["name"] == RESOURCE)
+                .unwrap();
+            let property = component["properties"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find(|p| p["name"] == "byo:analysis-kind")
+                .unwrap();
+            property["value"] = json!("analysis-data");
+            write_json(&path, &sbom).unwrap();
+            let leaf = fixture
+                .release
+                .files
+                .iter_mut()
+                .find(|leaf| leaf.path == "sbom.cdx.json")
+                .unwrap();
+            leaf.sha256 = crate::manifest::sha256_file(&path).unwrap();
+            leaf.size = fs::metadata(&path).unwrap().len();
+        } else {
+            fixture
+                .release
+                .files
+                .iter_mut()
+                .find(|f| f.path == RESOURCE)
+                .unwrap()
+                .kind = "analysis-data".into();
+        }
+        write_json(
+            &fixture.root.join("release-manifest.json"),
+            &fixture.release,
+        )
+        .unwrap();
+        let error = runtime_status(&fixture.root, &fixture.release).unwrap_err();
+        assert_eq!(error.code, "analysis/executable-unavailable", "{error:?}");
+        assert!(error.message.contains(RESOURCE), "{error:?}");
+        assert!(
+            error.message.contains(if sbom_mismatch {
+                "Analyzer payload SBOM"
+            } else {
+                "Misclassified inventory payload"
+            }),
+            "{error:?}"
+        );
+        assert!(receipts(&error.details["owned_processes"]).is_empty());
+        assert_unavailable(&fixture, &error, &[]);
+    }
+}
+
+#[test]
+fn resource_tamper_or_loss_reaches_status_and_doctor_without_probe_receipts() {
+    for missing in [false, true] {
+        let fixture = fixture(false, false);
+        if missing {
+            fs::remove_file(fixture.root.join(RESOURCE)).unwrap();
+        } else {
+            fs::write(fixture.root.join(RESOURCE), b"changed header").unwrap();
+        }
+        let error = runtime_status(&fixture.root, &fixture.release).unwrap_err();
+        assert_eq!(error.code, "analysis/executable-unavailable", "{error:?}");
+        assert!(receipts(&error.details["owned_processes"]).is_empty());
+        assert_unavailable(&fixture, &error, &[]);
+    }
 }
 
 #[test]

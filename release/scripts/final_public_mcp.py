@@ -283,6 +283,10 @@ def main():
     )
 
     def collect():
+        source_bytes = {
+            "elf": (inputs / "program.elf").read_bytes(),
+            "map": (inputs / "program.map").read_bytes(),
+        }
         reply = tool(
             "collect_build_artifacts",
             {
@@ -293,12 +297,42 @@ def main():
             },
         )
         assert reply["status"] == "artifacts_collected", reply
-        for role, expected in (
-            ("elf", inputs / "program.elf"),
-            ("map", inputs / "program.map"),
+        collected = (project / "collected").resolve(strict=True)
+        output = Path(reply["output_dir"])
+        assert collected.is_dir() and output.samefile(collected), reply
+        assert collected.name == "collected" and collected.parent.samefile(project), (
+            reply
+        )
+        manifest_path = Path(reply["manifest_path"])
+        assert manifest_path.name == "build-manifest.json", reply
+        assert manifest_path.samefile(collected / "build-manifest.json"), reply
+        collected_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert set(reply["canonical_paths"]) == {"elf", "map"}, reply
+        for role, expected, canonical_name in (
+            ("elf", inputs / "program.elf", "firmware.elf"),
+            ("map", inputs / "program.map", "firmware.map"),
         ):
             actual = Path(reply["canonical_paths"][role])
-            assert actual.is_relative_to(project) and digest(actual) == digest(expected)
+            assert actual.name == canonical_name and actual.is_file(), reply
+            assert actual.parent.samefile(collected), reply
+            assert actual.samefile(collected / canonical_name), reply
+            assert expected.read_bytes() == source_bytes[role], reply
+            assert actual.read_bytes() == source_bytes[role], reply
+            expected_digest = hashlib.sha256(source_bytes[role]).hexdigest()
+            assert digest(actual) == expected_digest, reply
+            record = reply["artifacts"][role]
+            assert record["path"] == canonical_name, reply
+            assert record["sha256"] == expected_digest, reply
+            assert record["size_bytes"] == expected.stat().st_size, reply
+            assert collected_manifest["artifacts"][role]["path"] == canonical_name, (
+                reply
+            )
+            assert collected_manifest["artifacts"][role]["sha256"] == expected_digest, (
+                reply
+            )
+            assert collected_manifest["artifacts"][role]["size_bytes"] == len(
+                source_bytes[role]
+            ), reply
         return reply
 
     case("VI15.public-relative-input-and-output", collect, protocol)

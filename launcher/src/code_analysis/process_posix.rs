@@ -1128,6 +1128,13 @@ mod tests {
         if !root.join(".byo-posix-child-fixture").is_file() {
             return;
         }
+        crate::final_child_receipt!(
+            "helper-start",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_leaf_fixture",
+                "phase": "detached-leaf", "cwd": root
+            })
+        );
         // Stay in the owned session until the monitor has captured this child.
         std::thread::sleep(Duration::from_millis(600));
         assert!(unsafe { libc::setsid() } > 0);
@@ -1138,6 +1145,13 @@ mod tests {
         )
         .unwrap();
         std::thread::sleep(Duration::from_secs(60));
+        crate::final_child_receipt!(
+            "helper-complete",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_leaf_fixture",
+                "phase": "detached-leaf"
+            })
+        );
     }
 
     #[test]
@@ -1150,6 +1164,13 @@ mod tests {
         if !root.join(".byo-posix-child-fixture").is_file() {
             return;
         }
+        crate::final_child_receipt!(
+            "helper-start",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_process_fixture",
+                "phase": "detached-parent", "cwd": root
+            })
+        );
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "code_analysis::process::platform::tests::detached_leaf_fixture",
@@ -1158,10 +1179,18 @@ mod tests {
                 "--test-threads=1",
             ])
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::fs::File::create(root.join("leaf.stdout.log")).unwrap())
+            .stderr(std::fs::File::create(root.join("leaf.stderr.log")).unwrap())
             .spawn()
             .unwrap();
+        crate::final_child_receipt!(
+            "child-spawned",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_leaf_fixture",
+                "phase": "detached-leaf", "child_pid": child.id(),
+                "argv": ["--ignored", "--exact", "code_analysis::process::platform::tests::detached_leaf_fixture", "--test-threads=1"]
+            })
+        );
         let started = Instant::now();
         while !root.join("detached.json").is_file() && started.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(5));
@@ -1172,6 +1201,13 @@ mod tests {
             panic!("Detached fixture never became ready");
         }
         // Drop the handle and exit while the captured detached child is live.
+        crate::final_child_receipt!(
+            "helper-complete",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_process_fixture",
+                "phase": "detached-parent", "leaf_still_live": child.try_wait().unwrap().is_none()
+            })
+        );
     }
 
     #[test]
@@ -1190,10 +1226,46 @@ mod tests {
         let mut budget = Budget::new();
         budget.configure(10.0).unwrap();
         let mut events = Vec::new();
-        assert_eq!(
-            run_owned(&argv, &root, &budget, &root, "analysis", &mut events, None).unwrap(),
-            0
+        crate::final_child_receipt!(
+            "dispatch",
+            json!({
+                "outer_test": "code_analysis::process::platform::tests::normal_exit_cleans_a_captured_detached_child",
+                "child_name": argv[1], "phase": "detached-parent", "argv": argv, "cwd": root
+            })
         );
+        let outcome = run_owned(&argv, &root, &budget, &root, "analysis", &mut events, None);
+        let out = fs::read(root.join("analysis.stdout.log"));
+        let err = fs::read(root.join("analysis.stderr.log"));
+        crate::final_child_receipt!(
+            "owned-command-complete",
+            json!({
+                "outer_test": "code_analysis::process::platform::tests::normal_exit_cleans_a_captured_detached_child",
+                "child_name": argv[1], "phase": "detached-parent", "result": format!("{outcome:?}"),
+                "exit": events.last().and_then(|event| event.get("process_exit_code")),
+                "terminal_exit": events.last().and_then(|event| event.get("terminal_exit_code")),
+                "stream_read_errors": [out.as_ref().err().map(|error| error.to_string()), err.as_ref().err().map(|error| error.to_string())],
+                "process_events": events,
+                "source_streams_present": root.join("analysis.stdout.log").is_file() && root.join("analysis.stderr.log").is_file()
+            }),
+            out.as_deref().unwrap_or(b""),
+            err.as_deref().unwrap_or(b"")
+        );
+        let leaf_out = fs::read(root.join("leaf.stdout.log"));
+        let leaf_err = fs::read(root.join("leaf.stderr.log"));
+        crate::final_child_receipt!(
+            "owned-descendant-streams",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::detached_leaf_fixture",
+                "phase": "detached-leaf", "process_events": events,
+                "exit": null, "exit_limit": "The existing owner exposes descendant identity/cleanup, not a reaped leaf exit status",
+                "stream_read_errors": [leaf_out.as_ref().err().map(|error| error.to_string()), leaf_err.as_ref().err().map(|error| error.to_string())],
+                "source_streams_present": root.join("leaf.stdout.log").is_file() && root.join("leaf.stderr.log").is_file(),
+                "limit": "Intentional owned termination; no fabricated libtest completion"
+            }),
+            leaf_out.as_deref().unwrap_or(b""),
+            leaf_err.as_deref().unwrap_or(b"")
+        );
+        assert_eq!(outcome.unwrap(), 0);
         let child: Value =
             serde_json::from_slice(&fs::read(root.join("detached.json")).unwrap()).unwrap();
         let pid = child["pid"].as_i64().unwrap() as i32;
