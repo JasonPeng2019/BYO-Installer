@@ -59,38 +59,35 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
       - name: Rust formatting
+        if: ${{ !cancelled() }}
         run: cargo fmt --manifest-path launcher/Cargo.toml --check
 
       - name: Rust lint
+        if: ${{ !cancelled() }}
         run: cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
 
       - name: Rust tests
+        if: ${{ !cancelled() }}
         run: cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
 
       - name: Validate release Python
+        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
         run: |
-          python3 -m compileall -q release/scripts hil
-          pipx run ruff==0.15.21 check release/scripts hil
-          pipx run ruff==0.15.21 format --check release/scripts hil
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-quality --evidence release/build/final-acceptance/release-quality
 
       - name: Release script unit tests
+        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
         run: |
-          result=0
-          for script in test_compile_workspace.py test_verify_build_output.py test_build_release.py test_e2e_harness.py test_analysis_tools.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_arm_native_input.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
-            if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
-              echo "PASS $script"
-            else
-              result=1
-              echo "FAIL $script"
-            fi
-          done
-          exit "$result"
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
-      - name: Validate shell bootstrap
-        run: sh -n install.sh
-
-      - name: Validate GitHub workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -no-color
+      - name: Retain all independent installer quality outcomes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: installer-quality-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/final-acceptance/
+          if-no-files-found: warn
+          retention-days: 90
 
   agent-workspace:
     runs-on: ubuntu-24.04
@@ -142,15 +139,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes ripgrep
 
-      - name: Run AgentWorkspace contract
+      - name: Install actual locked AgentWorkspace dependencies
+        id: workspace-deps
         working-directory: AgentWorkspace
         run: |
           uv sync --locked --dev
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run basedpyright
-          uv run pytest
-          uv run python bin/render-all-modes --check-idempotent
+
+      - name: Install actual locked parser test interpreter
+        id: firmware-deps
+        if: ${{ !cancelled() }}
+        run: uv sync --project BYO-Firmware-MCP --locked --all-groups
+
+      - name: Run all independent AgentWorkspace contracts
+        if: ${{ !cancelled() && steps.workspace-deps.outcome == 'success' && steps.firmware-deps.outcome == 'success' }}
+        run: uv run --no-sync --project BYO-Firmware-MCP python release/scripts/final_acceptance_checks.py --group workspace --evidence release/build/final-acceptance/workspace
+
+      - name: Retain AgentWorkspace contract outcomes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: workspace-quality-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/final-acceptance/
+          if-no-files-found: warn
+          retention-days: 90
 
   firmware-mcp:
     strategy:
@@ -187,16 +198,26 @@ jobs:
         with:
           enable-cache: false
 
-      - name: Run Firmware MCP contract
+      - name: Install locked Firmware MCP contract dependencies
+        id: firmware-deps
         working-directory: Firmware MCP New
         run: |
           uv sync --locked --all-groups
-          uv run ruff check .
-          uv run ruff format --check src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py tests/test_sidecar_runtime.py tests/test_manual_permission_helper_runtime.py
-          uv run pyright src/pyocd_debug_mcp/sidecar.py src/pyocd_debug_mcp/capabilities/manual_permission_helper.py
-          uv run python -m unittest tests.test_sidecar_runtime tests.test_manual_permission_helper_runtime
+
+      - name: Run independent Firmware MCP contract commands
+        if: ${{ !cancelled() && steps.firmware-deps.outcome == 'success' }}
+        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-contract --evidence release/build/final-acceptance/firmware-contract
 
       - name: Run Windows SWD isolation contract
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.firmware-deps.outcome == 'success' }}
         working-directory: Firmware MCP New
         run: uv run python -m unittest tests.test_swd_process_isolation
+
+      - name: Retain Firmware MCP contract outcomes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: firmware-contract-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/final-acceptance/
+          if-no-files-found: warn
+          retention-days: 90

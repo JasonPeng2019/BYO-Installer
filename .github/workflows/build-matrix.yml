@@ -8,6 +8,10 @@ on:
         type: choice
         options: [bundle, contracts]
         default: bundle
+      final_acceptance:
+        description: Complete verified-issues pass after ROOT binds the common freeze
+        type: boolean
+        default: false
   pull_request:
   push:
     branches:
@@ -55,6 +59,7 @@ jobs:
           echo "firmware=$(python -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
 
       - name: Check out locked AgentWorkspace
+        id: workspace-checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/CodexClaudeWorkflow
@@ -63,6 +68,8 @@ jobs:
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Check out locked Firmware MCP
+        id: firmware-checkout
+        if: ${{ !cancelled() }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/BYO-Firmware-MCP
@@ -70,17 +77,20 @@ jobs:
           path: Firmware MCP New
 
       - name: Install Python
+        if: ${{ !cancelled() }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
       - name: Install uv
+        if: ${{ !cancelled() }}
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
           enable-cache: false
 
       - name: Install pinned build dependencies
         id: build-deps
+        if: ${{ !cancelled() && steps.firmware-checkout.outcome == 'success' }}
         shell: bash
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
@@ -103,6 +113,8 @@ jobs:
         run: cargo test --manifest-path launcher/Cargo.toml --locked 'install::tests::windows_'
 
       - name: Prepare pinned analysis archives
+        id: analysis-inputs
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
@@ -111,42 +123,45 @@ jobs:
           echo "BYO_ANALYSIS_INPUT_DIR=$RUNNER_TEMP/byo-analysis-inputs" >> "$GITHUB_ENV"
 
       - name: Run launcher source contracts
+        id: launcher-contracts
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          cargo fmt --manifest-path launcher/Cargo.toml --check
-          cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group launcher --evidence release/build/final-acceptance/launcher
+
+      - name: Complete firmware source quality
+        id: firmware-quality
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
+        shell: bash
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-quality --evidence release/build/final-acceptance/firmware-quality
 
       - name: Run analysis Python source contracts
+        id: release-contracts
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          result=0
-          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_arm_native_input.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
-            if uv run --project "Firmware MCP New" python "release/scripts/$script"; then
-              echo "PASS $script"
-            else
-              result=1
-              echo "FAIL $script"
-            fi
-          done
-          exit "$result"
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
       - name: Build native launcher, sidecar, SBOM, and archive
-        if: runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        id: posix-bundle
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && steps.analysis-inputs.outcome == 'success' && runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts') }}
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: uv run --project "Firmware MCP New" python release/scripts/build_release.py --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"
 
       - name: Build native Windows launcher, sidecar, SBOM, and archive
-        if: runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        id: windows-bundle
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && steps.analysis-inputs.outcome == 'success' && runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts') }}
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: uv run --project "Firmware MCP New" python release/scripts/build_release.py --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"
 
       - name: Check target and archive contract
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: archive-contract
+        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
         shell: bash
         env:
           EXPECTED_TARGET: ${{ matrix.target }}
@@ -154,12 +169,14 @@ jobs:
         run: python release/scripts/verify_build_output.py --dist release/dist --expected-target "$EXPECTED_TARGET" --archive-type "$EXPECTED_ARCHIVE"
 
       - name: Run installed hardware-free E2E
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: installed-e2e
+        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
         shell: bash
         run: python release/scripts/test_installed_e2e.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}"
 
       - name: Run native installed Cppcheck and clangd core checks
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: installed-analysis
+        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -172,8 +189,30 @@ jobs:
             --evidence release/build/analysis-evidence/installed-core \
             --rustc "$(rustup which rustc)" --artifact-label "candidate-$GITHUB_SHA"
 
+      - name: Complete public compiled MCP and guard accounting
+        id: public-mcp
+        if: ${{ !cancelled() && inputs.final_acceptance == true && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
+        shell: bash
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
+
+      - name: Complete frozen firmware source suite with available native inputs
+        id: source-suite
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
+        shell: bash
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" --workspace-source AgentWorkspace --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json --evidence "$RUNNER_TEMP/final-firmware-suite"
+
+      - name: Record native stage prerequisites and exact checkout metadata
+        if: always()
+        shell: bash
+        env:
+          FINAL_STEP_RESULTS: ${{ toJSON(steps) }}
+          FINAL_ACCEPTANCE_REQUESTED: ${{ inputs.final_acceptance }}
+        run: python release/scripts/final_acceptance_checks.py --record-steps --evidence release/build/final-acceptance/stages.json
+
       - name: Upload target artifact
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-${{ matrix.target }}
@@ -185,11 +224,14 @@ jobs:
           retention-days: 14
 
       - name: Retain native analysis build evidence
-        if: always() && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-analysis-evidence-${{ matrix.target }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: release/build/analysis-evidence/
+          path: |
+            release/build/analysis-evidence/
+            release/build/final-acceptance/
+            ${{ runner.temp }}/final-firmware-suite/
           if-no-files-found: warn
           retention-days: 90
 
@@ -198,7 +240,7 @@ jobs:
       # from a shipped build can still be symbolicated. GitHub artifacts cap at
       # 90 days; a durable/indefinite symbol store is the remaining owner step.
       - name: Upload private symbols (crash symbolication)
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-symbols-${{ matrix.target }}
@@ -236,6 +278,7 @@ jobs:
           echo "firmware=$("$BYO_BUILD_PYTHON" -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
 
       - name: Check out locked AgentWorkspace
+        id: workspace-checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/CodexClaudeWorkflow
@@ -244,6 +287,8 @@ jobs:
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Check out locked Firmware MCP
+        id: firmware-checkout
+        if: ${{ !cancelled() }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/BYO-Firmware-MCP
@@ -253,6 +298,7 @@ jobs:
 
       - name: Install pinned Linux build toolchains
         id: build-deps
+        if: ${{ !cancelled() && steps.firmware-checkout.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -275,6 +321,8 @@ jobs:
           uv sync --project "Firmware MCP New" --locked --all-groups
 
       - name: Prepare pinned Linux analyzer and GCC runtime inputs
+        id: analysis-inputs
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
@@ -300,31 +348,33 @@ jobs:
           echo "BYO_ANALYSIS_INPUT_DIR=$input_dir" >> "$GITHUB_ENV"
 
       - name: Run native Linux launcher source contracts
+        id: launcher-contracts
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           rustup component add --toolchain 1.97.1 rustfmt clippy
-          cargo fmt --manifest-path launcher/Cargo.toml --check
-          cargo clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
-          cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group launcher --evidence release/build/final-acceptance/launcher
 
-      - name: Run native Linux analysis Python source contracts
+      - name: Complete Linux firmware source quality
+        id: firmware-quality
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          result=0
-          for script in test_analysis_tools.py test_build_release.py test_verify_build_output.py test_analysis_portability.py test_acquire_analysis_inputs.py test_arm_test_toolchain.py test_arm_native_input.py test_installed_analysis_ci.py test_code_analysis_portable_smoke_controls.py; do
-            if uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "release/scripts/$script"; then
-              echo "PASS $script"
-            else
-              result=1
-              echo "FAIL $script"
-            fi
-          done
-          exit "$result"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group firmware-quality --evidence release/build/final-acceptance/firmware-quality
+
+      - name: Run native Linux analysis Python source contracts
+        id: release-contracts
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
       - name: Restore exact installed Linux zlib license notices
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: zlib-notices
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts') }}
         shell: bash
         run: |
           set -euo pipefail
@@ -335,7 +385,8 @@ jobs:
           dnf --setopt=tsflags= --setopt=install_weak_deps=False reinstall --assumeyes "$zlib_nevra"
 
       - name: Build native launcher, sidecar, SBOM, and archive
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: linux-bundle
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && steps.analysis-inputs.outcome == 'success' && steps.zlib-notices.outcome == 'success' && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts') }}
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -344,7 +395,8 @@ jobs:
           uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/build_release.py --version "$VERSION" --analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"
 
       - name: Check target and archive contract
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: archive-contract
+        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
         shell: bash
         run: |
           "$BYO_BUILD_PYTHON" release/scripts/verify_build_output.py \
@@ -353,14 +405,16 @@ jobs:
             --archive-type tar.gz
 
       - name: Run installed hardware-free E2E
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: installed-e2e
+        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
         shell: bash
         run: |
           "$BYO_BUILD_PYTHON" release/scripts/test_installed_e2e.py \
             --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64"
 
       - name: Run native installed Cppcheck and clangd core checks
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        id: installed-analysis
+        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
         shell: bash
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -373,8 +427,32 @@ jobs:
             --evidence release/build/analysis-evidence/installed-core \
             --artifact-label "candidate-$GITHUB_SHA"
 
+      - name: Complete public compiled Linux MCP and guard accounting
+        id: public-mcp
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.linux-bundle.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
+
+      - name: Complete frozen Linux firmware source suite with available native inputs
+        id: source-suite
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" --workspace-source AgentWorkspace --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json --evidence "$RUNNER_TEMP/final-firmware-suite"
+
+      - name: Record Linux stage prerequisites and exact checkout metadata
+        if: always()
+        shell: bash
+        env:
+          FINAL_STEP_RESULTS: ${{ toJSON(steps) }}
+          FINAL_ACCEPTANCE_REQUESTED: ${{ inputs.final_acceptance }}
+        run: '"$BYO_BUILD_PYTHON" release/scripts/final_acceptance_checks.py --record-steps --evidence release/build/final-acceptance/stages.json'
+
       - name: Upload target artifact
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-linux-x86_64-glibc-2.28
@@ -386,18 +464,21 @@ jobs:
           retention-days: 14
 
       - name: Retain native analysis build evidence
-        if: always() && (github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts')
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-analysis-evidence-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
-          path: release/build/analysis-evidence/
+          path: |
+            release/build/analysis-evidence/
+            release/build/final-acceptance/
+            ${{ runner.temp }}/final-firmware-suite/
           if-no-files-found: warn
           retention-days: 90
 
       # See the note in the build job: retain stripped symbols separately, keyed
       # by build, kept longer for crash symbolication.
       - name: Upload private symbols (crash symbolication)
-        if: github.event_name != 'workflow_dispatch' || inputs.build_kind != 'contracts'
+        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: byo-symbols-linux-x86_64-glibc-2.28
@@ -407,5 +488,6 @@ jobs:
 
   source-quality:
     needs: [build, linux-x86_64]
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/quality.yml
     secrets: inherit

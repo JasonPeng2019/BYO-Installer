@@ -320,6 +320,7 @@ class InitializedMcp:
 
     process: subprocess.Popen[str]
     diagnostics: TextIO
+    initialization_raw: str = ""
 
 
 def invoke(
@@ -380,17 +381,24 @@ def start_initialized_mcp(
     project: Path,
     env: dict[str, str],
     expected_version: str,
+    *,
+    cwd: Path | None = None,
+    diagnostics_path: Path | None = None,
 ) -> InitializedMcp:
     # RegistryFastMCP redirects every non-protocol write to stderr so stdout
     # remains valid JSON-RPC. A PIPE would therefore deadlock startup once the
     # server fills the OS pipe before this harness gets around to reading it.
     # Keep diagnostics for a useful failure report, but let the operating system
     # write them directly to a temporary file instead of applying backpressure.
-    diagnostics = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    diagnostics = (
+        diagnostics_path.open("w+t", encoding="utf-8")
+        if diagnostics_path is not None
+        else tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    )
     process = subprocess.Popen(
         [str(byo), "mcp", "serve", "--project", str(project)],
         env=env,
-        cwd=project,
+        cwd=cwd or project,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=diagnostics,
@@ -414,7 +422,8 @@ def start_initialized_mcp(
         }
         process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
         process.stdin.flush()
-        response = json.loads(read_line(process.stdout))
+        initialization_raw = read_line(process.stdout)
+        response = json.loads(initialization_raw)
         if response.get("id") != 1 or not isinstance(response.get("result"), dict):
             raise AcceptanceFailure(
                 f"invalid MCP initialization response: {response!r}"
@@ -442,7 +451,9 @@ def start_initialized_mcp(
         raise AcceptanceFailure(
             f"MCP initialization failed: {exc}\nstderr:\n{diagnostic_text}"
         ) from exc
-    return InitializedMcp(process=process, diagnostics=diagnostics)
+    return InitializedMcp(
+        process=process, diagnostics=diagnostics, initialization_raw=initialization_raw
+    )
 
 
 def stop_mcp(server: InitializedMcp) -> None:
