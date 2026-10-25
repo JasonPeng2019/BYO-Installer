@@ -859,6 +859,43 @@ class ForkedBeforeExec(unittest.TestCase):
                 )
 
 
+# Native executable formats an exec target or its interpreter may name directly.
+NATIVE_EXEC_MAGIC = (
+    b"\x7fELF",
+    b"\xcf\xfa\xed\xfe",
+    b"\xce\xfa\xed\xfe",
+    b"\xca\xfe\xba\xbe",
+)
+
+
+def expected_exec_dispatch(target: str) -> dict:
+    """The one (image, argv) that execv(target, [target]) installs, from its bytes.
+
+    A native target is its own image. On Linux a `#!` script dispatches exactly
+    once through binfmt_script: the interpreter (which must itself be native)
+    becomes the image and the remainder of the line is one argument, as with
+    coreutils-single's /usr/bin/cat in the pinned manylinux_2_28 image. Nothing
+    else is accepted, so the expectation is never an alias set.
+    """
+    head = Path(target).read_bytes()[:256]
+    if not head.startswith(b"#!"):
+        if not head.startswith(NATIVE_EXEC_MAGIC):
+            raise AssertionError(f"exec target is neither native nor #!: {target}")
+        return {"rule": "native", "image": target, "argv": [target]}
+    if not sys.platform.startswith("linux") or b"\n" not in head:
+        raise AssertionError(f"unsupported #! exec target: {target}")
+    line = head[2:].split(b"\n", 1)[0].split(b"\0", 1)[0].strip(b" \t")
+    interpreter = line.replace(b"\t", b" ").split(b" ", 1)[0]
+    argument = line[len(interpreter) :].strip(b" \t")
+    image = os.fsdecode(interpreter)
+    if not os.path.isabs(image):
+        raise AssertionError(f"relative #! interpreter: {target}")
+    if not Path(image).read_bytes()[:4].startswith(NATIVE_EXEC_MAGIC):
+        raise AssertionError(f"#! interpreter is not native: {image}")
+    argv = [image, *([os.fsdecode(argument)] if argument else []), target]
+    return {"rule": "linux-binfmt_script", "image": image, "argv": argv}
+
+
 @unittest.skipUnless(os.name == "posix", "actual retained-birth POSIX exec")
 class NativeRootExec(unittest.TestCase):
     def test_real_root_exec_updates_image_history_and_keeps_same_image_peer_unowned(
@@ -870,6 +907,7 @@ class NativeRootExec(unittest.TestCase):
             target, "native POSIX cat is a required fixture dependency"
         )
         assert target is not None
+        dispatch = expected_exec_dispatch(target)
         program = (
             "import os,sys; print('ready',flush=True); sys.stdin.readline(); "
             f"os.execv({target!r}, [{target!r}])"
@@ -907,7 +945,8 @@ class NativeRootExec(unittest.TestCase):
             def sample_once(self):
                 super().sample_once()
                 if any(
-                    smoke.same_path(r.get("image"), target)
+                    smoke.same_path(r.get("image"), dispatch["image"])
+                    and r.get("argv") == dispatch["argv"]
                     for r in self.root_images
                     if r.get("image")
                 ):
@@ -930,7 +969,8 @@ class NativeRootExec(unittest.TestCase):
                 (after["pid"], after["create_time"]),
             )
             self.assertFalse(smoke.same_path(before["image"], after["image"]))
-            self.assertTrue(smoke.same_path(after["image"], target))
+            self.assertTrue(smoke.same_path(after["image"], dispatch["image"]))
+            self.assertEqual(after["argv"], dispatch["argv"])
             process.stdin.write("changed\n")
             process.stdin.flush()
             self.assertEqual(lines.get(timeout=10), "changed\n")
@@ -948,7 +988,8 @@ class NativeRootExec(unittest.TestCase):
             self.assertIs(root["alive_after"], False)
             self.assertTrue(
                 any(
-                    smoke.same_path(r["image"], target)
+                    smoke.same_path(r["image"], dispatch["image"])
+                    and r["argv"] == dispatch["argv"]
                     for r in root["root_image_observations"]
                 )
             )
@@ -966,6 +1007,10 @@ class NativeRootExec(unittest.TestCase):
                             "exec_target": target,
                             "exec_target_sha256": hashlib.sha256(
                                 Path(target).read_bytes()
+                            ).hexdigest(),
+                            "exec_dispatch": dispatch,
+                            "exec_image_sha256": hashlib.sha256(
+                                Path(dispatch["image"]).read_bytes()
                             ).hexdigest(),
                             "same_observer_interval": 0.005,
                             "emergency_recovery": [],
