@@ -19,6 +19,7 @@ import inspect
 import io
 import json
 import os
+import queue
 import shlex
 import shutil
 import stat
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 import zipfile
@@ -500,8 +502,16 @@ class ObservedChildMetadata(unittest.TestCase):
     def observer(self, records, children, alive=True):
         owned = object.__new__(smoke.Owned)
         owned.records = {(r["pid"], r["create_time"]): r for r in records}
+        owned.root_identity = next(iter(owned.records))
+        root = owned.records[owned.root_identity]
+        owned.root_images = (
+            [dict(root)] if root.get("image") and root.get("argv") else []
+        )
         owned.native = mock.Mock()
         owned.native.alive.return_value = alive
+        owned.native.identity.side_effect = lambda pid: next(
+            (dict(r) for r in records if r["pid"] == pid), None
+        )
         owned.native.children.side_effect = lambda r: children if r["pid"] == 1 else []
         return owned
 
@@ -570,6 +580,74 @@ class ObservedChildMetadata(unittest.TestCase):
                 owned.sample_once()
                 self.assertEqual(owned.records, {(1, 10.0): root})
                 owned.native.children.assert_not_called()
+
+    def test_exact_root_exec_refreshes_without_aliasing_images_or_changing_birth(self):
+        before = {
+            "pid": 1,
+            "create_time": 10.0,
+            "image": "/bin/launcher",
+            "argv": ["launcher"],
+        }
+        after = {**before, "image": "/app/Python", "argv": ["Python", "driver"]}
+        child = {
+            "pid": 2,
+            "create_time": 11.0,
+            "parent_pid": 1,
+            "parent_create_time": 10.0,
+            "image": after["image"],
+            "argv": after["argv"],
+        }
+        owned = self.observer([before], [child])
+        owned.native.identity.return_value = after
+        owned.native.identity.side_effect = None
+        owned.sample_once()
+        self.assertEqual(owned.records[(1, 10.0)], after)
+        self.assertEqual(owned.root_images, [before, after])
+        self.assertTrue(smoke.forked_before_exec(child, [after, child]))
+
+    def test_reused_or_unreadable_root_never_acquires_children_or_image_history(self):
+        root = {
+            "pid": 1,
+            "create_time": 10.0,
+            "image": "/bin/launcher",
+            "argv": ["launcher"],
+        }
+        for fresh in (None, {**root, "create_time": 20.0}):
+            with self.subTest(fresh=fresh):
+                owned = self.observer([root], [{"pid": 2, "create_time": 11.0}])
+                owned.native.identity.side_effect = None
+                owned.native.identity.return_value = fresh
+                owned.sample_once()
+                self.assertEqual(owned.records, {(1, 10.0): root})
+                self.assertEqual(owned.root_images, [root])
+                owned.native.children.assert_not_called()
+
+    def test_partial_root_metadata_never_invents_an_observed_image_argv_pair(self):
+        before = {
+            "pid": 1,
+            "create_time": 10.0,
+            "image": "/bin/launcher",
+            "argv": ["launcher"],
+        }
+        fresh = {**before, "image": "/app/Python", "argv": None}
+        child = {
+            "pid": 2,
+            "create_time": 11.0,
+            "parent_pid": 1,
+            "parent_create_time": 10.0,
+            "image": fresh["image"],
+            "argv": before["argv"],
+        }
+        owned = self.observer([before], [child])
+        owned.native.identity.side_effect = None
+        owned.native.identity.return_value = fresh
+        owned.sample_once()
+        self.assertEqual(owned.root_images, [before])
+        retained = {
+            **owned.records[(1, 10.0)],
+            "root_image_observations": owned.root_images,
+        }
+        self.assertFalse(smoke.forked_before_exec(child, [retained, child]))
 
 
 class ListingPs:
@@ -752,6 +830,160 @@ class ForkedBeforeExec(unittest.TestCase):
         ):
             with self.subTest(label):
                 self.assertFalse(smoke.forked_before_exec(child, [*observed, child]))
+
+    def test_independent_exact_parent_exec_history_preserves_fork_role(self):
+        history = {
+            **self.PARENT,
+            "image": "/framework/Python",
+            "argv": ["Python", "driver"],
+        }
+        later = {
+            **self.PARENT,
+            "image": "/different/later",
+            "argv": ["later"],
+            "root_image_observations": [self.PARENT, history],
+        }
+        child = self.child(image=history["image"], argv=history["argv"])
+        self.assertTrue(smoke.forked_before_exec(child, [later, child]))
+        for invalid in (
+            {**history, "create_time": 9.0},
+            {**history, "pid": 9},
+            {**history, "image": None},
+            {**history, "argv": ["foreign"]},
+        ):
+            with self.subTest(history=invalid):
+                self.assertFalse(
+                    smoke.forked_before_exec(
+                        child, [{**later, "root_image_observations": [invalid]}, child]
+                    )
+                )
+
+
+@unittest.skipUnless(os.name == "posix", "actual retained-birth POSIX exec")
+class NativeRootExec(unittest.TestCase):
+    def test_real_root_exec_updates_image_history_and_keeps_same_image_peer_unowned(
+        self,
+    ):
+        native = smoke.Processes()
+        target = shutil.which("cat")
+        self.assertIsNotNone(
+            target, "native POSIX cat is a required fixture dependency"
+        )
+        assert target is not None
+        program = (
+            "import os,sys; print('ready',flush=True); sys.stdin.readline(); "
+            f"os.execv({target!r}, [{target!r}])"
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-u", "-c", program],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        peer = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            start_new_session=True,
+        )
+        self.assertIsNotNone(process.stdout)
+        assert process.stdout is not None
+        assert process.stdin is not None
+        lines = queue.Queue()
+
+        def read_lines():
+            for line in process.stdout:
+                lines.put(line)
+
+        threading.Thread(target=read_lines, daemon=True).start()
+        observer = None
+        refreshed = threading.Event()
+
+        class Witness(smoke.Owned):
+            def sample_once(self):
+                super().sample_once()
+                if any(
+                    smoke.same_path(r.get("image"), target)
+                    for r in self.root_images
+                    if r.get("image")
+                ):
+                    refreshed.set()
+
+        try:
+            self.assertEqual(lines.get(timeout=10), "ready\n")
+            before = native.identity(process.pid)
+            self.assertIsNotNone(before)
+            assert before is not None
+            observer = Witness(process, native)
+            process.stdin.write("exec\n")
+            process.stdin.flush()
+            self.assertTrue(refreshed.wait(timeout=10), repr(observer.root_images))
+            after = native.identity(process.pid)
+            self.assertIsNotNone(after)
+            assert after is not None
+            self.assertEqual(
+                (before["pid"], before["create_time"]),
+                (after["pid"], after["create_time"]),
+            )
+            self.assertFalse(smoke.same_path(before["image"], after["image"]))
+            self.assertTrue(smoke.same_path(after["image"], target))
+            process.stdin.write("changed\n")
+            process.stdin.flush()
+            self.assertEqual(lines.get(timeout=10), "changed\n")
+            exact_peer = native.identity(peer.pid)
+            self.assertIsNotNone(exact_peer)
+            assert exact_peer is not None
+            self.assertNotIn(
+                (exact_peer["pid"], exact_peer["create_time"]), observer.records
+            )
+            self.assertIs(native.alive(exact_peer), True)
+            process.stdin.close()
+            self.assertEqual(process.wait(timeout=10), 0)
+            rows = observer.finish()
+            root = next(r for r in rows if r["pid"] == process.pid)
+            self.assertIs(root["alive_after"], False)
+            self.assertTrue(
+                any(
+                    smoke.same_path(r["image"], target)
+                    for r in root["root_image_observations"]
+                )
+            )
+            self.assertIs(native.alive(exact_peer), True)
+            print(
+                json.dumps(
+                    {
+                        "native_root_exec_control": {
+                            "before": before,
+                            "after": after,
+                            "root_finished": root,
+                            "unrelated_peer": exact_peer,
+                            "peer_alive_after": native.alive(exact_peer),
+                            "returncode": process.returncode,
+                            "exec_target": target,
+                            "exec_target_sha256": hashlib.sha256(
+                                Path(target).read_bytes()
+                            ).hexdigest(),
+                            "same_observer_interval": 0.005,
+                            "emergency_recovery": [],
+                        }
+                    }
+                ),
+                flush=True,
+            )
+        finally:
+            if observer is not None:
+                observer.finish()
+            for child in (process, peer):
+                if child.stdin is not None and not child.stdin.closed:
+                    child.stdin.close()
+                child.wait(timeout=10)
+                for stream in (child.stdout, child.stderr):
+                    if stream is not None:
+                        stream.close()
 
 
 @unittest.skipIf(not hasattr(smoke, "Processes"), "smoke import failed")

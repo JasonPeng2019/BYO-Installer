@@ -335,8 +335,12 @@ def forked_before_exec(record: dict, observed: list[dict]) -> bool:
     parent = (record.get("parent_pid"), record.get("parent_create_time"))
     return bool(record.get("image")) and any(
         (p["pid"], p["create_time"]) == parent
-        and p.get("image") == record["image"]
-        and p.get("argv") == record.get("argv")
+        and any(
+            (image.get("pid"), image.get("create_time")) == parent
+            and image.get("image") == record["image"]
+            and image.get("argv") == record.get("argv")
+            for image in p.get("root_image_observations", [p])
+        )
         for p in observed
     )
 
@@ -565,15 +569,44 @@ class Owned:
         # descendants unbindable; callers record that and never credit cleanup.
         self.unobserved_leader = None if root else {"pid": process.pid}
         self.records = {(root["pid"], root["create_time"]): root} if root else {}
+        self.root_identity = (root["pid"], root["create_time"]) if root else None
+        self.root_images = (
+            [dict(root)] if root and root.get("image") and root.get("argv") else []
+        )
         self.error = None
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.sample, daemon=True)
         self.thread.start()
 
     def sample_once(self) -> None:
+        root_eligible = False
+        root = self.records.get(self.root_identity)
+        if root and self.native.alive(root) is True:
+            fresh = self.native.identity(root["pid"])
+            if fresh and (fresh["pid"], fresh["create_time"]) == self.root_identity:
+                root_eligible = True
+                # A framework launcher can exec without changing its birth.
+                # Refresh the root too, keeping only independently read images
+                # for this exact incarnation; never infer an image alias.
+                merged = {
+                    **root,
+                    **{k: v for k, v in fresh.items() if v not in (None, "", [])},
+                }
+                self.records[self.root_identity] = merged
+                if fresh.get("image") and fresh.get("argv"):
+                    if not self.root_images or any(
+                        self.root_images[-1].get(k) != fresh.get(k)
+                        for k in ("image", "argv")
+                    ):
+                        self.root_images.append(dict(fresh))
         for _ in range(8):
             added = False
             for record in list(self.records.values()):
+                if (
+                    record["pid"],
+                    record["create_time"],
+                ) == self.root_identity and not root_eligible:
+                    continue
                 if self.native.alive(record) is not True:
                     continue
                 for child in self.native.children(record):
@@ -610,7 +643,16 @@ class Owned:
         if self.thread.is_alive() or self.error is not None:
             raise Unverified(f"process sampling failed: {self.error!r}")
         return [
-            {**r, "alive_after": self.native.alive(r)} for r in self.records.values()
+            {
+                **r,
+                "alive_after": self.native.alive(r),
+                **(
+                    {"root_image_observations": self.root_images}
+                    if (r["pid"], r["create_time"]) == self.root_identity
+                    else {}
+                ),
+            }
+            for r in self.records.values()
         ]
 
 
@@ -1592,9 +1634,12 @@ class Smoke:
             )
         ]
         if {i["pid"] for i in observed} != pids:
+            independently_seen = {i["pid"] for i in outcome.observed_processes}
             raise Unverified(
-                f"{name}: analysis PIDs {sorted(pids)} not independently "
-                "observed with create_time; no cleanup credit"
+                f"{name}: analysis identity/role unverified; missing independent births "
+                f"{sorted(pids - independently_seen)}; observed but image/parent role rejected "
+                f"{sorted((pids & independently_seen) - {i['pid'] for i in observed})}; "
+                "no cleanup credit"
             )
         require(
             all(i["alive_after"] is False for i in observed),
