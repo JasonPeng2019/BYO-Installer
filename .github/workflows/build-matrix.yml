@@ -94,11 +94,23 @@ jobs:
         if: ${{ !cancelled() && steps.firmware-checkout.outcome == 'success' }}
         shell: bash
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          mkdir -p build-runtime/evidence/dependency-setup
+          # Retry only this exact network/toolchain acquisition, never tests or jobs.
+          for attempt in 1 2 3; do
+            set +e
+            rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+            download_exit=$?
+            set -e
+            printf '{"kind":"rustup-download","attempt":%s,"exit_code":%s}\n' "$attempt" "$download_exit" | tee -a build-runtime/evidence/dependency-setup/attempts.jsonl
+            if [ "$download_exit" -eq 0 ]; then break; fi
+            if [ "$attempt" -eq 3 ]; then exit "$download_exit"; fi
+            sleep 5
+          done
           if [ "$RUNNER_OS" = "Windows" ]; then
             # Build Python remains pinned; setup-python supplies the test host.
             uv python install 3.12.13
             export UV_PYTHON=3.12.13
+            python -c 'import hashlib,json,shutil,subprocess; from pathlib import Path; p=Path(shutil.which("clang-cl") or "missing-clang-cl").resolve(); b=p.read_bytes(); Path("build-runtime/evidence/dependency-setup/contract-cc.json").write_text(json.dumps({"path":str(p),"bytes":len(b),"sha256":hashlib.sha256(b).hexdigest(),"version":subprocess.check_output([str(p),"--version"],text=True),"scope":"Windows contract C dependencies; native release compilation remains separate"},indent=2))'
           fi
           uv sync --project "Firmware MCP New" --locked --all-groups
 

@@ -506,6 +506,25 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         self.assertEqual(facts["error"], "ZombieProcess")
         self.assertEqual(command_observer.command_state(facts), "unknown")
 
+    def test_native_metadata_system_error_retains_birth_and_never_invents_status(self):
+        def native_failure(process):
+            try:
+                raise PermissionError("directed native metadata denial")
+            except PermissionError as cause:
+                raise SystemError("native query returned an exception") from cause
+
+        original = command_observer.command_identity(os.getpid())
+        birth = original["creation_time"]
+        with mock.patch.object(psutil.Process, "cmdline", native_failure):
+            facts = command_observer.command_identity(os.getpid(), birth)
+        self.assertEqual(command_observer.command_state(facts), "live")
+        self.assertEqual(facts["cmdline"]["unavailable"], "SystemError")
+        self.assertIn("PermissionError", facts["cmdline"]["cause"])
+        with mock.patch.object(psutil.Process, "status", native_failure):
+            facts = command_observer.command_identity(os.getpid(), birth)
+        self.assertEqual(command_observer.command_state(facts), "unknown")
+        self.assertEqual(facts["status"]["unavailable"], "SystemError")
+
     def test_old_birth_retirement_requires_complete_prior_witness_and_never_owns_replacement(
         self,
     ):

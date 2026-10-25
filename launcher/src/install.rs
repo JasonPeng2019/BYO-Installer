@@ -796,6 +796,8 @@ pub(crate) mod tests {
             let input = build.join("fake.rs");
             std::fs::write(&input, source).unwrap();
             let output = std::process::Command::new("rustc")
+                // Cargo's linker configuration does not reach direct rustc fixtures.
+                .args(["-Clinker=rust-lld", "-Clinker-flavor=lld-link"])
                 .arg(&input)
                 .args(["-Ctarget-feature=+crt-static", "-o"])
                 .arg(&executable)

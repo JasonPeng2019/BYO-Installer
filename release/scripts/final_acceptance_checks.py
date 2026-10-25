@@ -143,8 +143,12 @@ def command_identity(pid, birth=None):
         for name in ("ppid", "cmdline", "exe", "status"):
             try:
                 facts[name] = getattr(process, name)()
-            except (OSError, psutil.Error) as exc:
-                facts[name] = {"unavailable": type(exc).__name__, "error": str(exc)}
+            except (OSError, psutil.Error, SystemError) as exc:
+                facts[name] = {
+                    "unavailable": type(exc).__name__,
+                    "error": str(exc),
+                    "cause": repr(exc.__cause__),
+                }
         facts["birth_after_queries"] = psutil.Process(pid).create_time()
         if facts["birth_after_queries"] != actual:
             facts["identity"] = "changed_during_observation"
@@ -154,7 +158,7 @@ def command_identity(pid, birth=None):
         facts["identity"] = (
             "missing" if "creation_time" not in facts else "gone_during_observation"
         )
-    except (OSError, psutil.Error) as exc:
+    except (OSError, psutil.Error, SystemError) as exc:
         facts.update(identity="unavailable", error=type(exc).__name__, detail=str(exc))
     return facts
 
@@ -444,6 +448,17 @@ def run_finite(command, cwd, out, err, timeout):
 
 def commands(group):
     cargo = ["cargo", "+1.97.1"]
+    contract_config = []
+    if os.name == "nt":
+        # MSVC link.exe and ring's cl.exe each left a captured live descendant
+        # after contract Cargo exit. Use bundled LLD plus the runner's native
+        # clang-cl for contract dependencies, keeping all lifecycle judgments.
+        contract_config = [
+            "--config",
+            'build.rustflags=["-C","linker=rust-lld","-C","linker-flavor=lld-link"]',
+            "--config",
+            'env.CC="clang-cl"',
+        ]
     manifest = ["--manifest-path", "launcher/Cargo.toml"]
     if group == "windows-cleanup":
         return [
@@ -452,6 +467,7 @@ def commands(group):
                 [
                     *cargo,
                     "test",
+                    *contract_config,
                     *manifest,
                     "--locked",
                     "install::tests::windows_",
@@ -469,6 +485,9 @@ def commands(group):
                 [
                     *cargo,
                     "clippy",
+                    # Clippy is an external Cargo subcommand: its forwarded
+                    # config must follow the subcommand, not precede it.
+                    *contract_config,
                     *manifest,
                     "--locked",
                     "--all-targets",
@@ -477,12 +496,24 @@ def commands(group):
                     "warnings",
                 ],
             ),
-            ("rust-inventory", [*cargo, "test", *manifest, "--locked", "--", "--list"]),
+            (
+                "rust-inventory",
+                [
+                    *cargo,
+                    "test",
+                    *contract_config,
+                    *manifest,
+                    "--locked",
+                    "--",
+                    "--list",
+                ],
+            ),
             (
                 "rust-tests",
                 [
                     *cargo,
                     "test",
+                    *contract_config,
                     *manifest,
                     "--locked",
                     "--",
@@ -830,9 +861,7 @@ def child_receipts(directory):
                     int(data["executable_modified_unix_nanos"]),
                 )
                 images.setdefault(image_key, measured)
-                qualification = (
-                    "Actual running image hashed by the child at receipt time; its parent declared this image ephemeral and its tested cleanup deleted it before collection. No synthetic child completion."
-                )
+                qualification = "Actual running image hashed by the child at receipt time; its parent declared this image ephemeral and its tested cleanup deleted it before collection. No synthetic child completion."
             else:
                 image_key = (str(executable), image.st_size, image.st_mtime_ns)
                 if method in ("collector-after-command", EPHEMERAL_IMAGE):
@@ -853,9 +882,7 @@ def child_receipts(directory):
                     if (after.st_size, after.st_mtime_ns) != image_key[1:]:
                         raise RuntimeError("Child executable changed during hashing")
                     images[image_key] = digest.hexdigest()
-                qualification = (
-                    "Actual image hashed after command; raw child size/mtime and stable hash-time image checked. No synthetic child completion."
-                )
+                qualification = "Actual image hashed after command; raw child size/mtime and stable hash-time image checked. No synthetic child completion."
             if measured not in (None, images[image_key]):
                 raise RuntimeError("Child executable digest mismatch")
             record["collected_executable_sha256"] = images[image_key]

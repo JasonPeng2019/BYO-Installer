@@ -221,6 +221,8 @@ fn fake_exe() -> &'static Path {
             let temporary =
                 directory.join(format!("fake-{}-{}.exe", &digest[..16], std::process::id()));
             let output = Command::new(rustc())
+                // Keep this direct Windows fixture build off the MSVC linker.
+                .args(["-Clinker=rust-lld", "-Clinker-flavor=lld-link"])
                 .args(["--edition", "2021", "-C", "opt-level=1"])
                 .args(["-C", "target-feature=+crt-static", "-o"])
                 .arg(&temporary)

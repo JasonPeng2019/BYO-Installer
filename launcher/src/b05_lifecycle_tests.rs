@@ -382,7 +382,11 @@ fn native_runtime(root: &Path, version: &str, failure: &str) {
         let input = build.join("fake.rs");
         let output = build.join(if cfg!(windows) { "fake.exe" } else { "fake" });
         std::fs::write(&input, source).unwrap();
-        let result = std::process::Command::new("rustc").arg(&input).arg("-o").arg(&output).output().unwrap();
+        let mut compiler = std::process::Command::new("rustc");
+        // Direct fixture builds do not inherit Cargo's contract linker flags.
+        #[cfg(windows)]
+        compiler.args(["-Clinker=rust-lld", "-Clinker-flavor=lld-link"]);
+        let result = compiler.arg(&input).arg("-o").arg(&output).output().unwrap();
         assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
         let bytes = std::fs::read(output).unwrap();
         std::fs::remove_dir_all(build).unwrap();
