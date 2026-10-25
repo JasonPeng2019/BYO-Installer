@@ -3,8 +3,8 @@
   "candidate": "b5b9c18fc9bdd0f5150db2d68a21efd500a39e9f",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
   "source_parent": "f8e7d0306a7572edf9c5fbe30afe0514329f1317",
-  "build_owner_base": "da5306b49c8c5ba8b20a90f3021c576ca64d3136",
-  "predecessor_input_sha256": "a3817eb82be8b64a93fbc0cf53bc133ab53fdc6cb7775b6d631f50c246e7f068",
+  "build_owner_base": "45449d1991aac108bb95a0ac90687857ca361a7c",
+  "predecessor_input_sha256": "71e29c97dee4a4be081a8e8e999819e29b6d3e12ca64d05cd69e87cab73f26e6",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -373,18 +373,18 @@
     ]
   },
   "nested_control_declarations_are_execution_evidence": false,
-  "full_attempt_number": 1,
+  "full_attempt_number": 2,
   "logical_family": "BC01",
+  "persistent_canonical_inputs": true,
   "firmware_export": {
-    "commit": "92f892af4a0543d3dbaf3e26a65daa4ce2a33b8c",
-    "tree": "f7e851f0642002153b4253746353b67c07e8ead0"
+    "commit": "1f06537cf5c5fcf9d7b637eb287b9b4678c8852d",
+    "tree": "2b0bf6dc1fcb194454877743be756f93fabf4838"
   },
   "installer_source": {
-    "base_commit": "691cd0e9744fad1f78eb56239c8cd6a995da3b15",
+    "base_commit": "88edabfe48e77eadb5879cb09460c2d3fd8cd790",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
-  "persistent_canonical_inputs": true,
   "files": {
     ".gitattributes": {
       "bytes": 98,
@@ -411,8 +411,8 @@
       "sha256": "b7d372fcf6fba59cd207cfa867cd5a35b450e7dfb1d8bbcc6a398fba696878e0"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 37614,
-      "sha256": "698dcc73805ff5e6a9d92dad0fe87820d94ea1acac7db98086f0da027f723826"
+      "bytes": 38032,
+      "sha256": "670d6647d566f605c777501610cc0ced353512c7d6a4dfabe227d70c851a3a92"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -439,8 +439,8 @@
       "sha256": "0384f07284028173fb0878dfe25435f53bf21ca03b2cc6646ea203008decd6b2"
     },
     ".github/workflows/quality.yml": {
-      "bytes": 11060,
-      "sha256": "4cbecf8c2ed0b90b5b0606928acbbef7255f13c813e44fdcaddbae07ab8b59a6"
+      "bytes": 11252,
+      "sha256": "52a486a1e73b90e23ca8256e41f123caa5f0ad69c88bee8000d07b376a687682"
     },
     ".github/workflows/release.yml": {
       "bytes": 16146,
@@ -479,8 +479,8 @@
       "sha256": "613220a9ee63daee9c10620da36ea12a77c86c81f198c878e41dad2e4ad76cdf"
     },
     "Firmware MCP New/.github/workflows/code-analysis-portability.yml": {
-      "bytes": 7109,
-      "sha256": "9c230032950747c62f6bdcd48143e239ab61f2bf8208daa82e6c2c63b11cfea9"
+      "bytes": 7103,
+      "sha256": "c37fef5c49ec68104d989c7b85d5e77ef4cf5e176998069b407de889c31bf45e"
     },
     "Firmware MCP New/.gitignore": {
       "bytes": 468,
@@ -2331,8 +2331,8 @@
       "sha256": "3f52cf087fb204a17229aa1356b339a7a03b14b6f089eebe00d2f0f62d998a4d"
     },
     "bc01-ci/build-and-native.yml": {
-      "bytes": 37614,
-      "sha256": "698dcc73805ff5e6a9d92dad0fe87820d94ea1acac7db98086f0da027f723826"
+      "bytes": 38032,
+      "sha256": "670d6647d566f605c777501610cc0ced353512c7d6a4dfabe227d70c851a3a92"
     },
     "bc01-ci/build_capture.py": {
       "bytes": 2997,
@@ -3092,7 +3092,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "c7c0fb9fd096771bb79aee53a8fb2161e4225785a8deb36915be7e3f628d214b"
+      "sha256": "9b0c10ae338d782d11cbe53adeac501df0b472723e021a6ffa72719c4cc7b830"
     },
     "rust-toolchain.toml": {
       "bytes": 90,

@@ -64,10 +64,11 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Bind the committed execution input index
+        id: input-binding
         shell: bash
         run: |
           if [ -z "$FR13_INPUT_SHA256" ]; then
-            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            digest=$(git -c "safe.directory=$GITHUB_WORKSPACE" show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
             echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
           fi
 
@@ -94,7 +95,7 @@ jobs:
 
       - name: Check out locked Firmware MCP
         id: firmware-checkout
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.input-binding.outcome == 'success' && steps.source.outcome == 'success' }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/BYO-Firmware-MCP
@@ -327,10 +328,11 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Bind the committed execution input index
+        id: input-binding
         shell: bash
         run: |
           if [ -z "$FR13_INPUT_SHA256" ]; then
-            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            digest=$(git -c "safe.directory=$GITHUB_WORKSPACE" show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
             echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
           fi
 
@@ -357,7 +359,7 @@ jobs:
 
       - name: Check out locked Firmware MCP
         id: firmware-checkout
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.input-binding.outcome == 'success' && steps.source.outcome == 'success' }}
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           repository: JasonPeng2019/BYO-Firmware-MCP
@@ -609,10 +611,11 @@ jobs:
           ref: ${{ inputs.execution_commit || github.sha }}
           persist-credentials: false
       - name: Bind the committed execution input index
+        id: input-binding
         shell: bash
         run: |
           if [ -z "$FR13_INPUT_SHA256" ]; then
-            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            digest=$(git -c "safe.directory=$GITHUB_WORKSPACE" show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
             echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
           fi
 
@@ -679,10 +682,11 @@ jobs:
           ref: ${{ inputs.execution_commit || github.sha }}
           persist-credentials: false
       - name: Bind the committed execution input index
+        id: input-binding
         shell: bash
         run: |
           if [ -z "$FR13_INPUT_SHA256" ]; then
-            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            digest=$(git -c "safe.directory=$GITHUB_WORKSPACE" show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
             echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
           fi
 
