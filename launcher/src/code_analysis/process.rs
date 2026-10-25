@@ -34,6 +34,20 @@ macro_rules! final_child_receipt {
             let executable = std::env::current_exe().unwrap();
             let image = std::fs::metadata(&executable).unwrap();
             let modified = image.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos().to_string();
+            // A parent declares an image ephemeral only when its tested cleanup
+            // deletes that image before collection. Only then is the actual
+            // running image measured here; a changed image keeps no digest.
+            let ephemeral = std::env::var_os("BYO_FINAL_CHILD_EPHEMERAL_IMAGE")
+                .and_then(|declared| std::fs::canonicalize(declared).ok())
+                .is_some_and(|declared| std::fs::canonicalize(&executable).ok() == Some(declared));
+            let (image_sha256, hash_method) = if ephemeral {
+                let digest = hex::encode(sha2::Sha256::digest(std::fs::read(&executable).unwrap()));
+                let after = std::fs::metadata(&executable).unwrap();
+                let stable = after.len() == image.len() && after.modified().unwrap() == image.modified().unwrap();
+                (stable.then_some(digest), "child-at-receipt-ephemeral-image")
+            } else {
+                (None, "collector-after-command")
+            };
             let record = serde_json::json!({
                 "schema": "fr05-rust-child/v1", "kind": $kind,
                 "pid": std::process::id(), "at_unix_nanos": now,
@@ -42,8 +56,9 @@ macro_rules! final_child_receipt {
                 // consume its behavioral deadline. The collector hashes once
                 // after the command, checks these image facts, and preserves
                 // this raw pending-hash receipt alongside its measured result.
-                "executable_sha256": null,
-                "executable_hash_method": "collector-after-command",
+                // A declared ephemeral image is measured above instead.
+                "executable_sha256": image_sha256,
+                "executable_hash_method": hash_method,
                 "executable_bytes": image.len(), "executable_modified_unix_nanos": modified,
                 "details": $details, "stdout": stdout, "stderr": stderr,
                 "stdout_sha256": hex::encode(sha2::Sha256::digest(out)),

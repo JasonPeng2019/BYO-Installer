@@ -767,10 +767,30 @@ def rust_ledger(stdout, inventory=False):
     }
 
 
+EPHEMERAL_IMAGE = "child-at-receipt-ephemeral-image"
+
+
+def declared_ephemeral_images(paths):
+    """Exact child images that their parent dispatch declares its test deletes."""
+    declared = set()
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            detail = data["details"]
+            if data["kind"] == "dispatch" and detail.get("ephemeral_image") is True:
+                image = os.path.normcase(Path(detail["executable"]).resolve())
+                declared.add((detail["child_name"], detail["phase"], image))
+        except Exception:
+            continue  # child_receipts reports each unreadable record itself.
+    return declared
+
+
 def child_receipts(directory):
     records, errors = [], []
     images = {}
-    for path in sorted(directory.glob("*.json")):
+    paths = sorted(directory.glob("*.json"))
+    ephemeral = declared_ephemeral_images(paths)
+    for path in paths:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             record = {
@@ -779,32 +799,67 @@ def child_receipts(directory):
                 **data,
             }
             executable = Path(data["executable"]).resolve()
-            image = executable.stat()
-            image_key = (str(executable), image.st_size, image.st_mtime_ns)
-            if data.get("executable_hash_method") == "collector-after-command":
-                if (
-                    data["executable_bytes"],
-                    int(data["executable_modified_unix_nanos"]),
-                ) != (image.st_size, image.st_mtime_ns):
+            method = data.get("executable_hash_method")
+            measured = data.get("executable_sha256")
+            if method == EPHEMERAL_IMAGE:
+                # Only a parent-declared image that its own tested cleanup
+                # deletes may carry the running child's receipt-time digest.
+                binding = (
+                    data["details"].get("child_name"),
+                    data["details"].get("phase"),
+                    os.path.normcase(executable),
+                )
+                if binding not in ephemeral:
                     raise RuntimeError(
-                        "Child executable image changed before collection: "
+                        "Child image is not parent-declared ephemeral: "
                         + str(executable)
                     )
-            if image_key not in images:
-                digest = hashlib.sha256()
-                with executable.open("rb") as source:
-                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                        digest.update(chunk)
-                after = executable.stat()
-                if (after.st_size, after.st_mtime_ns) != image_key[1:]:
-                    raise RuntimeError("Child executable changed during hashing")
-                images[image_key] = digest.hexdigest()
-            if data.get("executable_sha256") not in (None, images[image_key]):
+                child_digest = measured if isinstance(measured, str) else ""
+                if not re.fullmatch("[0-9a-f]{64}", child_digest):
+                    raise RuntimeError(
+                        "Ephemeral child image has no stable measured digest"
+                    )
+            try:
+                image = executable.stat()
+            except FileNotFoundError:
+                if method != EPHEMERAL_IMAGE:
+                    raise
+                image_key = (
+                    str(executable),
+                    data["executable_bytes"],
+                    int(data["executable_modified_unix_nanos"]),
+                )
+                images.setdefault(image_key, measured)
+                qualification = (
+                    "Actual running image hashed by the child at receipt time; its parent declared this image ephemeral and its tested cleanup deleted it before collection. No synthetic child completion."
+                )
+            else:
+                image_key = (str(executable), image.st_size, image.st_mtime_ns)
+                if method in ("collector-after-command", EPHEMERAL_IMAGE):
+                    if (
+                        data["executable_bytes"],
+                        int(data["executable_modified_unix_nanos"]),
+                    ) != (image.st_size, image.st_mtime_ns):
+                        raise RuntimeError(
+                            "Child executable image changed before collection: "
+                            + str(executable)
+                        )
+                if image_key not in images:
+                    digest = hashlib.sha256()
+                    with executable.open("rb") as source:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                    after = executable.stat()
+                    if (after.st_size, after.st_mtime_ns) != image_key[1:]:
+                        raise RuntimeError("Child executable changed during hashing")
+                    images[image_key] = digest.hexdigest()
+                qualification = (
+                    "Actual image hashed after command; raw child size/mtime and stable hash-time image checked. No synthetic child completion."
+                )
+            if measured not in (None, images[image_key]):
                 raise RuntimeError("Child executable digest mismatch")
             record["collected_executable_sha256"] = images[image_key]
-            record["executable_hash_qualification"] = (
-                "Actual image hashed after command; raw child size/mtime and stable hash-time image checked. No synthetic child completion."
-            )
+            record["executable_hash_qualification"] = qualification
             for stream in ("stdout", "stderr"):
                 source = Path(data[stream])
                 if (

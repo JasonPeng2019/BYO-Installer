@@ -1283,6 +1283,7 @@ pub(crate) mod tests {
                 "outer_test": "install::tests::windows_cleanup_helper_deletes_an_exited_executable",
                 "child_name": "install::tests::windows_cleanup_helper_child_process",
                 "phase": "live-cleanup-target", "executable": tombstone,
+                "ephemeral_image": true,
                 "argv": ["--exact", "install::tests::windows_cleanup_helper_child_process"]
             })
         );
@@ -1293,6 +1294,7 @@ pub(crate) mod tests {
             ])
             .env("BYO_TEST_LIVE_CLEANUP_TARGET", &tombstone)
             .env("BYO_TEST_LIVE_CLEANUP_READY", &ready)
+            .env("BYO_FINAL_CHILD_EPHEMERAL_IMAGE", &tombstone)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()

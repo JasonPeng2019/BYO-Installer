@@ -589,5 +589,148 @@ class CapturedCommandDescendantContracts(unittest.TestCase):
         self.assertFalse(gaps, record)
 
 
+CLEANUP_OUTER = "install::tests::windows_cleanup_helper_deletes_an_exited_executable"
+CLEANUP_CHILD = "install::tests::windows_cleanup_helper_child_process"
+AFTER = "collector-after-command"
+EPHEMERAL = command_observer.EPHEMERAL_IMAGE
+
+
+class ChildReceiptImageContracts(unittest.TestCase):
+    """Collector image binding when a child's own tested cleanup deletes it."""
+
+    def setUp(self):
+        self.assertEqual(
+            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
+        )
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.receipts = self.root / "receipts"
+        self.receipts.mkdir()
+        self.parent = self.root / "persistent parent.exe"
+        self.parent.write_bytes(b"persistent parent image")
+        self.child = self.root / ".byo-uninstall-live-test.exe"
+        self.child.write_bytes(b"running ephemeral child image")
+        self.digest = hashlib.sha256(self.child.read_bytes()).hexdigest()
+        self.images = {path: path.stat() for path in (self.parent, self.child)}
+        retained = os.environ.get("BYO_FINAL_CHILD_EVIDENCE")
+        self.evidence = (
+            Path(retained) / self._testMethodName
+            if retained
+            else self.root / "evidence"
+        )
+        self.evidence.mkdir(parents=True, exist_ok=True)
+
+    def receipt(self, kind, image, method, digest, details):
+        facts = self.images[image]
+        record = {
+            "schema": "fr05-rust-child/v1",
+            "kind": kind,
+            "pid": os.getpid(),
+            "executable": str(image),
+            "executable_sha256": digest,
+            "executable_hash_method": method,
+            "executable_bytes": facts.st_size,
+            "executable_modified_unix_nanos": str(facts.st_mtime_ns),
+            "details": details,
+        }
+        for stream in ("stdout", "stderr"):
+            path = self.receipts / f"{kind}.{stream}.log"
+            path.write_bytes(b"")
+            record[stream] = str(path)
+            record[stream + "_sha256"] = hashlib.sha256(b"").hexdigest()
+        (self.receipts / f"{kind}.json").write_text(
+            json.dumps(record, indent=2), encoding="utf-8"
+        )
+
+    def dispatch_and_start(self, digest, method=EPHEMERAL, **declaration):
+        details = {
+            "outer_test": CLEANUP_OUTER,
+            "child_name": CLEANUP_CHILD,
+            "phase": "live-cleanup-target",
+            "executable": str(self.child),
+            "ephemeral_image": True,
+            **declaration,
+        }
+        self.receipt("dispatch", self.parent, AFTER, None, details)
+        start = {"child_name": CLEANUP_CHILD, "phase": "live-cleanup-target"}
+        self.receipt("helper-start", self.child, method, digest, start)
+
+    def collect(self):
+        result = command_observer.child_receipts(self.receipts)
+        (self.evidence / "child-receipts.json").write_text(
+            json.dumps(result, indent=2), encoding="utf-8"
+        )
+        return result
+
+    def kinds(self, result):
+        return sorted(record["kind"] for record in result["records"])
+
+    def record(self, result, kind):
+        (match,) = [row for row in result["records"] if row["kind"] == kind]
+        return match
+
+    def test_declared_deleted_image_keeps_the_running_childs_digest(self):
+        self.dispatch_and_start(self.digest)
+        self.child.unlink()
+        result = self.collect()
+        self.assertEqual(result["errors"], [])
+        start = self.record(result, "helper-start")
+        self.assertEqual(start["collected_executable_sha256"], self.digest)
+        qualification = start["executable_hash_qualification"]
+        self.assertIn("deleted it before collection", qualification)
+        parent = hashlib.sha256(self.parent.read_bytes()).hexdigest()
+        dispatch = self.record(result, "dispatch")
+        self.assertEqual(dispatch["collected_executable_sha256"], parent)
+
+    def test_present_declared_image_is_still_collector_hashed(self):
+        self.dispatch_and_start(self.digest)
+        result = self.collect()
+        self.assertEqual(result["errors"], [])
+        start = self.record(result, "helper-start")
+        self.assertEqual(start["collected_executable_sha256"], self.digest)
+        qualification = start["executable_hash_qualification"]
+        self.assertIn("hashed after command", qualification)
+        self.dispatch_and_start("0" * 64)
+        mismatch = self.collect()
+        self.assertEqual(len(mismatch["errors"]), 1, mismatch)
+        self.assertIn("digest mismatch", mismatch["errors"][0]["error"])
+        self.assertEqual(self.kinds(mismatch), ["dispatch"])
+
+    def test_undeclared_or_other_declaration_is_an_error(self):
+        self.child.unlink()
+        for declaration in (
+            {"ephemeral_image": False},
+            {"phase": "other-phase"},
+            {"child_name": "other-child"},
+            {"executable": str(self.parent)},
+        ):
+            with self.subTest(declaration=declaration):
+                self.dispatch_and_start(self.digest, **declaration)
+                result = self.collect()
+                self.assertEqual(len(result["errors"]), 1, result)
+                self.assertIn("not parent-declared", result["errors"][0]["error"])
+                self.assertEqual(self.kinds(result), ["dispatch"])
+
+    def test_deleted_image_without_a_child_measurement_is_an_error(self):
+        self.child.unlink()
+        cases = ((AFTER, None), (EPHEMERAL, None), (EPHEMERAL, "x" * 64))
+        for method, digest in cases:
+            with self.subTest(method=method, digest=digest):
+                self.dispatch_and_start(digest, method)
+                result = self.collect()
+                self.assertEqual(len(result["errors"]), 1, result)
+                self.assertEqual(self.kinds(result), ["dispatch"])
+
+    def test_conflicting_child_measurements_of_one_image_are_an_error(self):
+        self.dispatch_and_start(self.digest)
+        complete = {"child_name": CLEANUP_CHILD, "phase": "live-cleanup-target"}
+        self.receipt("helper-complete", self.child, EPHEMERAL, "0" * 64, complete)
+        self.child.unlink()
+        result = self.collect()
+        self.assertEqual(len(result["errors"]), 1, result)
+        self.assertIn("digest mismatch", result["errors"][0]["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
