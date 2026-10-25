@@ -3,6 +3,13 @@ name: Quality gates
 on:
   pull_request:
   workflow_call:
+    inputs:
+      execution_commit:
+        type: string
+        required: false
+      input_sha256:
+        type: string
+        required: false
   push:
     branches:
       - InstallerV1
@@ -15,6 +22,8 @@ env:
   GIT_CONFIG_COUNT: "1"
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: "false"
+  FR13_EXECUTION_COMMIT: ${{ inputs.execution_commit || github.sha }}
+  FR13_INPUT_SHA256: ${{ inputs.input_sha256 }}
 
 jobs:
   installer:
@@ -23,6 +32,14 @@ jobs:
     steps:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Bind the committed execution input index
+        shell: bash
+        run: |
+          if [ -z "$FR13_INPUT_SHA256" ]; then
+            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
+          fi
 
       - name: Read locked AgentWorkspace commit
         id: agent-source
@@ -50,6 +67,10 @@ jobs:
           repository: JasonPeng2019/BYO-Firmware-MCP
           ref: ${{ steps.firmware-source.outputs.commit }}
           path: Firmware MCP New
+
+      - name: Bind exact frozen bytes before downstream commands
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase before
 
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
@@ -86,6 +107,11 @@ jobs:
         run: |
           uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
+      - name: Bind exact frozen bytes after all independent downstream commands
+        if: always()
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase after
+
       - name: Retain all independent installer quality outcomes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -101,6 +127,14 @@ jobs:
     steps:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Bind the committed execution input index
+        shell: bash
+        run: |
+          if [ -z "$FR13_INPUT_SHA256" ]; then
+            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
+          fi
 
       - name: Read locked AgentWorkspace commit
         id: source
@@ -135,6 +169,10 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Bind exact frozen bytes before downstream commands
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase before
+
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
         with:
@@ -161,6 +199,11 @@ jobs:
         if: ${{ !cancelled() && steps.workspace-deps.outcome == 'success' && steps.firmware-deps.outcome == 'success' }}
         run: uv run --no-sync --project BYO-Firmware-MCP python release/scripts/final_acceptance_checks.py --group workspace --evidence release/build/final-acceptance/workspace
 
+      - name: Bind exact frozen bytes after all independent downstream commands
+        if: always()
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase after
+
       - name: Retain AgentWorkspace contract outcomes
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -181,6 +224,14 @@ jobs:
       - name: Check out installer
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Bind the committed execution input index
+        shell: bash
+        run: |
+          if [ -z "$FR13_INPUT_SHA256" ]; then
+            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
+          fi
+
       - name: Read locked Firmware MCP commit
         id: source
         shell: bash
@@ -199,6 +250,10 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
+
+      - name: Bind exact frozen bytes before downstream commands
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase before
 
       - name: Install uv
         uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
@@ -220,6 +275,11 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.firmware-deps.outcome == 'success' }}
         working-directory: Firmware MCP New
         run: uv run python -m unittest tests.test_swd_process_isolation
+
+      - name: Bind exact frozen bytes after all independent downstream commands
+        if: always()
+        shell: bash
+        run: python -B bc01-ci/verify_frozen_sources.py --phase after
 
       - name: Retain Firmware MCP contract outcomes
         if: always()

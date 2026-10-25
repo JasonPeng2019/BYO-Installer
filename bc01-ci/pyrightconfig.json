@@ -1,0 +1,11 @@
+{
+  "include": [
+    "*.py"
+  ],
+  "extraPaths": [
+    "../Firmware MCP New/src",
+    "../release/scripts"
+  ],
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic"
+}
