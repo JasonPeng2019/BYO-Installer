@@ -312,9 +312,8 @@ class OwnedObservationEnvironment:
             )
             record = json.loads(reply.stdout)
             self.check_candidates(record, bundle)
-            if (
-                Path(record["executable"]).resolve(strict=True)
-                != sidecar.resolve(strict=True)
+            if Path(record["executable"]).resolve(strict=True) != sidecar.resolve(
+                strict=True
             ):
                 raise RuntimeError(
                     "path selector did not run in the exact compiled sidecar"
@@ -590,9 +589,9 @@ def main():
             observations.owned_path(str(home / "data" / current["relative_runtime"]))
             == runtime
         ), current
-        assert current["manifest_sha256"] == digest(
-            bundle / "release-manifest.json"
-        ), current
+        assert current["manifest_sha256"] == digest(bundle / "release-manifest.json"), (
+            current
+        )
         observations.owned_path(str(runtime))
         assert digest(runtime / "release-manifest.json") == digest(
             bundle / "release-manifest.json"
@@ -880,9 +879,7 @@ def main():
     records.append(
         {
             "case": "VI15.runtime-byte-preservation",
-            "outcome": "PASS"
-            if bound and snapshot(runtime) == immutable
-            else "FAIL",
+            "outcome": "PASS" if bound and snapshot(runtime) == immutable else "FAIL",
         }
     )
     save()
