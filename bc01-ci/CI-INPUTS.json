@@ -3,8 +3,8 @@
   "candidate": "b5b9c18fc9bdd0f5150db2d68a21efd500a39e9f",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
   "source_parent": "f8e7d0306a7572edf9c5fbe30afe0514329f1317",
-  "build_owner_base": "a8bfc28edb746b2306c6140d1d792f44b7d0be5d",
-  "predecessor_input_sha256": "5f905f5ae40962b87ab5ad6286406c29f55854567dd172b0ba6ce24651d34dc2",
+  "build_owner_base": "fc72217917b4a708993bfa63b34d94b0e74c31fc",
+  "predecessor_input_sha256": "3284a22f4aecd06936964b830cc7e7ae762c03de02d3d3f89cf7f76e480f3ea8",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -373,16 +373,16 @@
     ]
   },
   "nested_control_declarations_are_execution_evidence": false,
-  "full_attempt_number": 2,
-  "logical_family": "BC02",
+  "full_attempt_number": 1,
+  "logical_family": "BC03",
   "persistent_canonical_inputs": true,
-  "fallback_task_base": "c8c95aba01da385b9b496e5a1e5d601db7dfaa8f",
+  "fallback_task_base": "fc72217917b4a708993bfa63b34d94b0e74c31fc",
   "firmware_export": {
     "commit": "7372090fc492e959cd26c305e41ec817306350ab",
     "tree": "5b0826c80394e3f4c7f218510de440c98ba846d0"
   },
   "installer_source": {
-    "base_commit": "f0a4d39a3e8d8402f5483cbb79b3b53a4b2984cc",
+    "base_commit": "0b11f35298948af21073b7a414770c39e33837a5",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -440,8 +440,8 @@
       "sha256": "0384f07284028173fb0878dfe25435f53bf21ca03b2cc6646ea203008decd6b2"
     },
     ".github/workflows/quality.yml": {
-      "bytes": 11252,
-      "sha256": "52a486a1e73b90e23ca8256e41f123caa5f0ad69c88bee8000d07b376a687682"
+      "bytes": 13249,
+      "sha256": "4f2da1c4a016b93ce7342a013c4995fbd10c15f0bfdc6f6444a1a53a18445526"
     },
     ".github/workflows/release.yml": {
       "bytes": 16146,
