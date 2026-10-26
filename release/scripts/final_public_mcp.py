@@ -312,8 +312,9 @@ class OwnedObservationEnvironment:
             )
             record = json.loads(reply.stdout)
             self.check_candidates(record, bundle)
-            if Path(record["executable"]).resolve(strict=True) != sidecar.resolve(
-                strict=True
+            if (
+                Path(record["executable"]).resolve(strict=True)
+                != sidecar.resolve(strict=True)
             ):
                 raise RuntimeError(
                     "path selector did not run in the exact compiled sidecar"
@@ -597,9 +598,10 @@ def main():
             bundle / "release-manifest.json"
         )
         assert digest(byo) == observations.qualification["launcher_sha256"]
-        assert digest(
-            runtime / "sidecar" / ("byo-mcp-sidecar" + suffix)
-        ) == observations.qualification["sidecar_sha256"]
+        assert (
+            digest(runtime / "sidecar" / ("byo-mcp-sidecar" + suffix))
+            == observations.qualification["sidecar_sha256"]
+        )
         paths = json.loads(command("installed-paths", [str(byo), "paths"]).stdout)
         assert paths == expected, paths
         observations.qualify(runtime.resolve(strict=True), version, raw_command)
