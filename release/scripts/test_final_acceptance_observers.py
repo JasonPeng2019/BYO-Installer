@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,7 @@ import unittest
 from unittest import mock
 
 import final_acceptance_checks as command_observer
+import final_public_mcp as public_observer
 import psutil
 
 
@@ -749,6 +751,206 @@ class ChildReceiptImageContracts(unittest.TestCase):
         result = self.collect()
         self.assertEqual(len(result["errors"]), 1, result)
         self.assertIn("digest mismatch", result["errors"][0]["error"])
+
+
+class OwnedInstalledObservationContracts(unittest.TestCase):
+    """Actions source controls; never label a synthetic record native evidence.
+
+    Actual compiled selector/installed qualification runs in final_public_mcp,
+    with raw commands and no mocked launcher/doctor/platform path responses.
+    """
+
+    def setUp(self):
+        self.assertEqual(
+            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
+        )
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.owner = public_observer.OwnedObservationEnvironment(self.root)
+        retained = os.environ.get("BYO_FINAL_CHILD_EVIDENCE")
+        self.evidence = (
+            Path(retained) / self._testMethodName
+            if retained
+            else self.root / "evidence"
+        )
+        self.evidence.mkdir(parents=True)
+
+    def retain(self, name, value):
+        (self.evidence / name).write_text(
+            json.dumps(
+                {"evidence_kind": "SOURCE_CONTROL_ONLY", "detail": value}, indent=2
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def test_supported_forwarding_matches_actual_launcher_and_uses_owned_inputs(self):
+        source = Path(__file__).resolve().parents[2] / "launcher/src/main.rs"
+        raw = source.read_text(encoding="utf-8")
+        block = raw.split("const SIDECAR_ENVIRONMENT:", 1)[1].split("];", 1)[0]
+        actual = tuple(re.findall(r'"([A-Za-z_]+)"', block))
+        self.assertEqual(public_observer.SIDECAR_ENVIRONMENT, actual)
+        environment = self.owner.forwarded_environment()
+        for unsupported in (
+            "BYO_HOME",
+            "BYO_MCP_MONITOR_ROOT",
+            "BYO_MCP_ARTIFACT_ROOT",
+            "XDG_DATA_HOME",
+            "PYTHONPATH",
+        ):
+            self.assertNotIn(unsupported, environment)
+        self.assertEqual(environment["BYO_SIDECAR_COMPILED"], "1")
+        for name in (
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "PROGRAMDATA",
+            "TMPDIR",
+            "TEMP",
+            "TMP",
+        ):
+            self.assertTrue(self.owner.owned_path(environment[name]).is_dir())
+        self.retain(
+            "supported-inputs.json",
+            {
+                "launcher_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "forwarded_environment": environment,
+            },
+        )
+        # Fresh real interpreter observes forwarding's actual platformdirs
+        # selector only. It cannot resolve/open/write a monitor or user store.
+        # Its result is source-level dependency evidence, not compiled evidence.
+        child = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                "-c",
+                "import json;from platformdirs import user_data_dir;"
+                "print(json.dumps({'app_data':user_data_dir('BYO',appauthor=False,roaming=False)}))",
+            ],
+            env=environment,
+            cwd=self.owner.project,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+            check=False,
+        )
+        self.retain(
+            "source-platform-selector.json",
+            {
+                "argv": child.args,
+                "exit": child.returncode,
+                "stdout": child.stdout,
+                "stderr": child.stderr,
+            },
+        )
+        self.assertEqual(child.returncode, 0, child.stderr)
+        candidate = json.loads(child.stdout)["app_data"]
+        if os.name == "nt":
+            # Windows shell APIs may ignore supplied profile variables.
+            # Observing an outside path is a correct refusal, never a pass
+            # for installed isolation. Inspect the path, never its contents.
+            if not Path(candidate).resolve().is_relative_to(self.owner.root):
+                with self.assertRaisesRegex(RuntimeError, "outside owned"):
+                    self.owner.owned_path(candidate)
+        else:
+            self.owner.owned_path(candidate)
+        with self.assertRaisesRegex(RuntimeError, "not qualified"):
+            self.owner.require_qualified()
+
+    def test_outside_unknown_and_alias_routes_refused_without_qualification_or_store_io(
+        self,
+    ):
+        # Deliberately synthetic record to exercise admission, never qualification.
+        record = {
+            "schema": "fr16-read-only-paths/v1",
+            "store_resolver_called": False,
+            "denied_io": [],
+            "monitor_override": None,
+            "local_env_absent": True,
+            "dotenv_candidates": [str(self.root / ".env")],
+            "platform": sys.platform,
+            "platformdirs_version": "source-control",
+            "pid": os.getpid(),
+            "creation_time": 1.0,
+            "project": str(self.owner.project),
+            "runtime": str(self.root),
+            "cwd": str(self.root),
+            "runs": str(self.owner.project / ".firm/runs"),
+            "operator": str(self.owner.project / ".byo-monitor"),
+        }
+        outside = self.root / "outside-unopened-store"
+        for candidate in (None, "relative", str(outside)):
+            with self.subTest(candidate=candidate):
+                with self.assertRaises(RuntimeError):
+                    self.owner.check_candidates(
+                        {**record, "app_data": candidate}, self.root
+                    )
+                self.assertFalse(outside.exists())
+                self.assertIsNone(self.owner.qualification)
+        if os.name != "nt":
+            alias = self.owner.root / "alias"
+            alias.symlink_to(self.root, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "outside owned"):
+                self.owner.owned_path(str(alias / "outside-unopened-store"))
+        self.retain(
+            "refusals.json",
+            {
+                "unknown_relative_outside_refused": True,
+                "outside_store_created": outside.exists(),
+                "native_isolation": "UNRUN",
+            },
+        )
+
+    def test_ordinary_sequence_waits_and_refuses_overlap_without_retry(self):
+        marker = self.owner.root / "ordinary-writer"
+        argv = [
+            sys.executable,
+            "-B",
+            "-c",
+            "import sys;from pathlib import Path;p=Path(sys.argv[1]);"
+            "f=p.open('x');f.write(sys.argv[2]);f.close();p.unlink()",
+            str(marker),
+        ]
+        results = []
+        # These are real finite control children, not product/status/doctor mocks.
+        for label in ("status-control", "doctor-control", "init-control"):
+            with self.owner.ordinary(label):
+                with self.assertRaisesRegex(RuntimeError, "already active"):
+                    with self.owner.ordinary("unintended-overlap"):
+                        self.fail("overlapping ordinary body ran")
+                child = subprocess.run(
+                    [*argv, label],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                results.append(
+                    {
+                        "argv": child.args,
+                        "exit": child.returncode,
+                        "stdout": child.stdout,
+                        "stderr": child.stderr,
+                    }
+                )
+                self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertFalse(marker.exists())
+        events = self.owner.events
+        self.assertEqual(
+            [row["name"] for row in events],
+            ["status-control", "doctor-control", "init-control"],
+        )
+        for before, after in zip(events, events[1:]):
+            self.assertLessEqual(
+                before["completed_monotonic"], after["started_monotonic"]
+            )
+        self.retain("ordinary-sequence.json", {"events": events, "commands": results})
+        with self.assertRaisesRegex(RuntimeError, "not qualified"):
+            self.owner.require_qualified()
 
 
 if __name__ == "__main__":
