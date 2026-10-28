@@ -492,6 +492,15 @@ class Processes:
                         record[key] = call()
                     except (ps.AccessDenied, ps.ZombieProcess, OSError):
                         record[key] = None
+                    except SystemError as exc:
+                        # psutil 7.2.2 on macOS: when sysctl(KERN_PROCARGS2)
+                        # fails with errno 0 for an exiting process, cmdline()
+                        # sets PermissionError yet returns, so CPython raises
+                        # SystemError from it. Only that wrapped OS error is an
+                        # unreadable field; liveness is read independently.
+                        if not isinstance(exc.__cause__, OSError):
+                            raise
+                        record[key] = None
             return record
         except ps.NoSuchProcess:
             return None

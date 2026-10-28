@@ -690,6 +690,8 @@ class ListingPs:
                 return row["image"]
 
             def cmdline(self):
+                if isinstance(row["argv"], BaseException):
+                    raise row["argv"]
                 return row["argv"]
 
             def status(self):
@@ -758,6 +760,38 @@ class ChildListing(unittest.TestCase):
         )
         self.assertEqual(native.children({"pid": 1, "create_time": 9.5}), [])
         self.assertEqual(listed, [])
+
+    def test_wrapped_native_cmdline_denial_is_only_an_unreadable_argv(self):
+        # macOS Intel run 40285363892 (008-rust-clean): psutil 7.2.2 cmdline()
+        # on an exiting child raised SystemError from a PermissionError. It
+        # escaped identity(), stopped the sampler and left every liveness unknown.
+        wrapped = SystemError("proc_cmdline returned a result with an exception set")
+        wrapped.__cause__ = PermissionError(13, "sysctl(KERN_PROCARGS2) -> errno 0")
+        table = self.table()
+        table[2]["argv"] = wrapped
+        native = smoke.Processes(ListingPs(table), child_pids=lambda ppid: [2])
+        self.assertEqual(
+            native.children(self.ROOT),
+            [
+                {
+                    "pid": 2,
+                    "create_time": 11.0,
+                    "ppid": 1,
+                    "image": "/cppcheck",
+                    "argv": None,
+                    "status": "running",
+                    "parent_pid": 1,
+                    "parent_create_time": 10.0,
+                }
+            ],
+        )
+
+    def test_unexplained_native_system_error_still_fails_observation(self):
+        table = self.table()
+        table[2]["argv"] = SystemError("native query failed without an OS cause")
+        native = smoke.Processes(ListingPs(table), child_pids=lambda ppid: [2])
+        with self.assertRaises(SystemError):
+            native.children(self.ROOT)
 
     def test_injected_psutil_never_loads_host_listing(self):
         native = smoke.Processes(FakePs("live"))
