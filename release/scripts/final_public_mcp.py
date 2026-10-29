@@ -66,7 +66,14 @@ def read_only(event, args):
         resolved = Path(os.fsdecode(path)).resolve() if isinstance(path, (str, bytes)) else None
         allowed_read = resolved is not None and (resolved.is_relative_to(runtime) or (sys.platform == "linux" and resolved in process_metadata))
         if writing or not allowed_read:
-            denied.append(event)
+            callers = []
+            frame = sys._getframe(1)
+            while frame is not None and len(callers) < 8:
+                callers.append({"file": frame.f_code.co_filename, "function": frame.f_code.co_name, "line": frame.f_lineno})
+                frame = frame.f_back
+            detail = {"event": event, "path": None if resolved is None else str(resolved), "mode": mode, "flags": flags, "callers": callers}
+            denied.append(detail)
+            print(json.dumps({"qualification_denied": detail}), file=sys.stderr, flush=True)
             raise PermissionError("path qualification refuses store/content I/O outside the exact runtime")
     elif event in ("os.mkdir", "os.remove", "os.rename", "os.rmdir", "os.chmod", "os.chown", "os.link", "os.symlink", "subprocess.Popen", "os.system", "socket.connect"):
         denied.append(event)

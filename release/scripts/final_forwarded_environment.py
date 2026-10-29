@@ -5,22 +5,40 @@ only an already captured, credential-free, owned child. Never launch/reap/signal
 processes or inspect a client/provider environment. An unreadable observation is
 UNVERIFIED, never inferred from the source whitelist or a projected environment.
 """
+
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 
 NAMES = (
-    "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "PATH", "SystemRoot",
-    "WINDIR", "COMSPEC", "PATHEXT", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
-    "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+    "HOME",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
 )
 
 
 def main():
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        raise SystemExit("Installed process observations execute only in GitHub Actions")
     parser = argparse.ArgumentParser()
     parser.add_argument("--qualification", type=Path, required=True)
     parser.add_argument("--launcher-pid", type=int, required=True)
@@ -38,23 +56,40 @@ def main():
     preparation = qualification.get("bc05_hosted_preparation_authorized") is True
     if not final and not preparation:
         raise RuntimeError("exact execution authority required")
-    bindings = ("execution_card_sha256", "freeze_commit") if final else ("ci_input_sha256", "source_commit")
-    for key in (*bindings, "os_account_proof_sha256", "native_knownfolder_proof_sha256"):
+    bindings = (
+        ("execution_card_sha256", "freeze_commit")
+        if final
+        else ("ci_input_sha256", "source_commit")
+    )
+    for key in (
+        *bindings,
+        "os_account_proof_sha256",
+        "native_knownfolder_proof_sha256",
+    ):
         if not qualification.get(key):
             raise RuntimeError("missing effective native boundary: " + key)
     if qualification.get("sidecar_environment_contains_no_credentials") is not True:
-        raise RuntimeError("do not inspect any potentially credential-bearing process environment")
+        raise RuntimeError(
+            "do not inspect any potentially credential-bearing process environment"
+        )
     expected = json.loads(args.expected.read_text(encoding="utf-8"))
     if not set(expected) <= set(NAMES):
-        raise RuntimeError("expected environment must contain only the nonsecret product whitelist")
+        raise RuntimeError(
+            "expected environment must contain only the nonsecret product whitelist"
+        )
     image = args.sidecar.resolve(strict=True)
     if hashlib.sha256(image.read_bytes()).hexdigest() != args.sidecar_sha256:
         raise RuntimeError("sidecar image does not match the frozen installed manifest")
     import psutil
 
-    record = {"schema": "v-final-actual-forwarding/v1", "outcome": "UNVERIFIED",
-              "launcher_pid": args.launcher_pid, "launcher_birth": args.launcher_birth,
-              "sidecar": str(image), "sidecar_sha256": args.sidecar_sha256}
+    record = {
+        "schema": "v-final-actual-forwarding/v1",
+        "outcome": "UNVERIFIED",
+        "launcher_pid": args.launcher_pid,
+        "launcher_birth": args.launcher_birth,
+        "sidecar": str(image),
+        "sidecar_sha256": args.sidecar_sha256,
+    }
     try:
         parent = psutil.Process(args.launcher_pid)
         if parent.create_time() != args.launcher_birth:
@@ -80,10 +115,18 @@ def main():
         del environment, folded
         if child.create_time() != birth or parent.create_time() != args.launcher_birth:
             raise RuntimeError("process identity changed during observation")
-        mismatches = {name: {"expected": expected.get(name), "actual": selected[name]}
-                      for name in NAMES if selected[name] != expected.get(name)}
-        record.update(sidecar_pid=child.pid, sidecar_birth=birth, observed=selected,
-                      mismatches=mismatches, outcome="FAIL" if mismatches else "PASS")
+        mismatches = {
+            name: {"expected": expected.get(name), "actual": selected[name]}
+            for name in NAMES
+            if selected[name] != expected.get(name)
+        }
+        record.update(
+            sidecar_pid=child.pid,
+            sidecar_birth=birth,
+            observed=selected,
+            mismatches=mismatches,
+            outcome="FAIL" if mismatches else "PASS",
+        )
     except (OSError, psutil.Error, RuntimeError) as exc:
         record.update(error_type=type(exc).__name__, reason=str(exc))
     args.evidence.parent.mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,12 @@ import sys
 import traceback
 import uuid
 
-from final_public_mcp import OwnedObservationEnvironment, SIDECAR_ENVIRONMENT, digest, snapshot
+from final_public_mcp import (
+    OwnedObservationEnvironment,
+    SIDECAR_ENVIRONMENT,
+    digest,
+    snapshot,
+)
 from test_installed_e2e import read_line, start_initialized_mcp, stop_mcp
 
 
@@ -30,27 +35,57 @@ def write(path, record):
 
 
 def native_boundary():
-    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
-        raise RuntimeError("Only the assigned existing workflow's ephemeral hosted VM qualifies")
-    record = {name: os.environ.get(name) for name in (
-        "GITHUB_REPOSITORY", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
-        "GITHUB_JOB", "RUNNER_NAME", "RUNNER_ENVIRONMENT", "ImageOS", "ImageVersion",
-    )}
+    if (
+        os.environ.get("GITHUB_ACTIONS") != "true"
+        or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
+    ):
+        raise RuntimeError(
+            "Only the assigned existing workflow's ephemeral hosted VM qualifies"
+        )
+    record = {
+        name: os.environ.get(name)
+        for name in (
+            "GITHUB_REPOSITORY",
+            "GITHUB_SHA",
+            "GITHUB_RUN_ID",
+            "GITHUB_RUN_ATTEMPT",
+            "GITHUB_JOB",
+            "RUNNER_NAME",
+            "RUNNER_ENVIRONMENT",
+            "ImageOS",
+            "ImageVersion",
+        )
+    }
     assert record["GITHUB_REPOSITORY"] == "JasonPeng2019/BYO-Installer"
-    assert all(record[name] for name in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB"))
-    record.update(platform=platform.platform(), machine=platform.machine(), node=platform.node())
+    assert all(
+        record[name]
+        for name in ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+    )
+    record.update(
+        platform=platform.platform(), machine=platform.machine(), node=platform.node()
+    )
     if os.name == "nt":
         token = wintypes.HANDLE()
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         advapi = ctypes.WinDLL("advapi32", use_last_error=True)
         userenv = ctypes.WinDLL("userenv", use_last_error=True)
         kernel.GetCurrentProcess.restype = wintypes.HANDLE
-        advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        advapi.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
         advapi.OpenProcessToken.restype = wintypes.BOOL
-        userenv.GetUserProfileDirectoryW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        userenv.GetUserProfileDirectoryW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
         userenv.GetUserProfileDirectoryW.restype = wintypes.BOOL
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        if not advapi.OpenProcessToken(kernel.GetCurrentProcess(), 8, ctypes.byref(token)):
+        if not advapi.OpenProcessToken(
+            kernel.GetCurrentProcess(), 8, ctypes.byref(token)
+        ):
             raise ctypes.WinError(ctypes.get_last_error())
         try:
             size = wintypes.DWORD()
@@ -62,11 +97,18 @@ def native_boundary():
         finally:
             kernel.CloseHandle(token)
         shell = ctypes.WinDLL("shell32", use_last_error=True)
-        shell.SHGetKnownFolderPath.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.HANDLE, ctypes.POINTER(wintypes.LPWSTR)]
+        shell.SHGetKnownFolderPath.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.LPWSTR),
+        ]
         shell.SHGetKnownFolderPath.restype = ctypes.c_long
         ole = ctypes.WinDLL("ole32")
         ole.CoTaskMemFree.argtypes = [ctypes.c_void_p]
-        guid = ctypes.create_string_buffer(uuid.UUID("f1b32785-6fba-4fcf-9d55-7b8e7f157091").bytes_le)
+        guid = ctypes.create_string_buffer(
+            uuid.UUID("f1b32785-6fba-4fcf-9d55-7b8e7f157091").bytes_le
+        )
         output = wintypes.LPWSTR()
         if shell.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(output)) != 0:
             raise RuntimeError("native LocalAppData KnownFolder unavailable")
@@ -75,43 +117,106 @@ def native_boundary():
         finally:
             ole.CoTaskMemFree(ctypes.cast(output, ctypes.c_void_p))
         assert local.is_relative_to(profile)
-        who = subprocess.check_output(["whoami", "/user", "/fo", "csv", "/nh"], text=True).strip()
+        who = subprocess.check_output(
+            ["whoami", "/user", "/fo", "csv", "/nh"], text=True
+        ).strip()
         sid = next(csv.reader([who]))[-1]
         assert sid.startswith("S-1-")
-        groups = subprocess.check_output(["whoami", "/groups", "/fo", "csv", "/nh"], text=True)
-        group_sids = {value for row in csv.reader(groups.splitlines()) for value in row if value.startswith("S-1-")}
+        groups = subprocess.check_output(
+            ["whoami", "/groups", "/fo", "csv", "/nh"], text=True
+        )
+        group_sids = {
+            value
+            for row in csv.reader(groups.splitlines())
+            for value in row
+            if value.startswith("S-1-")
+        }
         owners = {}
-        for path in (profile, local):
-            command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
-                       "& { param($p) (Get-Acl -LiteralPath $p).GetOwner([System.Security.Principal.SecurityIdentifier]).Value }",
-                       str(path)]
-            owner = subprocess.check_output(command, text=True).strip()
-            assert owner in {sid, *group_sids}, (path, owner, sid)
-            owners[str(path)] = {"owner_sid": owner, "identity": [path.stat().st_dev, path.stat().st_ino]}
-        record.update(token_account_sid=sid, token_group_sids=sorted(group_sids), native_api="GetUserProfileDirectoryW + SHGetKnownFolderPath(LocalAppData)",
-                      knownfolder=str(local), ownership=owners)
         app_data = local / "BYO"
+        for path in (profile, local, *([app_data] if app_data.exists() else [])):
+            command = [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r"""& {
+param($p)
+$acl = Get-Acl -LiteralPath $p
+$identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [System.Security.Principal.WindowsPrincipal]::new($identity)
+$required = [int][System.Security.AccessControl.FileSystemRights]::Modify
+$allowed = 0
+$denied = 0
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+    $rule = $_
+    $applies = -not ($rule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -and ($rule.IdentityReference.Value -eq $identity.User.Value -or $principal.IsInRole($rule.IdentityReference))
+    if ($applies) {
+        if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Deny) {
+            $denied = $denied -bor [int]$rule.FileSystemRights
+        } else {
+            $allowed = $allowed -bor [int]$rule.FileSystemRights
+        }
+    }
+    @{sid=$rule.IdentityReference.Value; rights=[int]$rule.FileSystemRights; type=[string]$rule.AccessControlType; applies=$applies}
+})
+@{owner_sid=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value; token_sid=$identity.User.Value; sddl=$acl.Sddl; required=$required; allowed=$allowed; denied=$denied; modify_permitted=(($allowed -band $required) -eq $required -and ($denied -band $required) -eq 0); rules=$rules} | ConvertTo-Json -Depth 5 -Compress
+}""",
+                str(path),
+            ]
+            access = json.loads(subprocess.check_output(command, text=True))
+            assert access["token_sid"] == sid and access["modify_permitted"], access
+            # Standard hosted profiles may be SYSTEM-owned. Actual token DACL
+            # rights and the native profile/KnownFolder join are also required.
+            assert access["owner_sid"] in {sid, *group_sids, "S-1-5-18"}, access
+            owners[str(path)] = {
+                "access": access,
+                "identity": [path.stat().st_dev, path.stat().st_ino],
+            }
+        record.update(
+            token_account_sid=sid,
+            token_group_sids=sorted(group_sids),
+            native_api="GetUserProfileDirectoryW + SHGetKnownFolderPath(LocalAppData)",
+            knownfolder=str(local),
+            ownership=owners,
+        )
     else:
         import pwd
 
         entry = pwd.getpwuid(os.getuid())
         profile = Path(entry.pw_dir).resolve(strict=True)
         assert profile.stat().st_uid == os.getuid()
-        app_data = profile / ("Library/Application Support/BYO" if sys.platform == "darwin" else ".local/share/BYO")
+        app_data = profile / (
+            "Library/Application Support/BYO"
+            if sys.platform == "darwin"
+            else ".local/share/BYO"
+        )
         owners = {}
         path = app_data.parent
         while path.is_relative_to(profile):
             if path.exists():
-                assert path.resolve() == path and path.stat().st_uid == os.getuid(), path
-                owners[str(path)] = {"uid": path.stat().st_uid, "identity": [path.stat().st_dev, path.stat().st_ino]}
+                assert path.resolve() == path and path.stat().st_uid == os.getuid(), (
+                    path
+                )
+                owners[str(path)] = {
+                    "uid": path.stat().st_uid,
+                    "identity": [path.stat().st_dev, path.stat().st_ino],
+                }
             if path == profile:
                 break
             path = path.parent
-        record.update(uid=os.getuid(), gid=os.getgid(), passwd_name=entry.pw_name,
-                      native_api="getuid + getpwuid", ownership=owners)
+        record.update(
+            uid=os.getuid(),
+            gid=os.getgid(),
+            passwd_name=entry.pw_name,
+            native_api="getuid + getpwuid",
+            ownership=owners,
+        )
     assert app_data.resolve() == app_data and app_data.is_relative_to(profile)
-    record.update(native_profile=str(profile), app_data=str(app_data),
-                  scope="This ephemeral Actions job only; no local account or final ROOT common freeze claimed")
+    record.update(
+        native_profile=str(profile),
+        app_data=str(app_data),
+        scope="This ephemeral Actions job only; no local account or final ROOT common freeze claimed",
+    )
     return record
 
 
@@ -123,7 +228,9 @@ class HostedObservationEnvironment(OwnedObservationEnvironment):
         self.environment["USERPROFILE"] = boundary["native_profile"]
         if os.name == "nt":
             self.environment["LOCALAPPDATA"] = boundary["knownfolder"]
-            self.environment["APPDATA"] = str(Path(boundary["native_profile"]) / "AppData/Roaming")
+            self.environment["APPDATA"] = str(
+                Path(boundary["native_profile"]) / "AppData/Roaming"
+            )
             drive, tail = os.path.splitdrive(boundary["native_profile"])
             self.environment.update(HOMEDRIVE=drive, HOMEPATH=tail)
 
@@ -138,7 +245,9 @@ class HostedObservationEnvironment(OwnedObservationEnvironment):
     def check_candidates(self, record, runtime):
         super().check_candidates(record, runtime)
         if Path(record["app_data"]).resolve() != Path(self.native["app_data"]):
-            raise RuntimeError("Compiled selector differs from the OS-qualified native store")
+            raise RuntimeError(
+                "Compiled selector differs from the OS-qualified native store"
+            )
 
     def require_qualified(self):
         super().require_qualified()
@@ -164,28 +273,54 @@ def main():
         record["native_boundary"] = boundary
         observations = HostedObservationEnvironment(evidence, boundary)
         bundle = args.bundle.resolve(strict=True)
-        manifest = json.loads((bundle / "release-manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (bundle / "release-manifest.json").read_text(encoding="utf-8")
+        )
         version = manifest["version"]
         suffix = ".exe" if os.name == "nt" else ""
 
         def command(name, argv, environment=None, cwd=None):
             if observations.qualification is not None:
                 observations.require_qualified()
-            result = subprocess.run(argv, env=environment or observations.environment,
-                                    cwd=cwd or observations.project, capture_output=True,
-                                    text=True, encoding="utf-8", timeout=120, check=False)
-            commands.append({"name": name, "argv": argv, "exit": result.returncode,
-                             "stdout": result.stdout, "stderr": result.stderr})
+            result = subprocess.run(
+                argv,
+                env=environment or observations.environment,
+                cwd=cwd or observations.project,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=120,
+                check=False,
+            )
+            commands.append(
+                {
+                    "name": name,
+                    "argv": argv,
+                    "exit": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
             write(evidence / "commands.json", commands)
             if result.returncode != 0:
                 raise RuntimeError(f"{name} exited {result.returncode}")
             return result
 
-        record["compiled_selector_qualification"] = observations.qualify(bundle, version, command)
+        record["compiled_selector_qualification"] = observations.qualify(
+            bundle, version, command
+        )
         root = Path(boundary["app_data"])
         before_store = snapshot(root)
         record["store_before"] = before_store
-        command("install", [str(bundle / ("byo" + suffix)), "install-runtime", "--bundle", str(bundle)])
+        command(
+            "install",
+            [
+                str(bundle / ("byo" + suffix)),
+                "install-runtime",
+                "--bundle",
+                str(bundle),
+            ],
+        )
         byo = observations.home / "bin" / ("byo" + suffix)
         runtime = observations.home / "data/versions" / version
         sidecar = runtime / "sidecar" / ("byo-mcp-sidecar" + suffix)
@@ -195,31 +330,67 @@ def main():
         command("status", [str(byo), "status"])
         command("doctor", [str(byo), "doctor", "--global", "--json"])
         command("init", [str(byo), "init", "--project", str(observations.project)])
-        server = start_initialized_mcp(byo, observations.project, observations.environment, version,
-                                       cwd=runtime, diagnostics_path=evidence / "mcp-stderr.log")
+        server = start_initialized_mcp(
+            byo,
+            observations.project,
+            observations.environment,
+            version,
+            cwd=runtime,
+            diagnostics_path=evidence / "mcp-stderr.log",
+        )
         wire.append({"initialize": server.initialization_raw})
         import psutil
 
         qualification = {
-            "bc05_hosted_preparation_authorized": True, "source_commit": os.environ["GITHUB_SHA"],
-            "ci_input_sha256": digest(Path(__file__).resolve().parents[2] / "bc01-ci/CI-INPUTS.json"),
+            "bc05_hosted_preparation_authorized": True,
+            "source_commit": os.environ["GITHUB_SHA"],
+            "ci_input_sha256": digest(
+                Path(__file__).resolve().parents[2] / "bc01-ci/CI-INPUTS.json"
+            ),
             "os_account_proof_sha256": digest(evidence / "native-boundary.json"),
-            "native_knownfolder_proof_sha256": digest(evidence / "native-boundary.json"),
+            "native_knownfolder_proof_sha256": digest(
+                evidence / "native-boundary.json"
+            ),
             "sidecar_environment_contains_no_credentials": True,
             "credential_boundary": "Actual installed launcher clears child environment to the exact nonsecret whitelist; no client/provider environment inspected",
         }
         write(evidence / "observer-qualification.json", qualification)
-        expected = {name: observations.environment.get(name) for name in SIDECAR_ENVIRONMENT}
+        expected = {
+            name: observations.environment.get(name) for name in SIDECAR_ENVIRONMENT
+        }
         write(evidence / "expected.json", expected)
-        command("actual-forwarding", [sys.executable, "-B", str(Path(__file__).with_name("final_forwarded_environment.py")),
-                "--qualification", str(evidence / "observer-qualification.json"),
-                "--launcher-pid", str(server.process.pid), "--launcher-birth", str(psutil.Process(server.process.pid).create_time()),
-                "--launcher-sha256", digest(byo), "--sidecar", str(sidecar), "--sidecar-sha256", digest(sidecar),
-                "--expected", str(evidence / "expected.json"), "--evidence", str(evidence / "actual-forwarding.json")])
+        command(
+            "actual-forwarding",
+            [
+                sys.executable,
+                "-B",
+                str(Path(__file__).with_name("final_forwarded_environment.py")),
+                "--qualification",
+                str(evidence / "observer-qualification.json"),
+                "--launcher-pid",
+                str(server.process.pid),
+                "--launcher-birth",
+                str(psutil.Process(server.process.pid).create_time()),
+                "--launcher-sha256",
+                digest(byo),
+                "--sidecar",
+                str(sidecar),
+                "--sidecar-sha256",
+                digest(sidecar),
+                "--expected",
+                str(evidence / "expected.json"),
+                "--evidence",
+                str(evidence / "actual-forwarding.json"),
+            ],
+        )
 
         def tool(number, name, arguments):
-            request = {"jsonrpc": "2.0", "id": number, "method": "tools/call",
-                       "params": {"name": name, "arguments": arguments}}
+            request = {
+                "jsonrpc": "2.0",
+                "id": number,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments},
+            }
             wire.append({"send": request})
             server.process.stdin.write(json.dumps(request) + "\n")
             server.process.stdin.flush()
@@ -231,22 +402,62 @@ def main():
                     assert "error" not in reply, reply
                     result = reply["result"]
                     assert not result.get("isError"), result
-                    return "\n".join(item.get("text", "") for item in result.get("content", []))
+                    return "\n".join(
+                        item.get("text", "") for item in result.get("content", [])
+                    )
 
-        record["handshake"] = tool(10, "initialization_handshake", {"workspace_path": str(observations.project)})
+        record["handshake"] = tool(
+            10,
+            "initialization_handshake",
+            {"workspace_path": str(observations.project)},
+        )
         health = json.loads(tool(11, "server_health_check", {}))
         record["health"] = health
         assert health["recording"]["store_state"] == "app_data", health
+        assert health["recording"]["workspace_bound"], health
+        assert health["recording"]["internal_failures"] == 0, health
+        assert health["recording"]["write_failures"] == 0, health
         stop_mcp(server)
         record["protocol_eof_exit"] = server.process.returncode
         server = None
         after_store = snapshot(root)
-        new_records = {path: value for path, value in after_store.items()
-                       if path.startswith("server_data/") and path.endswith(".jsonl") and path not in before_store}
-        assert new_records, "No new owned workspace records after actual installed handshake"
-        for path, value in before_store.items():
-            assert after_store.get(path) == value, "An earlier store entry changed: " + path
+        record["store_after"] = after_store
+        new_records = {
+            path: value
+            for path, value in after_store.items()
+            if Path(path).parts[0] in {"server_data", "simulated_remote"}
+            and Path(path).name.startswith(health["run_id"] + ".")
+            and path.endswith(".jsonl")
+            and path not in before_store
+        }
         record["new_workspace_records"] = new_records
+        rows = []
+        for path, expected_digest in new_records.items():
+            source = root / path
+            assert digest(source) == expected_digest
+            contents = source.read_bytes()
+            target = evidence / "workspace-records" / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(contents)
+            for line in contents.decode("utf-8").splitlines():
+                if line.strip():
+                    item = json.loads(line)
+                    assert item["run_id"] == health["run_id"], item
+                    assert item["workspace"] == source.parent.name != "unbound", item
+                    rows.append(item)
+        assert new_records, (
+            "No new owned workspace records after actual installed handshake"
+        )
+        closes = [item for item in rows if item["kind"] == "close"]
+        assert closes, "Actual installed run has no durable close record"
+        assert any(
+            item["detail"].get("per_tool", {}).get("initialization_handshake", 0) >= 1
+            for item in closes
+        ), closes
+        for path, value in before_store.items():
+            assert after_store.get(path) == value, (
+                "An earlier store entry changed: " + path
+            )
         record["runtime_unchanged"] = snapshot(runtime) == before_runtime
         assert record["runtime_unchanged"]
         record["outcome"] = "PASS"
@@ -265,7 +476,10 @@ def main():
         if observations is not None:
             record["qualified_environment"] = observations.qualification
         write(evidence / "result.json", record)
-    print(json.dumps({"outcome": record["outcome"], "evidence": str(evidence)}), flush=True)
+    print(
+        json.dumps({"outcome": record["outcome"], "evidence": str(evidence)}),
+        flush=True,
+    )
     return int(record["outcome"] != "PASS")
 
 
