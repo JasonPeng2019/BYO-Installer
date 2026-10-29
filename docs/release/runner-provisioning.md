@@ -1,4 +1,4 @@
-# Native, clean-machine, and HIL runners
+# Native and clean-machine runners
 
 ## Native build labels
 
@@ -23,17 +23,12 @@ candidate and test kit, has no source checkout or build/signing credentials,
 and is destroyed or reverted afterward. Preserve only JUnit, signature,
 receipt, hash, and uninstall evidence.
 
-## HIL labels
+## HIL
 
-- `byo-hil-macos-aarch64`
-- `byo-hil-windows-x86_64`
-- `byo-hil-linux-x86_64`
-
-Each is a dedicated physical host with USB access, fixture power control
-available as `byo-hil-power`, per-board locking, hard process timeouts, and no
-production signing credentials. The repository variables
-`BYO_HIL_PRIMARY_PROJECT` and `BYO_HIL_SACRIFICIAL_PROJECT` identify reviewed
-fixture projects on those hosts.
+There are no HIL runner labels. The remote physical HIL workflow was removed:
+hardware, real-model and native-client acceptance run locally only, never on
+GitHub Actions or self-hosted runners. `hil/README.md` describes the local bench
+route, which uses the same reviewed fixtures and `run_hil.py` assertions.
 
 Runner images must record OS build, compiler, Python, Rust, Nuitka, USB driver,
 probe firmware, and image digest. Patch an image by producing a new immutable

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 
 
@@ -37,8 +36,6 @@ NAMES = (
 
 
 def main():
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise SystemExit("Installed process observations execute only in GitHub Actions")
     parser = argparse.ArgumentParser()
     parser.add_argument("--qualification", type=Path, required=True)
     parser.add_argument("--launcher-pid", type=int, required=True)

@@ -6,9 +6,6 @@ self-hosted-runner:
     - byo-clean-macos-12-x86_64
     - byo-clean-windows-10-22h2-x86_64
     - byo-clean-linux-x86_64-glibc-2.28
-    - byo-hil-macos-aarch64
-    - byo-hil-windows-x86_64
-    - byo-hil-linux-x86_64
 
 # Configuration variables in array of strings defined in your repository or
 # organization. `null` means disabling configuration variables check.

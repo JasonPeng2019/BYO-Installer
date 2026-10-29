@@ -54,9 +54,23 @@ struct Observation {
 }
 #[cfg(target_os = "linux")]
 fn observe(pid: i32) -> std::io::Result<Option<Observation>> {
-    let text = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    observe_proc_stat(pid, || fs::read_to_string(format!("/proc/{pid}/stat")))
+}
+#[cfg(target_os = "linux")]
+fn observe_proc_stat(
+    pid: i32,
+    read: impl FnOnce() -> std::io::Result<String>,
+) -> std::io::Result<Option<Observation>> {
+    let text = match read() {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // An already-open proc stat file can report ESRCH when its task
+        // retires between open and read. Denial and malformed data stay errors.
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.raw_os_error() == Some(libc::ESRCH) =>
+        {
+            return Ok(None);
+        }
         Err(e) => return Err(e),
     };
     let fields: Vec<_> = text
@@ -852,6 +866,31 @@ mod process_posix_macos_observation_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opened_proc_stat_retirement_is_absent_but_denied_or_malformed_is_unknown() {
+        use std::io::Read;
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "read -r line"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        let mut stat = fs::File::open(format!("/proc/{pid}/stat")).unwrap();
+        assert!(observe(pid).unwrap().is_some());
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let mut text = String::new();
+        let error = stat.read_to_string(&mut text).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+        assert!(observe_proc_stat(pid, || Err(error)).unwrap().is_none());
+        assert!(observe(pid).unwrap().is_none());
+        for error in [libc::EPERM, libc::EACCES, libc::EIO] {
+            let result = observe_proc_stat(pid, || Err(std::io::Error::from_raw_os_error(error)));
+            assert_eq!(result.unwrap_err().raw_os_error(), Some(error));
+        }
+        assert!(observe_proc_stat(pid, || Ok("malformed".into())).is_err());
+    }
     #[cfg(target_os = "macos")]
     #[test]
     fn retained_zombie_group_records_native_cleanup_call_evidence() {

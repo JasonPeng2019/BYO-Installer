@@ -164,6 +164,8 @@ def main() -> int:
     parser.add_argument("--artifact-sha256", required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args()
+    if os.environ.get("GITHUB_ACTIONS") or os.environ.get("RUNNER_ENVIRONMENT"):
+        raise RuntimeError("HIL runs locally only, never on a GitHub Actions runner")
     destructive = args.mode == "destructive"
     fixture = validate_fixture(args.fixture.resolve(strict=True), destructive)
     byo = args.byo.resolve(strict=True)

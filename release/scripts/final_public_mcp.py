@@ -48,9 +48,11 @@ SIDECAR_ENVIRONMENT = (
 # Inspect every candidate without resolve_store_root(), _usable(), salt/token
 # reads or server import. Audit denial is fatal even if an importer catches it.
 READ_ONLY_PATH_PROBE = r"""
+import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -58,6 +60,25 @@ runtime, project, version = sys.argv[1:]
 runtime = Path(runtime).resolve(strict=True)
 denied = []
 process_metadata = {Path("/proc/stat"), Path(f"/proc/{os.getpid()}/stat")}
+os_metadata = None
+os_metadata_reads = []
+if sys.platform == "darwin":
+    # sysconfig/zoneinfo needs this exact native OS version file. Qualify its
+    # real root-owned, non-writable ancestry, not a user store or env override.
+    metadata_path = Path("/System/Library/CoreServices/SystemVersion.plist")
+    assert metadata_path.resolve(strict=True) == metadata_path
+    metadata_stat = metadata_path.stat()
+    assert stat.S_ISREG(metadata_stat.st_mode)
+    for node in (metadata_path, *metadata_path.parents):
+        native_stat = node.stat()
+        assert native_stat.st_uid == 0 and not native_stat.st_mode & 0o022, str(node)
+    os_metadata = {
+        "path": str(metadata_path), "uid": metadata_stat.st_uid,
+        "mode": stat.S_IMODE(metadata_stat.st_mode), "device": metadata_stat.st_dev,
+        "inode": metadata_stat.st_ino, "bytes": metadata_stat.st_size,
+        "mtime_ns": metadata_stat.st_mtime_ns,
+        "sha256": hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
+    }
 
 def read_only(event, args):
     if event == "open":
@@ -65,6 +86,11 @@ def read_only(event, args):
         writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
         resolved = Path(os.fsdecode(path)).resolve() if isinstance(path, (str, bytes)) else None
         allowed_read = resolved is not None and (resolved.is_relative_to(runtime) or (sys.platform == "linux" and resolved in process_metadata))
+        if not writing and not allowed_read and os_metadata is not None and resolved == metadata_path:
+            current = resolved.stat()
+            assert (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_uid, stat.S_IMODE(current.st_mode)) == (os_metadata["device"], os_metadata["inode"], os_metadata["bytes"], os_metadata["mtime_ns"], os_metadata["uid"], os_metadata["mode"])
+            os_metadata_reads.append(dict(os_metadata))
+            allowed_read = True
         if writing or not allowed_read:
             callers = []
             frame = sys._getframe(1)
@@ -106,6 +132,7 @@ print(json.dumps({
     "project": str(context.project_root), "runtime": str(context.runtime_root),
     "runs": os.environ["PYOCD_MCP_RUNS_ROOT"], "cwd": str(Path.cwd()),
     "monitor_override": os.environ.get(paths.MONITOR_ROOT_ENV),
+    "qualified_os_metadata": os_metadata, "os_metadata_reads": os_metadata_reads,
     "local_env_absent": True, "dotenv_candidates": [str(path) for path in dotenv_candidates],
 }, sort_keys=True))
 """
