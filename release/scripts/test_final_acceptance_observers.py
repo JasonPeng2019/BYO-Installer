@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 
 import final_acceptance_checks as command_observer
+import final_hosted_forwarding as hosted_observer
 import final_public_mcp as public_observer
 import psutil
 
@@ -44,6 +45,30 @@ class EntryProbe(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 """
+
+
+class HostedWorkspaceLedgerPaths(unittest.TestCase):
+    def test_retained_and_delivered_ledgers_name_the_same_workspace(self):
+        for namespace in ("server_data", "simulated_remote"):
+            with self.subTest(namespace=namespace):
+                self.assertEqual(
+                    hosted_observer.ledger_workspace(
+                        f"{namespace}/bound-workspace/ledger/run-actual.0001.jsonl"
+                    ),
+                    "bound-workspace",
+                )
+
+    def test_unbound_and_unexpected_layouts_remain_nonpassing(self):
+        for path in (
+            "server_data/unbound/ledger/run-actual.0001.jsonl",
+            "simulated_remote/unbound/ledger/run-actual.0001.jsonl",
+            "server_data/workspace/reports/run-actual.0001.jsonl",
+            "server_data/ledger/run-actual.0001.jsonl",
+            "other/workspace/ledger/run-actual.0001.jsonl",
+        ):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(RuntimeError, "bound workspace ledger"):
+                    hosted_observer.ledger_workspace(path)
 
 
 class ReleaseLedgerEntrypointContracts(unittest.TestCase):

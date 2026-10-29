@@ -571,30 +571,57 @@ mod tests {
             hex::encode(rand::random::<[u8; 8]>())
         ));
         fs::create_dir(&root).unwrap();
-        let shell = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        // Exercise the native deadline with a controlled sleeping executable.
+        // PowerShell's unrelated startup can exhaust this synthetic 250 ms cap
+        // before cleanup starts; the production five-second cap is unchanged.
+        fs::write(root.join(".byo-windows-child-fixture"), b"owned").unwrap();
         let argv = vec![
-            shell.display().to_string(),
-            "-NoProfile".into(),
-            "-Command".into(),
-            "Start-Sleep -Seconds 60".into(),
+            std::env::current_exe().unwrap().display().to_string(),
+            "code_analysis::process::platform::tests::deadline_leaf_fixture".into(),
+            "--ignored".into(),
+            "--exact".into(),
+            "--test-threads=1".into(),
         ];
+        crate::final_child_receipt!(
+            "dispatch",
+            json!({
+                "outer_test": "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget",
+                "child_name": argv[1], "phase": "version", "argv": argv, "cwd": root
+            })
+        );
         let mut budget = Budget::new();
         budget.configure(4.0).unwrap();
         let mut events = Vec::new();
-        assert_eq!(
-            run_owned(
-                &argv,
-                &root,
-                &budget,
-                &root,
-                "version",
-                &mut events,
-                Some(Duration::from_millis(250))
-            )
-            .unwrap_err()
-            .code,
-            "analysis/timeout"
+        let outcome = run_owned(
+            &argv,
+            &root,
+            &budget,
+            &root,
+            "version",
+            &mut events,
+            Some(Duration::from_millis(250)),
+        );
+        let out = fs::read(root.join("version.stdout.log"));
+        let err = fs::read(root.join("version.stderr.log"));
+        write_json(&root.join("owned-processes.json"), &events).unwrap();
+        crate::final_child_receipt!(
+            "owned-command-complete",
+            json!({
+                "outer_test": "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget",
+                "child_name": argv[1], "phase": "version", "result": format!("{outcome:?}"),
+                "process_events": events,
+                "exit": events.last().and_then(|event| event.get("process_exit_code")),
+                "terminal_exit": events.last().and_then(|event| event.get("terminal_exit_code")),
+                "stream_read_errors": [out.as_ref().err().map(|error| error.to_string()), err.as_ref().err().map(|error| error.to_string())],
+                "source_streams_present": root.join("version.stdout.log").is_file() && root.join("version.stderr.log").is_file()
+            }),
+            out.as_deref().unwrap_or(b""),
+            err.as_deref().unwrap_or(b"")
+        );
+        assert_eq!(outcome.unwrap_err().code, "analysis/timeout", "{events:?}");
+        assert!(
+            root.join("leaf-ready").is_file(),
+            "Controlled version body never started: {events:?}"
         );
         assert_eq!(events.last().unwrap()["cleanup"], "confirmed");
         assert!(budget.started.elapsed() < Duration::from_secs(1));

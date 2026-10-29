@@ -34,6 +34,19 @@ def write(path, record):
     path.write_text(json.dumps(record, indent=2, default=str) + "\n", encoding="utf-8")
 
 
+def ledger_workspace(relative):
+    """Read the workspace from either retained or locally delivered ledger paths."""
+    parts = Path(relative).parts
+    if (
+        len(parts) != 4
+        or parts[0] not in {"server_data", "simulated_remote"}
+        or parts[2] != "ledger"
+        or parts[1] == "unbound"
+    ):
+        raise RuntimeError(f"Not a bound workspace ledger: {relative}")
+    return parts[1]
+
+
 def native_boundary():
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
@@ -433,6 +446,7 @@ def main():
         record["new_workspace_records"] = new_records
         rows = []
         for path, expected_digest in new_records.items():
+            workspace = ledger_workspace(path)
             source = root / path
             assert digest(source) == expected_digest
             contents = source.read_bytes()
@@ -443,7 +457,7 @@ def main():
                 if line.strip():
                     item = json.loads(line)
                     assert item["run_id"] == health["run_id"], item
-                    assert item["workspace"] == source.parent.name != "unbound", item
+                    assert item["workspace"] == workspace, item
                     rows.append(item)
         assert new_records, (
             "No new owned workspace records after actual installed handshake"
