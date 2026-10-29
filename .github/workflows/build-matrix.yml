@@ -237,6 +237,13 @@ jobs:
             --evidence release/build/analysis-evidence/installed-core \
             --rustc "$(rustup which rustc)" --artifact-label "candidate-$GITHUB_SHA"
 
+      - name: Observe actual installed launcher forwarding and native store in hosted VM
+        id: hosted-forwarding
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
+        shell: bash
+        run: |
+          python -B bc01-ci/build_capture.py --name hosted-forwarding -- uv run --no-sync --project "Firmware MCP New" python release/scripts/final_hosted_forwarding.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --evidence release/build/final-acceptance/hosted-forwarding
+
       - name: Complete public compiled MCP and guard accounting
         id: public-mcp
         if: ${{ !cancelled() && inputs.final_acceptance == true && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
@@ -507,6 +514,14 @@ jobs:
             --workspace-source AgentWorkspace --arm-input-dir "$RUNNER_TEMP/byo-arm-core" \
             --evidence release/build/analysis-evidence/installed-core \
             --artifact-label "candidate-$GITHUB_SHA"
+
+      - name: Observe actual installed Linux launcher forwarding and native store in hosted VM
+        id: hosted-forwarding
+        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && steps.linux-bundle.outcome == 'success' }}
+        shell: bash
+        run: |
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          "$BYO_BUILD_PYTHON" -B bc01-ci/build_capture.py --name hosted-forwarding -- uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_hosted_forwarding.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --evidence release/build/final-acceptance/hosted-forwarding
 
       - name: Complete public compiled Linux MCP and guard accounting
         id: public-mcp
