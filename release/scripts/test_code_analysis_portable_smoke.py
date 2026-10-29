@@ -490,7 +490,10 @@ class Processes:
                 ):
                     try:
                         record[key] = call()
-                    except (ps.AccessDenied, ps.ZombieProcess, OSError):
+                    except (ps.NoSuchProcess, ps.AccessDenied, OSError):
+                        # A later metadata query can race reaping after the
+                        # birth was independently read. Keep that measured
+                        # identity; fresh liveness still has to prove exit.
                         record[key] = None
                     except SystemError as exc:
                         # psutil 7.2.2 on macOS: when sysctl(KERN_PROCARGS2)
@@ -539,7 +542,11 @@ class Processes:
         found = []
         for pid in kids:
             record = self.identity(pid)
-            if record and record["create_time"] >= identity["create_time"]:
+            if (
+                record
+                and record["create_time"] >= identity["create_time"]
+                and record.get("ppid") == identity["pid"]
+            ):
                 record["parent_pid"] = identity["pid"]
                 record["parent_create_time"] = identity["create_time"]
                 found.append(record)

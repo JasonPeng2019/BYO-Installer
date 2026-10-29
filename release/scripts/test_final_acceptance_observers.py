@@ -71,6 +71,92 @@ class HostedWorkspaceLedgerPaths(unittest.TestCase):
                     hosted_observer.ledger_workspace(path)
 
 
+class HostedStoreRestoration(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "store"
+        self.evidence = Path(self.temporary.name) / "evidence"
+        (self.root / "server_data/workspace/ledger").mkdir(parents=True)
+        self.prior = self.root / "server_data/workspace/ledger/prior.jsonl"
+        self.prior.write_bytes(b"immutable prior record\n")
+
+    def test_shared_delivery_changes_are_retained_then_restored_exactly(self):
+        mutable = self.root / hosted_observer.HostedStorePreservation.MUTABLE[0]
+        mutable.write_bytes(b'{"prior": true}\n')
+        store = hosted_observer.HostedStorePreservation(self.root, self.evidence)
+        mutable.write_bytes(b'{"new": true}\n')
+        store.check_immutable(hosted_observer.snapshot(self.root))
+        receipt = store.restore()
+        self.assertEqual(mutable.read_bytes(), b'{"prior": true}\n')
+        self.assertNotEqual(receipt["observed"], receipt["restored"])
+        self.assertEqual(
+            (self.evidence / "after" / mutable.relative_to(self.root)).read_bytes(),
+            b'{"new": true}\n',
+        )
+        self.assertEqual(self.prior.read_bytes(), b"immutable prior record\n")
+
+    def test_new_cursors_are_removed_and_new_run_ledgers_remain(self):
+        store = hosted_observer.HostedStorePreservation(self.root, self.evidence)
+        for name in store.MUTABLE:
+            (self.root / name).write_bytes(b"new delivery bookkeeping")
+        new = self.prior.with_name("new-run.jsonl")
+        new.write_bytes(b"actual new run\n")
+        store.check_immutable(hosted_observer.snapshot(self.root))
+        store.restore()
+        self.assertTrue(all(not (self.root / name).exists() for name in store.MUTABLE))
+        self.assertEqual(new.read_bytes(), b"actual new run\n")
+
+    def test_immutable_corruption_is_rejected_and_never_hidden_by_restoration(self):
+        store = hosted_observer.HostedStorePreservation(self.root, self.evidence)
+        self.prior.write_bytes(b"unexpected corruption\n")
+        with self.assertRaisesRegex(AssertionError, "earlier store entry changed"):
+            store.check_immutable(hosted_observer.snapshot(self.root))
+        with self.assertRaisesRegex(AssertionError, "not preserved"):
+            store.restore()
+        self.assertEqual(self.prior.read_bytes(), b"unexpected corruption\n")
+        self.assertTrue((self.evidence / "restoration.json").is_file())
+
+
+class RustVersionChildAccounting(unittest.TestCase):
+    OUTER = "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget"
+    CHILD = "code_analysis::process::platform::tests::version_probe_fixture"
+
+    def reconcile(self, helper_phase="version", completion_count=1, dispatch=True):
+        records = []
+        for kind, phase in (
+            ([("dispatch", "version")] if dispatch else [])
+            + [("helper-start", helper_phase)]
+            + [("owned-command-complete", "version")] * completion_count
+        ):
+            records.append(
+                {
+                    "kind": kind,
+                    "path": f"actual-{kind}-{len(records)}.json",
+                    "details": {
+                        "outer_test": self.OUTER,
+                        "child_name": self.CHILD,
+                        "phase": phase,
+                    },
+                }
+            )
+        return command_observer.reconcile_rust_children(
+            {"starts": [{"id": self.OUTER}]}, {"records": records}
+        )
+
+    def test_matching_start_and_owned_completion_are_required(self):
+        self.assertEqual(self.reconcile(), [])
+        self.assertTrue(self.reconcile(helper_phase="deadline-leaf"))
+        self.assertTrue(self.reconcile(completion_count=0))
+        self.assertTrue(self.reconcile(completion_count=2))
+
+    def test_started_version_contract_without_dispatch_is_nonpassing(self):
+        self.assertIn(
+            f"Missing actual child dispatch: {self.OUTER}/version",
+            self.reconcile(dispatch=False),
+        )
+
+
 class ReleaseLedgerEntrypointContracts(unittest.TestCase):
     def setUp(self):
         self.assertEqual(

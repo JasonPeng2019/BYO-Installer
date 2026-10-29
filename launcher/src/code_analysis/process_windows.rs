@@ -448,6 +448,30 @@ mod tests {
     use std::os::windows::process::CommandExt;
     #[test]
     #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
+    fn version_probe_fixture() {
+        let root = std::env::current_dir().unwrap();
+        if !root.join(".byo-windows-child-fixture").is_file() {
+            return;
+        }
+        crate::final_child_receipt!(
+            "helper-start",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::version_probe_fixture",
+                "phase": "version", "cwd": root
+            })
+        );
+        fs::write(root.join("version-ready"), b"ready").unwrap();
+        std::thread::sleep(Duration::from_secs(60));
+        crate::final_child_receipt!(
+            "helper-complete",
+            json!({
+                "child_name": "code_analysis::process::platform::tests::version_probe_fixture",
+                "phase": "version"
+            })
+        );
+    }
+    #[test]
+    #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
     fn deadline_leaf_fixture() {
         let root = std::env::current_dir().unwrap();
         if !root.join(".byo-windows-child-fixture").is_file() {
@@ -577,7 +601,7 @@ mod tests {
         fs::write(root.join(".byo-windows-child-fixture"), b"owned").unwrap();
         let argv = vec![
             std::env::current_exe().unwrap().display().to_string(),
-            "code_analysis::process::platform::tests::deadline_leaf_fixture".into(),
+            "code_analysis::process::platform::tests::version_probe_fixture".into(),
             "--ignored".into(),
             "--exact".into(),
             "--test-threads=1".into(),
@@ -620,7 +644,7 @@ mod tests {
         );
         assert_eq!(outcome.unwrap_err().code, "analysis/timeout", "{events:?}");
         assert!(
-            root.join("leaf-ready").is_file(),
+            root.join("version-ready").is_file(),
             "Controlled version body never started: {events:?}"
         );
         assert_eq!(events.last().unwrap()["cleanup"], "confirmed");

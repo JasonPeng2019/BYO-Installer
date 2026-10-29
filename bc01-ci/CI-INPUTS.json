@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "0d79552663f53a381d7a830ae4207570034d135e",
+  "candidate": "df0e425285b813cb82e1f54167f394f52a6eb8f0",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "8e113e7d77875458049413b4797c093c52f75745",
+  "source_parent": "9b24281875b2236c02acdb0af3e2631db0f28aa5",
   "build_owner_base": "8e113e7d77875458049413b4797c093c52f75745",
-  "predecessor_input_sha256": "10e5e660c0158496ab3949f6898f0e16d267455cd5a606ef9af48ab38a70f6a2",
+  "predecessor_input_sha256": "f1807a76d7f36935f7c2167ffafe002187212b09f684463e565690a7341918b7",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -374,7 +374,7 @@
     ]
   },
   "nested_control_declarations_are_execution_evidence": false,
-  "full_attempt_number": 2,
+  "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
   "task_base": "8e113e7d77875458049413b4797c093c52f75745",
@@ -383,7 +383,7 @@
     "tree": "ee96ce91a1681bfabd2bcfc61625f5301dcf7a52"
   },
   "installer_source": {
-    "base_commit": "e6472a899f45b34298535ab7a60d9a9c6582feaf",
+    "base_commit": "84d8d1e15f5a3946673b8c3efb23369f09704716",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -2609,8 +2609,8 @@
       "sha256": "1abd6e6e8e019091e1c1627aa20c9d942b1ea1c0eb867b90ce8b258e3f45ddde"
     },
     "launcher/src/code_analysis/process_windows.rs": {
-      "bytes": 30072,
-      "sha256": "884f7672dc3ae2cdeeec3a48481f89b7c2e8f96fe9b222bcd694651896242330"
+      "bytes": 30974,
+      "sha256": "4be73f50295c17e11f3a1441b71d568d0ab0d646b7831f291d366960cd7a46ee"
     },
     "launcher/src/code_analysis/receipt_consumer_tests.rs": {
       "bytes": 19362,
@@ -2997,16 +2997,16 @@
       "sha256": "a493b2eb1b4a94abb0e4eb15cb5de86aeabc57e95506a45dfe87db75b2abde37"
     },
     "release/scripts/final_acceptance_checks.py": {
-      "bytes": 47023,
-      "sha256": "8731424637516036db0310d2c78547b9d0b6b39348a518bdbfc63e0d3de39510"
+      "bytes": 47166,
+      "sha256": "84465853d2f5462b358dd666b65620b577503f55805d8baf446b9afaa722addb"
     },
     "release/scripts/final_forwarded_environment.py": {
       "bytes": 5535,
       "sha256": "164594aeeed81f5055775d8f8865be3576893e3e636cca17eed31057ef03837f"
     },
     "release/scripts/final_hosted_forwarding.py": {
-      "bytes": 20084,
-      "sha256": "78ee03218ef5b69919711986570730a999f492b57a0f17da995edea4650cb4d4"
+      "bytes": 22973,
+      "sha256": "24f9a91a139ee8f2884a6929e6f87ad63a7785db3bd5a4424e0b85c7318ad045"
     },
     "release/scripts/final_public_mcp.py": {
       "bytes": 36693,
@@ -3101,12 +3101,12 @@
       "sha256": "b21a03ed1696fa5396b2f7f751fc11af33522fdd2da6460ba039822bbcfc62bb"
     },
     "release/scripts/test_code_analysis_portable_smoke.py": {
-      "bytes": 90214,
-      "sha256": "ffd35335c6296c2443ec797c720d51a6b969dde39954b94e206cd97434c7fd45"
+      "bytes": 90547,
+      "sha256": "68897a04bcb5f3aebbabbd881a544aa31adee60a7b402237f77134d3a2927849"
     },
     "release/scripts/test_code_analysis_portable_smoke_controls.py": {
-      "bytes": 71422,
-      "sha256": "2e788395ca7e24a006aaa45d9360db400825ccd86fb9ee1e035a40c3d95752da"
+      "bytes": 73253,
+      "sha256": "4bbc04c3b6858bba601aa6607549bd7a092fa352a43cce0cffdd3bef587b6624"
     },
     "release/scripts/test_compile_workspace.py": {
       "bytes": 3470,
@@ -3117,8 +3117,8 @@
       "sha256": "909fac2f67f7319edb4aabc42ceb1de34e56ad2a0f33506f03861b043f00e767"
     },
     "release/scripts/test_final_acceptance_observers.py": {
-      "bytes": 41673,
-      "sha256": "4b18661ce9d90cfe6f1e03907b2bb9eff803d33812406b69db1f1350bc14b14e"
+      "bytes": 45826,
+      "sha256": "ffa404b61f144902b2d91309846bd160d079a8f2bdae0a080955f4cb9a1d8f6b"
     },
     "release/scripts/test_installed_analysis_ci.py": {
       "bytes": 6145,

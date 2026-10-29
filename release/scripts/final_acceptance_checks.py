@@ -938,6 +938,9 @@ def reconcile_rust_children(outer, children):
         "code_analysis::process::platform::tests::deadline_terminates_owned_child_and_descendant_by_creation_identity": {
             "deadline-parent"
         },
+        "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget": {
+            "version"
+        },
         "install::tests::windows_cleanup_helper_deletes_an_exited_executable": {
             "live-cleanup-target"
         },

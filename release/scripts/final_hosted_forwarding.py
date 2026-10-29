@@ -47,6 +47,67 @@ def ledger_workspace(relative):
     return parts[1]
 
 
+class HostedStorePreservation:
+    """Restore shared delivery cursors while checking immutable prior records."""
+
+    MUTABLE = (
+        "server_data/delivery_anchor.json",
+        "server_data/delivery_state.json",
+    )
+
+    def __init__(self, root, evidence):
+        self.root, self.evidence = root, evidence
+        self.before = snapshot(root)
+        self.mutable = {
+            name: (root / name).read_bytes() if name in self.before else None
+            for name in self.MUTABLE
+        }
+        self.retain("before")
+
+    def retain(self, phase):
+        for name in self.MUTABLE:
+            source = self.root / name
+            if source.is_file():
+                target = self.evidence / phase / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(source.read_bytes())
+
+    def check_immutable(self, after):
+        for name, value in self.before.items():
+            if name not in self.MUTABLE:
+                assert after.get(name) == value, (
+                    "An earlier store entry changed: " + name
+                )
+
+    def restore(self):
+        # Called only after the actual installed server has stopped. These two
+        # documented monitor records are shared mutable delivery bookkeeping;
+        # immutable ledgers and newly observed run records stay untouched.
+        self.retain("after")
+        observed = snapshot(self.root)
+        for name, contents in self.mutable.items():
+            target = self.root / name
+            if contents is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(contents)
+        restored = snapshot(self.root)
+        receipt = {"before": self.before, "observed": observed, "restored": restored}
+        self.evidence.mkdir(parents=True, exist_ok=True)
+        write(self.evidence / "restoration.json", receipt)
+        for name, value in self.before.items():
+            assert restored.get(name) == value, (
+                "An earlier store entry was not preserved: " + name
+            )
+        for name, contents in self.mutable.items():
+            if contents is None:
+                assert name not in restored, (
+                    "New delivery state was not removed: " + name
+                )
+        return receipt
+
+
 def native_boundary():
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
@@ -280,6 +341,7 @@ def main():
     record = {"schema": "bc05-hosted-installed-observation/v1", "outcome": "UNRUN"}
     server = None
     observations = None
+    store = None
     try:
         boundary = native_boundary()
         write(evidence / "native-boundary.json", boundary)
@@ -323,7 +385,8 @@ def main():
             bundle, version, command
         )
         root = Path(boundary["app_data"])
-        before_store = snapshot(root)
+        store = HostedStorePreservation(root, evidence / "store-preservation")
+        before_store = store.before
         record["store_before"] = before_store
         command(
             "install",
@@ -468,10 +531,7 @@ def main():
             item["detail"].get("per_tool", {}).get("initialization_handshake", 0) >= 1
             for item in closes
         ), closes
-        for path, value in before_store.items():
-            assert after_store.get(path) == value, (
-                "An earlier store entry changed: " + path
-            )
+        store.check_immutable(after_store)
         record["runtime_unchanged"] = snapshot(runtime) == before_runtime
         assert record["runtime_unchanged"]
         record["outcome"] = "PASS"
@@ -482,8 +542,21 @@ def main():
             try:
                 stop_mcp(server)
                 record["cleanup_exit"] = server.process.returncode
+                server = None
             except Exception:
                 record["cleanup_error"] = traceback.format_exc()
+                record["outcome"] = "FAIL"
+        if store is not None:
+            if server is None:
+                try:
+                    record["store_restoration"] = store.restore()
+                except Exception:
+                    record["store_restoration_error"] = traceback.format_exc()
+                    record["outcome"] = "FAIL"
+            else:
+                record["store_restoration_error"] = (
+                    "Server stop unconfirmed; no shared state written"
+                )
                 record["outcome"] = "FAIL"
         record["commands"] = commands
         record["wire"] = wire

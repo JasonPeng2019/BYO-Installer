@@ -498,6 +498,52 @@ class Identity(unittest.TestCase):
                 self.assertEqual(native.waited, [(7, 5)])
 
 
+class SampledBirthRaces(unittest.TestCase):
+    def native(self, *, birth_missing=False, parent=1):
+        fake = SimpleNamespace(
+            NoSuchProcess=FakePs.NoSuchProcess,
+            AccessDenied=FakePs.AccessDenied,
+            ZombieProcess=FakePs.ZombieProcess,
+        )
+
+        def gone():
+            raise fake.NoSuchProcess()
+
+        def process(pid):
+            return SimpleNamespace(
+                oneshot=contextlib.nullcontext,
+                create_time=(gone if birth_missing else lambda: 10.0 + pid),
+                ppid=gone if parent is None else lambda: parent,
+                exe=gone,
+                cmdline=gone,
+                status=gone,
+            )
+
+        fake.Process = process
+        return smoke.Processes(fake, child_pids=lambda pid: [2])
+
+    def test_later_reaping_does_not_discard_measured_birth_and_parent(self):
+        observed = self.native().identity(2)
+        self.assertEqual(observed["create_time"], 12.0)
+        self.assertEqual(observed["ppid"], 1)
+        self.assertIsNone(observed["image"])
+        self.assertIsNone(observed["argv"])
+        self.assertIsNone(observed["status"])
+
+    def test_missing_initial_birth_stays_unobserved(self):
+        self.assertIsNone(self.native(birth_missing=True).identity(2))
+
+    def test_child_binding_requires_independently_measured_matching_parent(self):
+        identity = {"pid": 1, "create_time": 11.0}
+        observed = self.native().children(identity)
+        self.assertEqual(len(observed), 1)
+        self.assertEqual(observed[0]["parent_create_time"], 11.0)
+        for parent in (None, 999):
+            with self.subTest(parent=parent):
+                self.assertEqual(self.native(parent=parent).children(identity), [])
+        self.assertEqual(self.native().children({"pid": 1, "create_time": 9.0}), [])
+
+
 class ObservedChildMetadata(unittest.TestCase):
     def observer(self, records, children, alive=True):
         owned = object.__new__(smoke.Owned)
