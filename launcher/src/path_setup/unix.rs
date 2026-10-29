@@ -352,4 +352,107 @@ mod tests {
             .is_symlink());
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "qualified native shell job installs bash/zsh/fish/sh before execution"]
+    fn generated_profiles_execute_in_real_shell_startup_and_preserve_user_bytes() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let mut cases = vec!["bash", "zsh", "fish", "sh"];
+        if cfg!(target_os = "macos") {
+            cases.extend(["bash-login", "bash-profile"]);
+        }
+        for case in cases {
+            let shell = case.split('-').next().unwrap();
+            let found = Command::new("/bin/sh")
+                .args(["-c", &format!("command -v {shell}")])
+                .output()
+                .unwrap();
+            assert!(
+                found.status.success(),
+                "required native shell missing: {shell}"
+            );
+            let executable = String::from_utf8(found.stdout).unwrap();
+            let (root, _) = fixture();
+            let home = root.join("home");
+            let paths = ProductPaths::from_install_dir(&root.join("product ' µ")).unwrap();
+            std::fs::create_dir_all(&paths.bin).unwrap();
+            let probe = paths.bin.join("byo-startup-probe");
+            std::fs::write(
+                &probe,
+                "#!/bin/sh\nprintf 'actual-generated-profile-startup\\n'\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let zdotdir = root.join("custom-zdotdir");
+            let xdg = root.join("custom-xdg");
+            std::fs::create_dir_all(&zdotdir).unwrap();
+            std::fs::create_dir_all(xdg.join("fish")).unwrap();
+            if case == "bash-login" {
+                std::fs::write(home.join(".bash_login"), "# existing login profile\n").unwrap();
+            } else if case == "bash-profile" {
+                std::fs::write(home.join(".profile"), "# existing POSIX profile\n").unwrap();
+            }
+            let profile = choose_profile(
+                &home,
+                Some(shell),
+                cfg!(target_os = "macos"),
+                Some(&zdotdir),
+                Some(&xdg),
+            )
+            .unwrap()
+            .unwrap();
+            let selected = profile.path.clone();
+            std::fs::write(&selected, "# unrelated user bytes\n").unwrap();
+            let original = std::fs::read(&selected).unwrap();
+            add_profile(&paths, profile, paths.bin.to_str().unwrap()).unwrap();
+            let generated = std::fs::read(&selected).unwrap();
+            assert!(generated.starts_with(&original));
+            let mut command = Command::new(executable.trim());
+            command
+                .env("HOME", &home)
+                .env("ZDOTDIR", &zdotdir)
+                .env("XDG_CONFIG_HOME", &xdg)
+                .env("XDG_DATA_HOME", root.join("xdg-data"))
+                .env("XDG_CACHE_HOME", root.join("xdg-cache"))
+                .env("SHELL", executable.trim())
+                .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                .current_dir(&home)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if shell == "bash" && !cfg!(target_os = "macos") {
+                command.args(["--noprofile", "-ic", "byo-startup-probe"]);
+            } else if shell == "zsh" || shell == "fish" {
+                command.args(["-ic", "byo-startup-probe"]);
+            } else {
+                command.args(["-lc", "byo-startup-probe"]);
+            }
+            let mut child = command.spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while child.try_wait().unwrap().is_none() {
+                if Instant::now() >= deadline {
+                    child.kill().unwrap();
+                    let output = child.wait_with_output().unwrap();
+                    panic!("native {case} startup timed out: {output:?}");
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{case}: {output:?}");
+            assert_eq!(
+                output.stdout, b"actual-generated-profile-startup\n",
+                "{case}"
+            );
+            assert_eq!(std::fs::read(&selected).unwrap(), generated);
+            super::super::revert_recorded_edits(&paths).unwrap();
+            assert_eq!(std::fs::read(&selected).unwrap(), original);
+            assert!(!super::super::record_path(&paths).exists());
+            println!("native-shell-startup PASS {case} {}", selected.display());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 }

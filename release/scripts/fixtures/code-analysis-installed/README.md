@@ -1,5 +1,22 @@
 # Independent installed analysis tests
 
+The current Windows Actions route can additionally supply
+`--ci-input-record <record> --ci-input-record-sha256 <SHA256>`. The
+`installed-current-inputs/v1` record binds the current source/analysis locks,
+actual Cppcheck build receipt, pinned ARM acquisition receipt, genuine successful
+compile/link receipt and complete built corpus inventory. This replaces only
+the historical machine-local input manifests for that invocation; the original
+queries, source/preservation checks and all thirteen gate outcomes remain.
+`run_retained_installed_ci.py` prepares these inputs in Actions and preserves the
+original reports. The complete job builds a disclosed detached local Git fixture
+with only the documented narrative constant, matching version metadata and source
+lock changed. The canonical candidate stays unchanged. A second genuine compiled
+version/profile supplies actual professional availability and A-to-B update
+checks; no assets are relabelled or published by that fixture. The coordinator
+joins each of the 13+11 contracts and 12 availability groups to its actual image
+and raw driver report. Missing inputs stay PENDING/BLOCKED. The old flags still
+use their original exact byte pins when the new pair is absent.
+
 Run `python release/scripts/test_code_analysis_installed.py --help` for the full
 input and evidence contract. The script uses stdlib Python on native Windows
 x86_64. No program or dependency is downloaded. Production code, existing tests,

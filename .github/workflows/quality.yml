@@ -86,6 +86,11 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
+      - name: Install supported native startup shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes zsh fish
+
       - name: Rust formatting
         if: ${{ !cancelled() }}
         run: cargo fmt --manifest-path launcher/Cargo.toml --check
@@ -97,6 +102,10 @@ jobs:
       - name: Rust tests
         if: ${{ !cancelled() }}
         run: cargo test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1
+
+      - name: Actual generated shell startup and preservation
+        if: ${{ !cancelled() }}
+        run: cargo test --manifest-path launcher/Cargo.toml --locked generated_profiles_execute_in_real_shell_startup_and_preserve_user_bytes -- --ignored --nocapture
 
       - name: Validate release Python
         if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}

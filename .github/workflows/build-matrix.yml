@@ -177,6 +177,13 @@ jobs:
         run: |
           python -B bc01-ci/build_capture.py --name launcher-contracts -- uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group launcher --evidence release/build/final-acceptance/launcher
 
+      - name: Actual generated macOS shell startup and preservation
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.build-deps.outcome == 'success' }}
+        shell: bash
+        run: |
+          if ! command -v fish; then brew install fish; fi
+          cargo test --manifest-path launcher/Cargo.toml --locked generated_profiles_execute_in_real_shell_startup_and_preserve_user_bytes -- --ignored --nocapture
+
       - name: Complete firmware source quality
         id: firmware-quality
         if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
@@ -593,6 +600,115 @@ jobs:
         with:
           name: byo-symbols-linux-x86_64-glibc-2.28
           path: release/symbols/
+          if-no-files-found: error
+          retention-days: 90
+
+  retained-installed:
+    name: Retained Windows installed profile and update contracts
+    needs: [build]
+    if: ${{ !cancelled() && inputs.final_acceptance == true && inputs.build_kind != 'contracts' }}
+    runs-on: windows-2022
+    # One additional genuine compiled profile plus two original native driver
+    # invocations; their existing request/cleanup budgets remain unchanged.
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+      - name: Bind canonical inputs and source pins
+        id: source
+        run: |
+          if [ -z "$FR13_INPUT_SHA256" ]; then
+            digest=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)
+            echo "FR13_INPUT_SHA256=$digest" >> "$GITHUB_ENV"
+          fi
+          python -c 'import json,os; d=json.load(open("release/source-lock.json")); f=open(os.environ["GITHUB_OUTPUT"],"a"); f.write("firmware="+d["firmware_mcp"]["commit"]+"\nagent="+d["agent_workspace"]["commit"]+"\n")'
+      - name: Check out canonical Firmware source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.source.outputs.firmware }}
+          path: Firmware MCP New
+          persist-credentials: false
+      - name: Check out locked workspace source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: JasonPeng2019/CodexClaudeWorkflow
+          ref: ${{ steps.source.outputs.agent }}
+          path: AgentWorkspace
+          token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+          persist-credentials: false
+      - name: Verify canonical source before derived fixture work
+        run: python -B bc01-ci/verify_frozen_sources.py --phase before-retained
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.20'
+          enable-cache: false
+      - name: Install pinned build and driver dependencies
+        id: dependencies
+        if: ${{ !cancelled() }}
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          uv python install 3.12.13
+          uv sync --project "Firmware MCP New" --locked --all-groups --python 3.12.13
+      - name: Download exact personal artifact from this run
+        id: personal
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: byo-windows-x86_64
+          path: release/build/retained-base-payload
+      - name: Download independent personal build receipts from this run
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: byo-analysis-evidence-windows-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          path: release/build/retained-base-analysis
+      - name: Acquire pinned analyzer inputs for genuine professional build
+        id: analysis
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: python release/scripts/acquire_analysis_inputs.py --expected-target windows-x86_64 --output "$RUNNER_TEMP/retained-analysis-inputs"
+      - name: Acquire genuine native ARM test compiler
+        id: arm
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: |
+          mkdir -p release/build
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/acquire_arm_test_toolchain.py --expected-target windows-x86_64 --output "$RUNNER_TEMP/retained-arm-inputs" > release/build/retained-arm.json
+      - name: Build disclosed detached version and professional fixture
+        id: profile
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.analysis.outcome == 'success' }}
+        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/build_installed_profile_fixture.py --analysis-input-dir "$RUNNER_TEMP/retained-analysis-inputs" --evidence release/build/retained-profile-fixture
+      - name: Execute original retained installed and compiled contracts
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.arm.outcome == 'success' }}
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/run_retained_profiles_ci.py \
+            --base-payload release/build/retained-base-payload --base-analysis release/build/retained-base-analysis \
+            --profile-fixture release/build/retained-profile-fixture --arm-receipt release/build/retained-arm.json \
+            --rustc "$(rustup which rustc)" --evidence release/build/retained-profiles
+      - name: Verify canonical source after all independent fixture work
+        if: always()
+        run: python -B bc01-ci/verify_frozen_sources.py --phase after-retained
+      - name: Preserve complete profile build and native contract packet
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: retained-installed-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            release/build/retained-profile-fixture/PROFILE-FIXTURE.json
+            release/build/retained-profile-fixture/*-source.bundle
+            release/build/retained-profile-fixture/*.stdout
+            release/build/retained-profile-fixture/*.stderr
+            release/build/retained-profile-fixture/installer/release/dist/
+            release/build/retained-profile-fixture/installer/release/build/analysis-evidence/
+            release/build/retained-profiles/
+            release/build/retained-arm.json
+            release/build/final-acceptance/exact-source-*-retained.json
           if-no-files-found: error
           retention-days: 90
 

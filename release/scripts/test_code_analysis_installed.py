@@ -962,6 +962,8 @@ def archive_gate(args, evidence: Evidence) -> dict:
 
 
 def input_gate(args, evidence: Evidence, lab: Path) -> dict:
+    if getattr(args, "ci_input_record", None) is not None:
+        return current_input_gate(args, evidence, lab)
     needed = (
         "cppcheck_inputs",
         "cppcheck_source",
@@ -1042,6 +1044,13 @@ def input_gate(args, evidence: Evidence, lab: Path) -> dict:
         )
     for relative, item in arm["files"].items():
         protected[str(below(args.arm_fixture, relative))] = item
+    return workspace_input(args, evidence, lab, protected, arm)
+
+
+def workspace_input(
+    args, evidence: Evidence, lab: Path, protected: dict, arm: dict
+) -> dict:
+    """Shared original source provenance/preservation checks for either input route."""
     git = shutil.which("git")
     if git is None:
         raise Setup(
@@ -1095,6 +1104,139 @@ def input_gate(args, evidence: Evidence, lab: Path) -> dict:
         "shipping_proof": False,
     }
     return {"protected": protected, "python": python_copy, "arm": arm}
+
+
+def current_input_gate(args, evidence: Evidence, lab: Path) -> dict:
+    """Admit genuine current Actions inputs without historical machine-local paths.
+
+    The explicit receipt hash binds real acquisition/build records. Every
+    original native query, preservation assertion and pending gate is retained.
+    """
+    import acquire_arm_test_toolchain as arm_tools
+    import analysis_tools
+
+    if (
+        not args.ci_input_record_sha256
+        or digest(args.ci_input_record) != args.ci_input_record_sha256
+    ):
+        raise Setup("current input record differs from its explicit SHA256")
+    record = read_json(args.ci_input_record)
+    if record.get("schema") != "installed-current-inputs/v1":
+        raise Setup("unsupported current installed input schema")
+    protected = {str(args.ci_input_record): file_record(args.ci_input_record)}
+
+    def reference(key):
+        ref = record[key]
+        path = Path(ref["path"])
+        verify_file(path, {"sha256": ref["sha256"], "size": ref["size"]})
+        protected[str(path)] = file_record(path)
+        return read_json(path)
+
+    source_lock = reference("source_lock")
+    reference("analysis_lock")
+    if record["source_lock"]["sha256"] != digest(
+        ROOT / "release/source-lock.json"
+    ) or record["analysis_lock"]["sha256"] != digest(
+        ROOT / "release/analysis-tools.lock.json"
+    ):
+        raise Setup("current input source/analysis lock differs from this candidate")
+    artifact_source = evidence.report["artifact"]["source"]
+    for component in ("firmware_mcp", "agent_workspace"):
+        require(
+            artifact_source[component]["commit"] == source_lock[component]["commit"],
+            "artifact source differs from current input lock: " + component,
+        )
+    lock = analysis_tools.load_lock(target="windows-x86_64")
+    build = reference("cppcheck_build")
+    if (
+        build.get("sources")
+        != {name: program["source"] for name, program in lock["programs"].items()}
+        or build.get("recipe") != lock["programs"]["cppcheck"]["recipe"]
+        or len(build.get("commands", [])) < 4
+        or any(step.get("exit_code") != 0 for step in build["commands"])
+    ):
+        raise Setup(
+            "Cppcheck does not have the genuine successful locked build receipt"
+        )
+    if build.get("executable_sha256") != args.cppcheck_sha256:
+        raise Setup("explicit raw Cppcheck oracle differs from its build-byte receipt")
+    for program in lock["programs"].values():
+        for leaf in program["selected_files"]:
+            path = below(args.bundle, leaf["runtime_path"])
+            # The source-built Cppcheck executable is bound by its actual build
+            # receipt; selected upstream data/clangd leaves retain exact pins.
+            expected = {"sha256": leaf["sha256"], "size": leaf["size"]}
+            verify_file(path, expected, product=True)
+            protected[str(path)] = file_record(path)
+    verify_file(
+        args.bundle / lock["programs"]["cppcheck"]["executable"],
+        {"sha256": args.cppcheck_sha256, "size": build["executable_size"]},
+        product=True,
+    )
+    toolchain = reference("arm_toolchain")
+    pin = arm_tools.load_source("windows-x86_64")
+    if (
+        toolchain["target"] != "windows-x86_64"
+        or toolchain["version"] != pin["version"]
+        or toolchain["archive"]["sha256"] != pin["sha256"]
+        or digest(Path(toolchain["compiler"])) != toolchain["compiler_sha256"]
+    ):
+        raise Setup("ARM toolchain differs from the native acquisition pin")
+    protected[toolchain["compiler"]] = file_record(Path(toolchain["compiler"]))
+    arm_build = reference("arm_build")
+    for path, expected in arm_build["source_inputs"].items():
+        verify_file(Path(path), expected)
+        protected[path] = file_record(Path(path))
+    corpus = record["arm_corpus"]
+    if (
+        Path(corpus["root"]).resolve() != args.arm_fixture.resolve()
+        or tree_record(args.arm_fixture) != corpus["files"]
+    ):
+        raise Setup("built ARM corpus inventory differs from current inputs")
+    commands = read_json(args.arm_fixture / "build/compile_commands.json")
+    steps = arm_build.get("steps", [])
+    if (
+        arm_build.get("outcome") != "PASS"
+        or len(commands) != 3
+        or len(steps) != 4
+        or any(step.get("exit") != 0 for step in steps)
+        or [step["argv"] for step in steps[:3]]
+        != [entry["arguments"] for entry in commands]
+        or digest(args.arm_fixture / "build/compile_commands.json")
+        != arm_build["database_sha256"]
+        or digest(args.arm_fixture / "build/firmware.elf") != arm_build["elf_sha256"]
+        or digest(args.arm_fixture / "build/firmware.map") != arm_build["map_sha256"]
+    ):
+        raise Setup("ARM database/ELF/map lacks its actual successful selected build")
+    for entry in commands:
+        compiler = Path(entry["arguments"][0])
+        if compiler.parent != Path(toolchain["root"]) / "bin":
+            raise Setup("ARM command selected a compiler outside the pinned toolchain")
+        output = Path(entry["output"])
+        if digest(output) != arm_build["objects"][str(output)]:
+            raise Setup("ARM compiled object differs from its actual build")
+    elf = (args.arm_fixture / "build/firmware.elf").read_bytes()
+    if elf[:5] != b"\x7fELF\x01" or int.from_bytes(elf[18:20], "little") != 40:
+        raise Setup("selected genuine build is not ELF32 ARM")
+    for relative, item in corpus["files"].items():
+        protected[str(below(args.arm_fixture, relative))] = item
+    if (
+        args.rustc is None
+        or not args.rustc_sha256
+        or digest(args.rustc) != args.rustc_sha256
+    ):
+        raise Setup(
+            "current input route needs the actual existing Rust compiler SHA256"
+        )
+    protected[str(args.rustc)] = file_record(args.rustc)
+    evidence.report["current_input_revision"] = file_record(args.ci_input_record)
+    return workspace_input(
+        args,
+        evidence,
+        lab,
+        protected,
+        {"files": corpus["files"], "original_root": corpus["root"]},
+    )
 
 
 def isolated_environment(home: Path, lab: Path) -> dict:
@@ -4197,6 +4339,7 @@ def main() -> int:
         "rustc",
         "availability-inputs",
         "update-bundle",
+        "ci-input-record",
     ):
         parser.add_argument(f"--{name}", type=Path)
     for name in (
@@ -4206,6 +4349,7 @@ def main() -> int:
         "availability-sha256",
         "update-manifest-sha256",
         "update-cppcheck-sha256",
+        "ci-input-record-sha256",
     ):
         parser.add_argument(f"--{name}")
     parser.add_argument(
@@ -4232,6 +4376,10 @@ def main() -> int:
         help="compiled archive profile; verified through public health, never runtime flags",
     )
     args = parser.parse_args()
+    if bool(args.ci_input_record) != bool(args.ci_input_record_sha256):
+        parser.error(
+            "current input record and its explicit SHA256 must be supplied together"
+        )
     if args.install_timeout_seconds <= 0:
         parser.error("--install-timeout-seconds must be positive")
     if (
