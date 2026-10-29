@@ -23,6 +23,29 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def workspace_subject(path):
+    """Bind the effective checkout and its physical tracked bytes before/after."""
+
+    def git(*argv):
+        return subprocess.check_output(["git", *argv], cwd=path).decode().strip()
+
+    files = subprocess.check_output(["git", "ls-files", "-z"], cwd=path).split(b"\0")
+    return {
+        "path": str(path),
+        "commit": git("rev-parse", "HEAD"),
+        "tree": git("rev-parse", "HEAD^{tree}"),
+        "dirty": git("status", "--porcelain"),
+        "physical_sha256": {
+            name.decode(): hashlib.sha256(
+                (path / name.decode()).read_bytes()
+            ).hexdigest()
+            for name in files
+            if name
+        },
+        "scope": "Explicit effective fixture; this is not the unchanged source-lock pin",
+    }
+
+
 def source_hashes():
     """Hash the source/lock inputs, excluding generated build and evidence trees."""
     files = []
@@ -1037,6 +1060,11 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True)
     parser.add_argument("--record-steps", action="store_true")
     parser.add_argument("--timeout", type=int, default=1800)
+    parser.add_argument(
+        "--workspace-source",
+        type=Path,
+        help="Explicit effective workspace fixture checkout; default is the locked AgentWorkspace checkout",
+    )
     args = parser.parse_args()
     if os.environ.get("GITHUB_ACTIONS") != "true":
         raise SystemExit("Final acceptance execution is Actions-only after ROOT freeze")
@@ -1051,6 +1079,14 @@ def main():
         "firmware-quality": "Firmware MCP New",
         "firmware-contract": "Firmware MCP New",
     }.get(args.group, "")
+    effective_workspace = None
+    if args.workspace_source is not None:
+        if args.group != "workspace":
+            parser.error("--workspace-source applies only to --group workspace")
+        cwd = args.workspace_source.resolve(strict=True)
+        effective_workspace = workspace_subject(cwd)
+        if effective_workspace["dirty"]:
+            raise RuntimeError("Effective workspace fixture is not clean")
     records = []
     before = source_hashes()
     (evidence / "source-before.json").write_text(
@@ -1189,6 +1225,10 @@ def main():
         unchanged = after == before and not any(
             value.startswith("UNAVAILABLE:") for value in after.values()
         )
+        effective_workspace_after = (
+            workspace_subject(cwd) if effective_workspace is not None else None
+        )
+        unchanged = unchanged and effective_workspace_after == effective_workspace
         if not unchanged and state == "PASS":
             state = "ERROR"
         record = {
@@ -1211,6 +1251,7 @@ def main():
             "children": children,
             "evidence_gaps": evidence_gaps,
             "source_inputs_unchanged": unchanged,
+            "effective_workspace_after": effective_workspace_after,
         }
         records.append(record)
         (evidence / (name + ".json")).write_text(
@@ -1222,6 +1263,7 @@ def main():
         json.dumps(
             {
                 "group": args.group,
+                "effective_workspace": effective_workspace,
                 "commands": records,
                 "outcome": "FAIL" if failed else "PASS",
             },

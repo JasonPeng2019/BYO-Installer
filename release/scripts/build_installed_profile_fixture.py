@@ -24,6 +24,21 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def change(path, old, new):
+    """Change one declared byte span, preserving its existing line endings."""
+    data = path.read_bytes()
+    variants = {(old, new)}
+    if b"\n" in old and b"\r\n" not in old:
+        variants.add((old.replace(b"\n", b"\r\n"), new.replace(b"\n", b"\r\n")))
+    matches = [(needle, value) for needle, value in variants if data.count(needle)]
+    if len(matches) != 1 or data.count(matches[0][0]) != 1:
+        raise RuntimeError(
+            "Declared fixture transform does not uniquely match " + str(path)
+        )
+    needle, replacement = matches[0]
+    path.write_bytes(data.replace(needle, replacement))
+
+
 def write(path, record):
     with path.open("x", encoding="utf-8") as stream:
         json.dump(record, stream, indent=2)
@@ -152,14 +167,6 @@ def main():
         )
         if git(destination, "status", "--porcelain"):
             raise RuntimeError("Fixture clone is not an exact clean starting source")
-
-    def change(path, old, new):
-        data = path.read_bytes()
-        if data.count(old) != 1:
-            raise RuntimeError(
-                "Declared fixture transform does not uniquely match " + str(path)
-            )
-        path.write_bytes(data.replace(old, new))
 
     def seal_source(name, path, parent, allowed, before):
         changed = set(git(path, "diff", "--name-only").splitlines())

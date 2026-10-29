@@ -34,6 +34,7 @@ env:
   GIT_CONFIG_KEY_0: core.autocrlf
   GIT_CONFIG_VALUE_0: 'false'
   PYTHONDONTWRITEBYTECODE: '1'
+  PYRIGHT_PYTHON_NODE_VERSION: '22.15.0'
   FR13_EXECUTION_COMMIT: ${{ inputs.execution_commit || github.sha }}
   FR13_INPUT_SHA256: ${{ inputs.input_sha256 }}
 

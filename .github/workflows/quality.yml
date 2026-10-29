@@ -24,6 +24,7 @@ env:
   GIT_CONFIG_VALUE_0: "false"
   FR13_EXECUTION_COMMIT: ${{ inputs.execution_commit || github.sha }}
   FR13_INPUT_SHA256: ${{ inputs.input_sha256 }}
+  PYRIGHT_PYTHON_NODE_VERSION: '22.15.0'
 
 jobs:
   installer:
@@ -193,6 +194,7 @@ jobs:
           ref: ${{ steps.source.outputs.commit }}
           path: AgentWorkspace
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
+          persist-credentials: false
 
       - name: Check out locked Firmware MCP for parser compatibility
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -222,11 +224,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes ripgrep
 
-      - name: Install actual locked AgentWorkspace dependencies
+      - name: Prepare disclosed exact workspace contract fixture and locked dependencies
         id: workspace-deps
-        working-directory: AgentWorkspace
         run: |
-          uv sync --locked --dev
+          python -B release/scripts/build_workspace_contract_fixture.py --source AgentWorkspace --evidence release/build/final-acceptance/workspace-fixture
 
       - name: Install actual locked parser test interpreter
         id: firmware-deps
@@ -235,7 +236,10 @@ jobs:
 
       - name: Run all independent AgentWorkspace contracts
         if: ${{ !cancelled() && steps.workspace-deps.outcome == 'success' && steps.firmware-deps.outcome == 'success' }}
-        run: uv run --no-sync --project BYO-Firmware-MCP python release/scripts/final_acceptance_checks.py --group workspace --evidence release/build/final-acceptance/workspace
+        run: >-
+          uv run --no-sync --project BYO-Firmware-MCP python release/scripts/final_acceptance_checks.py
+          --group workspace --evidence release/build/final-acceptance/workspace
+          --workspace-source release/build/final-acceptance/workspace-fixture/effective-workspace
 
       - name: Bind exact frozen bytes after all independent downstream commands
         if: always()
@@ -247,7 +251,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: workspace-quality-${{ github.sha }}-${{ github.run_attempt }}
-          path: release/build/final-acceptance/
+          path: |
+            release/build/final-acceptance/
+            !release/build/final-acceptance/workspace-fixture/effective-workspace/**
           if-no-files-found: warn
           retention-days: 90
 

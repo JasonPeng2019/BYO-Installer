@@ -22,6 +22,59 @@ import traceback
 from test_installed_e2e import read_line, start_initialized_mcp, stop_mcp
 
 
+LOCAL_CASES = {
+    "VI15.ELF-symbol-public-path": "BLOCKED",
+    "VI15.setup-public-path": "BLOCKED",
+    "VI15.flash-plan-public-path": "BLOCKED",
+    "VI15.U1-native-client-enforcement": "UNVERIFIED",
+}
+
+
+def execution_accounting(records):
+    """Keep mandatory LOCAL nonpasses separate from nonempty deterministic CI.
+
+    Only these four exact case/status/scope combinations are LOCAL prerequisites.
+    A generic BLOCKED, SKIP or UNVERIFIED, even with a LOCAL label, cannot pass CI.
+    """
+    applicable, local, invalid = [], [], []
+    names = [record.get("case") for record in records]
+    if len(set(names)) != len(names) or any(
+        not isinstance(name, str) or not name for name in names
+    ):
+        invalid.append("Missing or duplicate case identity")
+    for record in records:
+        name = record.get("case")
+        if name in LOCAL_CASES:
+            if (
+                record.get("outcome") != LOCAL_CASES[name]
+                or record.get("execution_scope") != "LOCAL"
+                or record.get("mandatory_local_acceptance") is not True
+            ):
+                invalid.append("Invalid LOCAL prerequisite accounting: " + name)
+            local.append({"case": name, "raw_outcome": record.get("outcome")})
+        else:
+            applicable.append(record)
+            if record.get("execution_scope", "CI") != "CI":
+                invalid.append("Unexpected execution scope: " + str(name))
+    missing = sorted(set(LOCAL_CASES) - set(names))
+    passed = (
+        bool(applicable)
+        and not invalid
+        and not missing
+        and all(record.get("outcome") == "PASS" for record in applicable)
+    )
+    return {
+        "applicable_ci_outcome": "PASS" if passed else "FAIL",
+        "applicable_ci_cases": [record["case"] for record in applicable],
+        "applicable_ci_count": len(applicable),
+        "mandatory_local_cases": local,
+        "mandatory_local_cases_missing": missing,
+        "mandatory_local_acceptance_complete": False,
+        "invalid_accounting": invalid,
+        "rule": "Raw LOCAL BLOCKED/UNVERIFIED remain open; only a nonempty complete applicable deterministic pass can pass CI",
+    }
+
+
 # Keep this projection equal to launcher/src/main.rs::SIDECAR_ENVIRONMENT.
 # The observer controls check the frozen source; this is not a new allowlist.
 SIDECAR_ENVIRONMENT = (
@@ -414,6 +467,7 @@ def main():
                     "source_bundle": str(bundle),
                     "manifest_sha256": digest(bundle / "release-manifest.json"),
                     "cases": records,
+                    "execution_accounting": execution_accounting(records),
                     "commands": commands,
                     "wire": wire,
                     "owned_environment": observations.qualification,
@@ -830,6 +884,8 @@ def main():
             {
                 "case": "VI15." + name,
                 "outcome": "BLOCKED",
+                "execution_scope": "LOCAL",
+                "mandatory_local_acceptance": True,
                 "reason": "hosted no-probe target lacks real board/validated authority; supported source regressions and VI16 Windows physical sequence supply separate evidence",
             }
         )
@@ -907,6 +963,8 @@ def main():
         {
             "case": "VI15.U1-native-client-enforcement",
             "outcome": "UNVERIFIED",
+            "execution_scope": "LOCAL",
+            "mandatory_local_acceptance": True,
             "reason": "requires supported client/version/trust evidence; protocol/JSON/CLI shape alone is insufficient",
         }
     )
@@ -917,9 +975,7 @@ def main():
         }
     )
     save()
-    return int(
-        any(record["outcome"] not in ("PASS", "UNVERIFIED") for record in records)
-    )
+    return int(execution_accounting(records)["applicable_ci_outcome"] != "PASS")
 
 
 if __name__ == "__main__":
