@@ -14,6 +14,7 @@ Run: python release/scripts/test_code_analysis_portable_smoke_controls.py -v
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import inspect
 import io
@@ -542,6 +543,156 @@ class SampledBirthRaces(unittest.TestCase):
             with self.subTest(parent=parent):
                 self.assertEqual(self.native(parent=parent).children(identity), [])
         self.assertEqual(self.native().children({"pid": 1, "create_time": 9.0}), [])
+
+
+class DarwinBirthSnapshot(unittest.TestCase):
+    def reader(self, *, changed=None, short=False):
+        def read(pid, flavor, include_zombies, buffer, length):
+            self.assertEqual((flavor, include_zombies, length), (3, 1, 136))
+            info = buffer._obj
+            self.assertEqual(ctypes.sizeof(info), 136)
+            self.assertEqual(type(info).start_seconds.offset, 120)
+            self.assertEqual(type(info).start_microseconds.offset, 128)
+            for name, value in {
+                "pid": pid,
+                "ppid": 41,
+                "status": 5,
+                "start_seconds": 100,
+                "start_microseconds": 250000,
+                **(changed or {}),
+            }.items():
+                setattr(info, name, value)
+            return length - 1 if short else length
+
+        with (
+            mock.patch.object(smoke.sys, "platform", "darwin"),
+            mock.patch("ctypes.CDLL", return_value=SimpleNamespace(proc_pidinfo=read)),
+        ):
+            return smoke.darwin_birth_snapshot()
+
+    def test_public_abi_reads_actual_birth_parent_and_zombie_fields(self):
+        reader = self.reader()
+        observed = reader(42)
+        self.assertEqual(observed["pid"], 42)
+        self.assertEqual(observed["ppid"], 41)
+        self.assertEqual(observed["create_time"], 100.25)
+        self.assertEqual(observed["kernel_start"], [100, 250000])
+        self.assertEqual(observed["status"], "zombie")
+        self.assertEqual(observed["identity_source"], "darwin-proc_pidinfo")
+        self.assertIsNone(observed["image"])
+        self.assertIsNone(observed["argv"])
+
+    def test_short_failed_mismatched_and_invalid_snapshots_grant_no_birth(self):
+        self.assertIsNone(self.reader(short=True)(42))
+        for changed in (
+            {"pid": 43},
+            {"start_seconds": 0},
+            {"start_microseconds": 1000000},
+        ):
+            with self.subTest(changed=changed):
+                self.assertIsNone(self.reader(changed=changed)(42))
+
+    def test_missing_native_symbol_keeps_the_explicit_psutil_fallback(self):
+        with (
+            mock.patch.object(smoke.sys, "platform", "darwin"),
+            mock.patch("ctypes.CDLL", return_value=SimpleNamespace()),
+        ):
+            self.assertIsNone(smoke.darwin_birth_snapshot())
+
+    def test_native_birth_survives_late_psutil_disappearance(self):
+        reader = self.reader()
+        native = smoke.Processes(ListingPs({}), birth_snapshot=reader)
+        self.assertEqual(native.identity(42), reader(42))
+        self.assertIsNone(
+            smoke.Processes(ListingPs({}), birth_snapshot=lambda pid: None).identity(42)
+        )
+
+    def test_reused_pid_metadata_is_never_attached_to_the_measured_old_birth(self):
+        reader = self.reader()
+        table = {
+            42: {
+                "create_time": 200.0,
+                "ppid": 99,
+                "image": "/foreign",
+                "argv": ["foreign"],
+                "status": "running",
+            }
+        }
+        native = smoke.Processes(ListingPs(table), birth_snapshot=reader)
+        observed = native.identity(42)
+        self.assertEqual(observed, reader(42))
+        self.assertIsNone(observed["image"])
+        self.assertIs(native.alive(observed), False)
+
+
+class ImmediateSampling(unittest.TestCase):
+    def test_first_birth_scan_precedes_the_first_inter_scan_wait(self):
+        events = []
+        stop = threading.Event()
+        owned = object.__new__(smoke.Owned)
+        owned.stop = mock.Mock(wraps=stop)
+        owned.sampling = {
+            "interval_seconds": 0.001,
+            "scans": 0,
+            "max_scan_seconds": 0.0,
+            "max_scan_gap_seconds": 0.0,
+        }
+        owned.error = None
+
+        def sample_once():
+            self.assertEqual(owned.stop.wait.call_count, 0)
+            events.append("actual scan")
+            stop.set()
+
+        owned.sample_once = sample_once
+        owned.sample()
+        self.assertIsNone(owned.error)
+        self.assertEqual(events, ["actual scan"])
+        self.assertEqual(owned.sampling["scans"], 1)
+        owned.stop.wait.assert_called_once_with(0.001)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "actual macOS BSD birth snapshot")
+class NativeDarwinBirth(unittest.TestCase):
+    def test_actual_live_zombie_and_reaped_child_births(self):
+        import psutil  # noqa: PLC0415 - real native prerequisite
+
+        reader = smoke.darwin_birth_snapshot()
+        self.assertIsNotNone(reader)
+        live = subprocess.Popen(
+            [sys.executable, "-c", "import sys; sys.stdin.read()"],
+            stdin=subprocess.PIPE,
+        )
+        done = subprocess.Popen([sys.executable, "-c", "pass"])
+        try:
+            for process in (live, done):
+                measured = reader(process.pid)
+                self.assertIsNotNone(measured)
+                self.assertEqual(measured["ppid"], os.getpid())
+                self.assertEqual(
+                    measured["create_time"], psutil.Process(process.pid).create_time()
+                )
+            deadline = time.monotonic() + 10
+            while psutil.Process(done.pid).status() != psutil.STATUS_ZOMBIE:
+                self.assertLess(time.monotonic(), deadline, "owned child never exited")
+                time.sleep(0.001)
+            terminal = reader(done.pid)
+            self.assertIsNotNone(terminal)
+            self.assertEqual(terminal["status"], "zombie")
+            self.assertIs(smoke.Processes().alive(terminal), False)
+            done.wait()
+            following = reader(done.pid)
+            self.assertTrue(
+                following is None or following["create_time"] != terminal["create_time"]
+            )
+        finally:
+            live.stdin.close()
+            try:
+                live.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                live.kill()
+                live.wait()
+            done.wait()
 
 
 class ObservedChildMetadata(unittest.TestCase):
@@ -1788,11 +1939,23 @@ class SourceShape(unittest.TestCase):
             "/IM ",
         ):
             self.assertNotIn(forbidden, text)
-        # ctypes stays confined to the macOS libproc child listing.
+        # Native calls stay confined to these two guarded macOS readers.
+        readers = (smoke.darwin_child_pids, smoke.darwin_birth_snapshot)
         self.assertEqual(
             text.count("ctypes"),
-            inspect.getsource(smoke.darwin_child_pids).count("ctypes"),
+            sum(inspect.getsource(reader).count("ctypes") for reader in readers),
         )
+        for target in ("win32", "linux"):
+            with (
+                self.subTest(target=target),
+                mock.patch.object(smoke.sys, "platform", target),
+                mock.patch(
+                    "ctypes.CDLL",
+                    side_effect=AssertionError("foreign native API loaded"),
+                ),
+            ):
+                for reader in readers:
+                    self.assertIsNone(reader())
 
     def test_stdout_summary_is_ascii_and_evidence_utf8(self):
         text = SCRIPT.read_text(encoding="utf-8")

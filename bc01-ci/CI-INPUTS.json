@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "df0e425285b813cb82e1f54167f394f52a6eb8f0",
+  "candidate": "8fcd64c944d8c9e280957d805e65f28251b325f4",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "9b24281875b2236c02acdb0af3e2631db0f28aa5",
+  "source_parent": "a9c201ff2f1de10a86b1deb584e0a85eda4c1a20",
   "build_owner_base": "8e113e7d77875458049413b4797c093c52f75745",
-  "predecessor_input_sha256": "f1807a76d7f36935f7c2167ffafe002187212b09f684463e565690a7341918b7",
+  "predecessor_input_sha256": "a870f7069af6dc1fe21490cfee47d1eee2bbecaacadd74d3a372eccc074a4922",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -374,7 +374,7 @@
     ]
   },
   "nested_control_declarations_are_execution_evidence": false,
-  "full_attempt_number": 3,
+  "full_attempt_number": 4,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
   "task_base": "8e113e7d77875458049413b4797c093c52f75745",
@@ -383,7 +383,7 @@
     "tree": "ee96ce91a1681bfabd2bcfc61625f5301dcf7a52"
   },
   "installer_source": {
-    "base_commit": "84d8d1e15f5a3946673b8c3efb23369f09704716",
+    "base_commit": "74ac9f4740a1b0dd9bbef7ff61e9ecfa733c28e3",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -3101,12 +3101,12 @@
       "sha256": "b21a03ed1696fa5396b2f7f751fc11af33522fdd2da6460ba039822bbcfc62bb"
     },
     "release/scripts/test_code_analysis_portable_smoke.py": {
-      "bytes": 90547,
-      "sha256": "68897a04bcb5f3aebbabbd881a544aa31adee60a7b402237f77134d3a2927849"
+      "bytes": 94252,
+      "sha256": "788370f6ba0ed359fffeb430e225966452b9adc51ea3c2ba1b06759add55da3d"
     },
     "release/scripts/test_code_analysis_portable_smoke_controls.py": {
-      "bytes": 73253,
-      "sha256": "4bbc04c3b6858bba601aa6607549bd7a092fa352a43cce0cffdd3bef587b6624"
+      "bytes": 79729,
+      "sha256": "cbe8276639938eac67cceb57a01b6c51170f2380ee945f98fd66a79406c520ca"
     },
     "release/scripts/test_compile_workspace.py": {
       "bytes": 3470,

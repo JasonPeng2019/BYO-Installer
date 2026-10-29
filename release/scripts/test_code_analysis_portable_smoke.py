@@ -463,25 +463,108 @@ def darwin_child_pids():
     return child_pids
 
 
-class Processes:
-    """Exact (pid, create_time) observation through psutil. None means unknown."""
+def darwin_birth_snapshot():
+    """Read birth and parent atomically, before slower optional image queries."""
+    if sys.platform != "darwin":
+        return None
+    import ctypes  # noqa: PLC0415 - macOS libproc only
 
-    def __init__(self, psutil_module=None, child_pids=None):
+    # Public <sys/proc_info.h> proc_bsdinfo ABI, on both native Mac targets.
+    # https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info.h
+    class BsdInfo(ctypes.Structure):
+        _fields_ = [
+            (name, ctypes.c_uint32)
+            for name in (
+                "flags",
+                "status",
+                "exit_status",
+                "pid",
+                "ppid",
+                "uid",
+                "gid",
+                "ruid",
+                "rgid",
+                "svuid",
+                "svgid",
+                "reserved",
+            )
+        ] + [
+            ("comm", ctypes.c_char * 16),
+            ("name", ctypes.c_char * 32),
+            ("nfiles", ctypes.c_uint32),
+            ("pgid", ctypes.c_uint32),
+            ("job_count", ctypes.c_uint32),
+            ("tty_device", ctypes.c_uint32),
+            ("tty_pgid", ctypes.c_uint32),
+            ("nice", ctypes.c_int32),
+            ("start_seconds", ctypes.c_uint64),
+            ("start_microseconds", ctypes.c_uint64),
+        ]
+
+    try:
+        read = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).proc_pidinfo
+    except (OSError, AttributeError):
+        return None
+    read.argtypes = (
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    )
+    read.restype = ctypes.c_int
+    length = ctypes.sizeof(BsdInfo)
+
+    def birth(pid):
+        info = BsdInfo()
+        # PROC_PIDTBSDINFO=3, arg1 includes retained zombie identities.
+        size = read(pid, 3, 1, ctypes.byref(info), length)
+        if (
+            size != length
+            or info.pid != pid
+            or not info.start_seconds
+            or info.start_microseconds >= 1_000_000
+        ):
+            return None
+        return {
+            "pid": pid,
+            "create_time": info.start_seconds + info.start_microseconds / 1_000_000,
+            "ppid": info.ppid,
+            "image": None,
+            "argv": None,
+            "status": "zombie" if info.status == 5 else None,
+            "identity_source": "darwin-proc_pidinfo",
+            "kernel_start": [info.start_seconds, info.start_microseconds],
+        }
+
+    return birth
+
+
+class Processes:
+    """Exact OS births and fresh liveness; unreadable facts stay unknown."""
+
+    def __init__(self, psutil_module=None, child_pids=None, birth_snapshot=None):
         if psutil_module is None:
             import psutil as psutil_module  # noqa: PLC0415 - explicit prerequisite
 
             child_pids = child_pids or darwin_child_pids()
+            birth_snapshot = birth_snapshot or darwin_birth_snapshot()
         self.ps = psutil_module
         self.child_pids = child_pids
         self.child_listing = "darwin-libproc-ppid" if child_pids else "psutil"
+        self.birth_snapshot = birth_snapshot
 
     def identity(self, pid: int) -> dict | None:
         ps = self.ps
+        record = self.birth_snapshot(pid) if self.birth_snapshot else None
         try:
             process = ps.Process(pid)
             with process.oneshot():
                 created = process.create_time()
-                record = {"pid": pid, "create_time": created}
+                if record is not None and record["create_time"] != created:
+                    return record  # Never attach another incarnation's metadata.
+                if record is None:
+                    record = {"pid": pid, "create_time": created}
                 for key, call in (
                     ("ppid", process.ppid),
                     ("image", process.exe),
@@ -494,7 +577,7 @@ class Processes:
                         # A later metadata query can race reaping after the
                         # birth was independently read. Keep that measured
                         # identity; fresh liveness still has to prove exit.
-                        record[key] = None
+                        record.setdefault(key, None)
                     except SystemError as exc:
                         # psutil 7.2.2 on macOS: when sysctl(KERN_PROCARGS2)
                         # fails with errno 0 for an exiting process, cmdline()
@@ -503,12 +586,12 @@ class Processes:
                         # unreadable field; liveness is read independently.
                         if not isinstance(exc.__cause__, OSError):
                             raise
-                        record[key] = None
+                        record.setdefault(key, None)
             return record
         except ps.NoSuchProcess:
-            return None
+            return record
         except ps.AccessDenied:
-            return None
+            return record
 
     def alive(self, identity: dict) -> bool | None:
         ps = self.ps
@@ -590,6 +673,12 @@ class Owned:
             [dict(root)] if root and root.get("image") and root.get("argv") else []
         )
         self.error = None
+        self.sampling = {
+            "interval_seconds": 0.001 if sys.platform == "darwin" else 0.005,
+            "scans": 0,
+            "max_scan_seconds": 0.0,
+            "max_scan_gap_seconds": 0.0,
+        }
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.sample, daemon=True)
         self.thread.start()
@@ -648,8 +737,20 @@ class Owned:
 
     def sample(self) -> None:
         try:
-            while not self.stop.wait(0.005):
+            previous = None
+            while not self.stop.is_set():
+                started = time.monotonic()
+                if previous is not None:
+                    self.sampling["max_scan_gap_seconds"] = max(
+                        self.sampling["max_scan_gap_seconds"], started - previous
+                    )
+                previous = started
                 self.sample_once()
+                self.sampling["scans"] += 1
+                self.sampling["max_scan_seconds"] = max(
+                    self.sampling["max_scan_seconds"], time.monotonic() - started
+                )
+                self.stop.wait(self.sampling["interval_seconds"])
         except Exception as exc:  # retained; finish() reports unverifiable
             self.error = exc
 
@@ -773,6 +874,7 @@ class Evidence:
             processes=identities,
             unobserved_leader=owned.unobserved_leader,
             child_listing=self.native.child_listing,
+            sampling=owned.sampling,
         )
         write_json(path / "command.json", record)  # Failure facts before cleanup.
         self.cleanup(name, identities)
