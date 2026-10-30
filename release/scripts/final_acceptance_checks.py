@@ -340,10 +340,10 @@ def capture_command_descendants(pid, birth, owned, observations):
         )
 
 
-def run_finite(command, cwd, out, err, timeout):
+def run_finite(command, cwd, out, err, timeout, env=None):
     import psutil
 
-    child = subprocess.Popen(command, cwd=cwd, stdout=out, stderr=err)
+    child = subprocess.Popen(command, cwd=cwd, stdout=out, stderr=err, env=env)
     owned, observations = {}, []
     root = command_identity(child.pid)
     root_birth = root.get("creation_time")
@@ -1088,6 +1088,12 @@ def main():
         if effective_workspace["dirty"]:
             raise RuntimeError("Effective workspace fixture is not clean")
     records = []
+    command_env = None
+    environment_selectors = {}
+    if args.group == "workspace":
+        firmware_source = (ROOT / "Firmware MCP New").resolve(strict=True)
+        environment_selectors["BYO_FIRMWARE_MCP_SOURCE"] = str(firmware_source)
+        command_env = {**os.environ, **environment_selectors}
     before = source_hashes()
     (evidence / "source-before.json").write_text(
         json.dumps(before, indent=2) + "\n", encoding="utf-8"
@@ -1157,6 +1163,7 @@ def main():
                 {
                     "argv": command,
                     "cwd": str(cwd),
+                    "environment_selectors": environment_selectors,
                     "started_monotonic": started,
                     "declarations": declarations,
                     "accounting": accounting,
@@ -1174,7 +1181,7 @@ def main():
             cleanup, observation_errors = [], []
             try:
                 code, timed_out, cleanup, observation_errors = run_finite(
-                    command, cwd, out, err, args.timeout
+                    command, cwd, out, err, args.timeout, env=command_env
                 )
                 state = "TIMEOUT" if timed_out else ("PASS" if code == 0 else "FAIL")
                 if command_observation_failed(cleanup, observation_errors):
@@ -1235,6 +1242,7 @@ def main():
             "name": name,
             "argv": command,
             "cwd": str(cwd),
+            "environment_selectors": environment_selectors,
             "exit": code,
             "outcome": state,
             "reason": reason,

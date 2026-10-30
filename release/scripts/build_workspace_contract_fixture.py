@@ -58,14 +58,49 @@ def revise(data):
             '        if stage == "chain" and armed.is_set() and not staged and parent[0] == ids["parent"] and threading.get_ident() == staging_thread:\n',
         ),
         (
-            '        owned.finish()\n        assert staged == [("exited", "gone")], staged\n',
-            '        assert owned.deadline is not None\n        with posix._RETAINED_GUARD:\n            retained = posix._RETAINED[leader]\n        retained._capture(owned.deadline)\n        owned.finish()\n        assert staged == [("exited", "gone")], staged\n',
+            "    real_children, real_chain, real_info = posix._children, posix._descendant_chain, posix._process_info\n",
+            "    real_children, real_chain, real_info = posix._children, posix._descendant_chain, posix._process_info\n    real_capture = posix.AnalysisPopen._capture\n    capture_guard = threading.RLock()\n",
+        ),
+        (
+            "    def children(pid: int, deadline: float) -> set[int]:\n",
+            '    def capture(owner: Any, deadline: float) -> bool:\n        if not capture_guard.acquire(timeout=max(0, deadline - time.monotonic())):\n            owner._note_incomplete_observation("test staging capture exceeded original deadline")\n            return False\n        try:\n            return real_capture(owner, deadline)\n        finally:\n            capture_guard.release()\n\n    def children(pid: int, deadline: float) -> set[int]:\n',
+        ),
+        (
+            "        if pid in reads and not staged:\n",
+            "        if pid in reads and not staged and threading.get_ident() == staging_thread:\n",
+        ),
+        (
+            '        elif pid == ids.get("parent") and not staged and any(count >= 2 for count in reads.values()):\n',
+            '        elif pid == ids.get("parent") and not staged and threading.get_ident() == staging_thread and any(count >= 2 for count in reads.values()):\n',
+        ),
+        (
+            '    monkeypatch.setattr(posix, "_children", children)\n',
+            '    monkeypatch.setattr(posix.AnalysisPopen, "_capture", capture)\n    monkeypatch.setattr(posix, "_children", children)\n',
         ),
     )
     for before, after in replacements:
         if text.count(before) != 1:
             raise RuntimeError("Declared retirement fixture edit is not unique")
         text = text.replace(before, after)
+    begin = text.index("        ids.update(leader=leader, parent=parent)\n")
+    end = text.index("        owned.finish()\n", begin)
+    staged = text[begin:end]
+    text = (
+        text[:begin]
+        + "        assert owned.deadline is not None\n"
+        + "        assert capture_guard.acquire(timeout=max(0, owned.deadline - time.monotonic()))\n"
+        + "        try:\n"
+        + "".join(
+            "    " + line if line.strip() else line
+            for line in staged.splitlines(keepends=True)
+        )
+        + "            with posix._RETAINED_GUARD:\n"
+        + "                retained = posix._RETAINED[leader]\n"
+        + '            assert retained._capture(owned.deadline), "Staged capture did not complete within the original deadline"\n'
+        + "        finally:\n"
+        + "            capture_guard.release()\n"
+        + text[end:]
+    )
     text = (
         "".join(lines[: function.lineno - 1])
         + text
@@ -107,7 +142,7 @@ def main():
         "commands": [],
         "remote_ref_mutations": 0,
         "outcome": "ERROR",
-        "scope": "Actual owner capture on the test's staging thread and existing deadline; all original assertions, pairs and production source preserved",
+        "scope": "Serialize real capture on the test staging thread with its existing deadline; preserve all original assertions/eight pairs and production content. Disclose the manual-permission executable mode repaired by attach-project before tests, never ignore tracked dirt.",
     }
 
     def run(name, argv, cwd=ROOT, timeout=300):
@@ -184,6 +219,11 @@ def main():
         target = fixture / TEST
         baseline = target.read_bytes()
         target.write_bytes(revise(baseline))
+        # attach-project repairs the helper's execute bit through its project
+        # symlink. Disclose that supported mode before taking the fixed subject;
+        # never ignore tracked dirt produced by the test.
+        helper = fixture / "bin/manual-permission"
+        helper.chmod(helper.stat().st_mode | 0o111)
         revised_ast = ast.dump(ast.parse(target.read_bytes()))
         run("locked-dependencies", ["uv", "sync", "--locked", "--dev"], fixture)
         run(
@@ -194,12 +234,12 @@ def main():
         if ast.dump(ast.parse(target.read_bytes())) != revised_ast:
             raise RuntimeError("Formatting changed the declared fixture semantics")
         changed = git(fixture, "diff", "--name-only").splitlines()
-        if changed != [TEST]:
+        if changed != ["bin/manual-permission", TEST]:
             raise RuntimeError("Undeclared effective workspace delta")
         (output / "EFFECTIVE-DELTA.patch").write_bytes(
             subprocess.check_output(["git", "diff", "--binary"], cwd=fixture)
         )
-        git(fixture, "add", "--", TEST)
+        git(fixture, "add", "--", "bin/manual-permission", TEST)
         git(
             fixture,
             "-c",
@@ -218,11 +258,24 @@ def main():
             git(fixture, "rev-parse", "HEAD^") != PIN
             or git(fixture, "status", "--porcelain")
             or original != inventory(source)
+            or git(source, "status", "--porcelain")
             or set(before) != set(after)
-            or {name for name in before if before[name] != after[name]} != {TEST}
+            or {name for name in before if before[name] != after[name]}
+            != {"bin/manual-permission", TEST}
         ):
             raise RuntimeError(
                 "Workspace source custody/declared fixture delta differs"
+            )
+        if (
+            before["bin/manual-permission"]["mode"] != "100644"
+            or after["bin/manual-permission"]["mode"] != "100755"
+            or before["bin/manual-permission"]["blob"]
+            != after["bin/manual-permission"]["blob"]
+            or before["bin/manual-permission"]["sha256"]
+            != after["bin/manual-permission"]["sha256"]
+        ):
+            raise RuntimeError(
+                "Workspace helper delta is not its exact declared mode-only change"
             )
         bundle = output / "effective-workspace.bundle"
         git(fixture, "bundle", "create", str(bundle), "HEAD", "^" + PIN)
@@ -240,6 +293,12 @@ def main():
             bundle_sha256=sha(bundle.read_bytes()),
             bundle_verification=verification.decode(),
             effective_test_sha256=sha(target.read_bytes()),
+            effective_helper_mode={
+                "path": "bin/manual-permission",
+                "before": before["bin/manual-permission"],
+                "after": after["bin/manual-permission"],
+                "cause": "Pinned attach-project repairs executable bits through project symlinks",
+            },
         )
     finally:
         (output / "FIXTURE.json").write_text(

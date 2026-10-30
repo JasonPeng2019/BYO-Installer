@@ -440,7 +440,7 @@ fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -
         })
         .filter(|candidate| candidate.is_file())
         .unwrap_or_else(|| PathBuf::from("powershell.exe"));
-    let mut command = Command::new(powershell);
+    let mut command = Command::new(&powershell);
     // A delete can temporarily report success while the executable image is
     // still mapped, only for the visible path to reappear when that process
     // exits. When this helper is evacuating the current launcher, first poll
@@ -470,9 +470,72 @@ fn start_windows_launcher_cleanup(tombstone: &Path, wait_for_pid: Option<u32>) -
     if temporary_directory.is_dir() {
         command.current_dir(temporary_directory);
     }
-    command
+    let observation = std::env::var_os("BYO_WINDOWS_CLEANUP_OBSERVATIONS")
+        .map(|directory| (PathBuf::from(directory), sha256_file(tombstone)));
+    let child = command
         .spawn()
         .context("failed to start the Windows PowerShell launcher cleanup helper")?;
+    if let Some((directory, target_digest)) = observation {
+        // Optional acceptance observation only: it does not authorize cleanup,
+        // change a deadline, wait for a child or suppress an operation failure.
+        // The consumer must join these spawn facts to independent exact native
+        // observations; a name/image alone never qualifies deferred cleanup.
+        let observed = (|| -> Result<()> {
+            use sha2::Digest;
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Foundation::FILETIME;
+            use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+
+            fn creation(handle: windows_sys::Win32::Foundation::HANDLE) -> Result<u64> {
+                let mut created: FILETIME = unsafe { std::mem::zeroed() };
+                let mut exited: FILETIME = unsafe { std::mem::zeroed() };
+                let mut kernel: FILETIME = unsafe { std::mem::zeroed() };
+                let mut user: FILETIME = unsafe { std::mem::zeroed() };
+                if unsafe {
+                    GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user)
+                } == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("cleanup observation creation unavailable");
+                }
+                let value =
+                    (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+                if value == 0 {
+                    bail!("cleanup observation has zero creation FILETIME");
+                }
+                Ok(value)
+            }
+
+            let parent_creation = creation(unsafe { GetCurrentProcess() })?;
+            let child_creation = creation(child.as_raw_handle())?;
+            std::fs::create_dir_all(&directory)?;
+            write_json(
+                &directory.join(format!(
+                    "spawn-{}-{:016x}.json",
+                    child.id(),
+                    rand::random::<u64>()
+                )),
+                &serde_json::json!({
+                    "schema": "windows-launcher-deferred-cleanup-observation/v1",
+                    "parent_pid": std::process::id(),
+                    "parent_creation_filetime": parent_creation,
+                    "requested_parent_pid": wait_for_pid,
+                    "helper_pid": child.id(),
+                    "helper_creation_filetime": child_creation,
+                    "helper_image": powershell,
+                    "target": tombstone,
+                    "target_sha256_before_spawn": target_digest?,
+                    "script_sha256": hex::encode(sha2::Sha256::digest(cleanup.as_bytes())),
+                    "parent_wait_ms": 120000,
+                    "delete_attempts": 120,
+                    "delete_retry_ms": 1000,
+                }),
+            )
+        })();
+        if let Err(error) = observed {
+            eprintln!("Windows launcher cleanup observation unavailable: {error:#}");
+        }
+    }
     Ok(())
 }
 

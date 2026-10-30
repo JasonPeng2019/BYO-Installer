@@ -111,6 +111,7 @@ import traceback
 import zipfile
 import xml.etree.ElementTree as ET
 
+import deferred_launcher_cleanup
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures/code-analysis-installed"
@@ -344,6 +345,12 @@ class WindowsProcesses:
             ctypes.POINTER(wintypes.DWORD),
         ]
         self.k.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        self.k.GetProcessId.argtypes = [wintypes.HANDLE]
+        self.k.GetProcessId.restype = wintypes.DWORD
+        self.k.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
         self.k.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
         self.k.GetSystemTimePreciseAsFileTime.argtypes = [
             ctypes.POINTER(wintypes.FILETIME)
@@ -473,6 +480,55 @@ class WindowsProcesses:
             and current["alive"]
             and current["creation_filetime"] == identity["creation_filetime"]
         )
+
+    def retain_exact(self, identity: dict):
+        """Keep an independent read-only kernel object through deferred exit."""
+        handle = self.k.OpenProcess(0x1000 | 0x100000, False, identity["pid"])
+        if not handle:
+            raise Setup(
+                f"Deferred process handle unavailable: {ctypes.get_last_error()}"
+            )
+        try:
+            self.observe_retained(handle, identity)
+            return handle
+        except BaseException:
+            self.k.CloseHandle(handle)
+            raise
+
+    def observe_retained(self, handle, identity: dict) -> dict:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not self.k.GetProcessTimes(handle, *[ctypes.byref(t) for t in times]):
+            raise Setup(
+                f"Deferred retained creation unavailable: {ctypes.get_last_error()}"
+            )
+        created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        if (
+            self.k.GetProcessId(handle) != identity["pid"]
+            or created != identity["creation_filetime"]
+        ):
+            raise Setup("Deferred retained process has the wrong exact identity")
+        state = self.k.WaitForSingleObject(handle, 0)
+        if state not in (0, 258):
+            raise Setup(f"Deferred retained wait unavailable: {state}")
+        code = wintypes.DWORD()
+        if not self.k.GetExitCodeProcess(handle, ctypes.byref(code)):
+            raise Setup(
+                f"Deferred retained exit code unavailable: {ctypes.get_last_error()}"
+            )
+        return {
+            "pid": identity["pid"],
+            "creation_filetime": created,
+            "wait_result": state,
+            "terminal": state == 0,
+            "exit_code": code.value if state == 0 else None,
+            "authority": "same retained read-only kernel handle; no signal or reap",
+        }
+
+    def release_retained(self, handle) -> None:
+        if not self.k.CloseHandle(handle):
+            raise Setup(
+                f"Deferred retained handle close failed: {ctypes.get_last_error()}"
+            )
 
     def terminate(self, identity: dict) -> None:
         # Query and terminate through the SAME retained handle after checking time.
@@ -667,6 +723,7 @@ class Evidence:
         *,
         setup_command: bool = False,
         cleanup_timeout: float = 5,
+        deferred_launcher: dict | None = None,
     ) -> subprocess.CompletedProcess:
         path = self.directory(name)
         record = {
@@ -689,7 +746,18 @@ class Evidence:
             },
         }
         write_json(path / "command.json", record)
+        if deferred_launcher is not None:
+            observation_directory = path / "deferred-spawns"
+            observation_directory.mkdir()
+            env = {
+                **env,
+                "BYO_WINDOWS_CLEANUP_OBSERVATIONS": str(observation_directory),
+            }
+            record["deferred_observer_source"] = file_record(
+                Path(deferred_launcher_cleanup.__file__)
+            )
         started = time.monotonic()
+        deferred_ok = False
         with (
             (path / "stdout.log").open("wb") as out,
             (path / "stderr.log").open("wb") as err,
@@ -703,6 +771,7 @@ class Evidence:
                 process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 forced = True
+            parent_exit_at = time.monotonic()
             try:
                 identities = owned.finish(forced)
             except Setup as exc:
@@ -733,6 +802,30 @@ class Evidence:
                 for identity in identities:
                     identity["alive_at_parent_exit"] = identity["alive_after"]
                     identity["alive_after"] = self.native.alive(identity)
+                record["ordinary_cleanup_axis"] = {
+                    "outcome": "FAIL"
+                    if any(p["alive_after"] for p in identities)
+                    else "PASS",
+                    "timeout_seconds": cleanup_timeout,
+                    "processes": [dict(p) for p in identities],
+                    "at_monotonic": time.monotonic(),
+                }
+                if deferred_launcher is not None and any(
+                    p["alive_after"] for p in identities
+                ):
+                    root_identity = next(
+                        p for p in identities if p["pid"] == process.pid
+                    )
+                    qualified = deferred_launcher_cleanup.qualify(
+                        observation_directory,
+                        self.native,
+                        root_identity,
+                        identities,
+                        deferred_launcher,
+                        parent_exit_at,
+                    )
+                    record["deferred_cleanup_axis"] = qualified
+                    deferred_ok = qualified["outcome"] == "PASS"
         record.update(
             exit=process.returncode,
             elapsed_seconds=time.monotonic() - started,
@@ -742,7 +835,7 @@ class Evidence:
         )
         write_json(path / "command.json", record)
         for identity in identities:
-            if identity["alive_after"]:
+            if identity["alive_after"] and not deferred_ok:
                 self.native.terminate(identity)
                 identity["emergency_cleanup_confirmed"] = not self.native.alive(
                     identity
@@ -760,7 +853,7 @@ class Evidence:
             )
         else:
             require(
-                not any(p["alive_after"] for p in identities),
+                not any(p["alive_after"] for p in identities) or deferred_ok,
                 f"{name}: owned child remained alive; {path}",
             )
         result = subprocess.CompletedProcess(
@@ -4693,6 +4786,17 @@ def main() -> int:
                 [str(byo), "install-runtime", "--bundle", str(args.update_bundle)],
                 env,
                 lab,
+                deferred_launcher={
+                    "previous_launcher_sha256": digest(byo),
+                    "target_directory": str(byo.parent),
+                    "helper_image": str(
+                        Path(os.environ["SystemRoot"])
+                        / "System32/WindowsPowerShell/v1.0/powershell.exe"
+                    ),
+                    "contract": deferred_launcher_cleanup.source_contract(
+                        ROOT / "launcher/src/install.rs"
+                    ),
+                },
             )
             for project in projects:
                 evidence.run(
