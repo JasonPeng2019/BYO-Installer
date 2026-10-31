@@ -1,4 +1,4 @@
-"""Actions-only, disclosed successor of one pinned retirement-test invocation.
+"""Actions-only, disclosed qualification of pinned lifecycle test fixtures.
 
 The product/workspace pin and original checkout remain unchanged. The effective
 test tree is a detached local child, with its complete delta, bundle and exact
@@ -20,10 +20,40 @@ ROOT = Path(__file__).resolve().parents[2]
 PIN = "1cedcc2521281ad7ec82598daced2e8659ea917c"
 TEST = "tests/test_cppcheck_posix_ownership.py"
 BASELINE_SHA256 = "43975a64108392003daae081dc922cc709f568a6124a5fb61a10bda3ab710d88"
+FAKE = "tests/fixtures/cppcheck-acceptance/fake_cppcheck.py"
+FAKE_MANIFEST = "tests/fixtures/cppcheck-acceptance/MANIFEST.sha256.json"
+FAKE_BASELINE_SHA256 = (
+    "bb7f4294c1781274464ac978b3272fc723298a1a5b9fc4e1af6ec52b648613f0"
+)
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def revise_fake(data):
+    """Log readiness before optional XML imports consume the timeout fixture."""
+    if sha(data) != FAKE_BASELINE_SHA256:
+        raise RuntimeError("Fake analyzer requires its exact qualified pinned baseline")
+    lines = data.decode("utf-8").splitlines(keepends=True)
+    functions = {
+        node.name: node
+        for node in ast.parse(data).body
+        if isinstance(node, ast.FunctionDef) and node.name in {"_error", "_analysis"}
+    }
+    if set(functions) != {"_error", "_analysis"}:
+        raise RuntimeError("Fake analyzer XML functions are missing")
+    positions = {node.body[0].lineno - 1 for node in functions.values()}
+    import_line = "from xml.sax.saxutils import quoteattr\n"
+    if lines.count(import_line) != 1:
+        raise RuntimeError("Fake analyzer XML import is missing or ambiguous")
+    # --version and the intentional hang never format XML. Keep every XML
+    # function unchanged apart from loading its dependency when actually used.
+    return "".join(
+        ("    " + import_line + "\n" if i in positions else "") + line
+        for i, line in enumerate(lines)
+        if line != import_line
+    ).encode("utf-8")
 
 
 def revise(data):
@@ -96,7 +126,13 @@ def revise(data):
         )
         + "            with posix._RETAINED_GUARD:\n"
         + "                retained = posix._RETAINED[leader]\n"
-        + '            assert retained._capture(owned.deadline), "Staged capture did not complete within the original deadline"\n'
+        + "            captured = retained._capture(owned.deadline)\n"
+        + '            if stage == "chain" and proof in {"denied", "unknown"}:\n'
+        + "                # Unavailable known-parent identity must refuse this acquisition.\n"
+        + '                assert captured is False, "Uncertain ancestry unexpectedly completed capture"\n'
+        + '                assert any("Owned parent identity lost during ancestry acquisition" in note for note in retained._uncertainties)\n'
+        + "            else:\n"
+        + '                assert captured is True, "Staged capture did not complete within the original deadline"\n'
         + "        finally:\n"
         + "            capture_guard.release()\n"
         + text[end:]
@@ -142,7 +178,7 @@ def main():
         "commands": [],
         "remote_ref_mutations": 0,
         "outcome": "ERROR",
-        "scope": "Serialize real capture on the test staging thread with its existing deadline; preserve all original assertions/eight pairs and production content. Disclose the manual-permission executable mode repaired by attach-project before tests, never ignore tracked dirt.",
+        "scope": "Serialize real capture on the test staging thread with its existing deadline; expect refusal plus recorded uncertainty for chain/denied and chain/unknown. Defer the fake analyzer's XML-only imports until XML formatting, preserving the two-second timeout and all invocation/cleanup assertions. Preserve all original assertions/eight pairs and production content. Disclose the manual-permission executable mode repaired by attach-project before tests, never ignore tracked dirt.",
     }
 
     def run(name, argv, cwd=ROOT, timeout=300):
@@ -219,6 +255,16 @@ def main():
         target = fixture / TEST
         baseline = target.read_bytes()
         target.write_bytes(revise(baseline))
+        fake = fixture / FAKE
+        fake.write_bytes(revise_fake(fake.read_bytes()))
+        fake_manifest = fixture / FAKE_MANIFEST
+        manifest = json.loads(fake_manifest.read_bytes())
+        if manifest["files"]["fake_cppcheck.py"] != FAKE_BASELINE_SHA256:
+            raise RuntimeError("Fake analyzer manifest does not bind its baseline")
+        manifest["files"]["fake_cppcheck.py"] = sha(fake.read_bytes())
+        fake_manifest.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
         # attach-project repairs the helper's execute bit through its project
         # symlink. Disclose that supported mode before taking the fixed subject;
         # never ignore tracked dirt produced by the test.
@@ -234,12 +280,13 @@ def main():
         if ast.dump(ast.parse(target.read_bytes())) != revised_ast:
             raise RuntimeError("Formatting changed the declared fixture semantics")
         changed = git(fixture, "diff", "--name-only").splitlines()
-        if changed != ["bin/manual-permission", TEST]:
+        declared = sorted(["bin/manual-permission", TEST, FAKE, FAKE_MANIFEST])
+        if changed != declared:
             raise RuntimeError("Undeclared effective workspace delta")
         (output / "EFFECTIVE-DELTA.patch").write_bytes(
             subprocess.check_output(["git", "diff", "--binary"], cwd=fixture)
         )
-        git(fixture, "add", "--", "bin/manual-permission", TEST)
+        git(fixture, "add", "--", *declared)
         git(
             fixture,
             "-c",
@@ -250,7 +297,7 @@ def main():
             "commit.gpgsign=false",
             "commit",
             "-m",
-            "Qualify exact parent retirement injection on its existing owner deadline",
+            "Qualify lifecycle fixture readiness within the existing owner deadlines",
         )
         child = git(fixture, "rev-parse", "HEAD")
         after = inventory(fixture)
@@ -260,8 +307,7 @@ def main():
             or original != inventory(source)
             or git(source, "status", "--porcelain")
             or set(before) != set(after)
-            or {name for name in before if before[name] != after[name]}
-            != {"bin/manual-permission", TEST}
+            or {name for name in before if before[name] != after[name]} != set(declared)
         ):
             raise RuntimeError(
                 "Workspace source custody/declared fixture delta differs"
@@ -293,6 +339,8 @@ def main():
             bundle_sha256=sha(bundle.read_bytes()),
             bundle_verification=verification.decode(),
             effective_test_sha256=sha(target.read_bytes()),
+            effective_fake_sha256=sha(fake.read_bytes()),
+            effective_fake_manifest_sha256=sha(fake_manifest.read_bytes()),
             effective_helper_mode={
                 "path": "bin/manual-permission",
                 "before": before["bin/manual-permission"],

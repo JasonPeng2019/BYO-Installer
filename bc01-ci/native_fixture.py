@@ -1,4 +1,4 @@
-"""Actions-only independent fixture. Every role publishes its own native identity."""
+"""Nonbuilding independent fixture. Every role publishes its own native identity."""
 
 from __future__ import annotations
 
@@ -50,8 +50,6 @@ def spawn(root: Path, role: str, *arguments: str) -> subprocess.Popen:
 
 
 def main() -> None:
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise SystemExit("FR13 fixtures are Actions-only")
     role, directory, *arguments = sys.argv[1:]
     root = Path(directory)
     if role == "peer":
@@ -65,7 +63,12 @@ def main() -> None:
     elif role == "branch":
         publish(root, role)
         await_gate(root / "fork-now")
-        spawn(root, "leaf")
+        # The directed membership race needs a real new birth after its gate,
+        # without charging a fresh Python/psutil import to the cleanup phase.
+        if os.fork() == 0:
+            publish(root, "leaf")
+            time.sleep(45)
+            os._exit(0)
         await_gate(root / "leaf.json")
         os._exit(0)
     elif role == "leader":

@@ -8,7 +8,6 @@ import importlib
 import importlib.metadata
 import inspect
 import json
-import os
 import platform
 import sys
 import time
@@ -28,8 +27,6 @@ def flatten(suite):
 
 
 def main() -> int:
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise SystemExit("FR13 tests execute only in GitHub Actions")
     parser = argparse.ArgumentParser()
     parser.add_argument("--module", required=True)
     parser.add_argument("--firmware", type=Path, required=True)

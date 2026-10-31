@@ -36,6 +36,19 @@ def write(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, default=str) + "\n", encoding="utf-8")
 
 
+def firmware_source() -> Path:
+    """Select real source for controls in canonical or flat layouts.
+
+    Publication gates still use FIRMWARE and their frozen canonical index.
+    """
+    for candidate in (FIRMWARE, ROOT.parent / "BYO-Firmware-MCP"):
+        if (candidate / "src/pyocd_debug_mcp/__init__.py").is_file() and (
+            candidate / "tests"
+        ).is_dir():
+            return candidate.resolve(strict=True)
+    raise RuntimeError("Actual Firmware source is unavailable for the selected control")
+
+
 def compact(kind: str, **values: Any) -> None:
     print(json.dumps({"kind": kind, **values}, default=str), flush=True)
 

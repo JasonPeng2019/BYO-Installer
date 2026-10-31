@@ -14,4 +14,15 @@ Hardware, model and complete final acceptance remain separate planned scopes.
 
 The build matrix invokes quality once. Its canonical push does not also trigger
 a second standalone quality workflow. Dispatch overrides are optional and must
-still match the checkout and committed input index. All execution is Actions-only.
+still match the checkout and committed input index. Complete canonical
+orchestration and compilation remain Actions-only.
+
+The ordinary Python observer, interpreter, identity and thread-error controls
+also support local nonbuilding execution with the real locked dependencies.
+Use a private `TEMP`/`TMP` and `FR13_CONTROL_EVIDENCE` directory and the documented
+Firmware source import paths. For example, run `python -m unittest
+test_observer_controls test_thread_errors test_validator` from this directory
+after selecting that environment. Method outcomes, deliberate negatives and
+host-specific skips remain separate; a local control is not installed/native
+or final independent acceptance. PB01's full01 comparison changes only its old
+Actions restriction; the original recorder bytes are retained in PB01 evidence.

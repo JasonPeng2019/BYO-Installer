@@ -201,7 +201,7 @@ jobs:
         with:
           repository: JasonPeng2019/BYO-Firmware-MCP
           ref: ${{ steps.firmware-source.outputs.commit }}
-          path: BYO-Firmware-MCP
+          path: Firmware MCP New
           token: ${{ secrets.BYO_SOURCE_READ_TOKEN }}
 
       - name: Install Python
@@ -232,12 +232,12 @@ jobs:
       - name: Install actual locked parser test interpreter
         id: firmware-deps
         if: ${{ !cancelled() }}
-        run: uv sync --project BYO-Firmware-MCP --locked --all-groups
+        run: uv sync --project "Firmware MCP New" --locked --all-groups
 
       - name: Run all independent AgentWorkspace contracts
         if: ${{ !cancelled() && steps.workspace-deps.outcome == 'success' && steps.firmware-deps.outcome == 'success' }}
         run: >-
-          uv run --no-sync --project BYO-Firmware-MCP python release/scripts/final_acceptance_checks.py
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py
           --group workspace --evidence release/build/final-acceptance/workspace
           --workspace-source release/build/final-acceptance/workspace-fixture/effective-workspace
 

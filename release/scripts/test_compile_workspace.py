@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import compile_workspace as compiler
 
@@ -13,13 +15,45 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _workspace_source() -> Path:
-    checked_out = ROOT / "AgentWorkspace"
-    if checked_out.is_dir():
-        return checked_out
-    local_workspace = ROOT.parent / ".agent-workspace"
-    if local_workspace.is_dir():
-        return local_workspace
-    raise AssertionError("AgentWorkspace source checkout is unavailable")
+    """Locate real source, including the flat two-product development layout.
+
+    BYO_WORKSPACE_SOURCE selects an already qualified pinned checkout/export;
+    it neither acquires source nor changes the release source lock.
+    """
+    configured = os.environ.get("BYO_WORKSPACE_SOURCE")
+    candidates = (
+        [Path(configured)]
+        if configured
+        else [
+            ROOT / "AgentWorkspace",
+            ROOT.parent / "CodexClaudeWorkflow",
+            ROOT.parent / ".agent-workspace",
+        ]
+    )
+    for candidate in candidates:
+        if (
+            all(
+                (candidate / name).is_file()
+                for name in ("internal/agent_workspace.py", "modes/firmware.toml")
+            )
+            and (candidate / "skills-src").is_dir()
+        ):
+            return candidate.resolve(strict=True)
+    raise AssertionError(
+        "Pinned workspace source is unavailable; set BYO_WORKSPACE_SOURCE to "
+        "the qualified source checkout (not a generated runtime directory)"
+    )
+
+
+def test_explicit_workspace_source_refuses_an_incomplete_runtime_directory() -> None:
+    with tempfile.TemporaryDirectory(prefix="byo-workspace-locator-") as raw_root:
+        with patch.dict(os.environ, {"BYO_WORKSPACE_SOURCE": raw_root}):
+            try:
+                _workspace_source()
+            except AssertionError as error:
+                assert "qualified source checkout" in str(error)
+            else:
+                raise AssertionError("incomplete workspace input was accepted")
 
 
 def test_real_workspace_catalog_contains_native_skill_metadata() -> None:

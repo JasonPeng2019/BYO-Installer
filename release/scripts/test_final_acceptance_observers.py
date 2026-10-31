@@ -47,6 +47,60 @@ if __name__ == "__main__":
 """
 
 
+class WorkspaceCallerLayout(unittest.TestCase):
+    def test_workspace_job_checkout_reaches_the_actual_runner_with_effective_source(
+        self,
+    ):
+        installer = Path(__file__).resolve().parents[2]
+        workflow = (installer / ".github/workflows/quality.yml").read_text(
+            encoding="utf-8"
+        )
+        job = workflow.split("\n  agent-workspace:\n", 1)[1].split("\n  firmware-", 1)[
+            0
+        ]
+        checkout = job.split(
+            "      - name: Check out locked Firmware MCP for parser compatibility\n", 1
+        )[1].split("\n      - name:", 1)[0]
+        relative = re.search(r"^          path: (.+)$", checkout, re.MULTILINE)[1]
+        self.assertIn(f'uv sync --project "{relative}" --locked --all-groups', job)
+        self.assertIn(f'uv run --no-sync --project "{relative}" python ', job)
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / relative).mkdir()
+            effective = root / "effective-workspace"
+            effective.mkdir()
+            evidence = root / "evidence"
+            # Exercise actual caller setup using the workflow's checkout path.
+            # Commands are outside this layout regression's scope.
+            with (
+                mock.patch.object(command_observer, "ROOT", root),
+                mock.patch.object(command_observer, "source_hashes", return_value={}),
+                mock.patch.object(command_observer, "commands", return_value=[]),
+                mock.patch.object(
+                    command_observer, "workspace_subject", return_value={"dirty": ""}
+                ),
+                mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "final_acceptance_checks.py",
+                        "--group",
+                        "workspace",
+                        "--workspace-source",
+                        str(effective),
+                        "--evidence",
+                        str(evidence),
+                    ],
+                ),
+            ):
+                self.assertEqual(command_observer.main(), 0)
+            self.assertEqual(
+                json.loads((evidence / "summary.json").read_bytes())["group"],
+                "workspace",
+            )
+
+
 class HostedWorkspaceLedgerPaths(unittest.TestCase):
     def test_retained_and_delivered_ledgers_name_the_same_workspace(self):
         for namespace in ("server_data", "simulated_remote"):
@@ -159,9 +213,6 @@ class RustVersionChildAccounting(unittest.TestCase):
 
 class ReleaseLedgerEntrypointContracts(unittest.TestCase):
     def setUp(self):
-        self.assertEqual(
-            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
-        )
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -305,6 +356,21 @@ class ReleaseLedgerEntrypointContracts(unittest.TestCase):
             [selected, selected],
         )
 
+    def test_named_selection_uses_the_actual_flat_firmware_source(self):
+        canonical = self.installer / "Firmware MCP New"
+        flat = self.installer.parent / "BYO-Firmware-MCP"
+        self.assertTrue(canonical.resolve().is_relative_to(self.root.resolve()))
+        self.assertTrue(flat.resolve().is_relative_to(self.root.resolve()))
+        canonical.rename(flat)
+        self.tests = flat / "tests"
+        selected = "tests.ledger_selection_probe.EntryProbe.test_pass"
+        completed, result = self.invoke("--unittest-names", selected)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.marker.read_text(encoding="utf-8"), "selected body ran")
+        suite, _ = self.suite_events(result)
+        self.assertEqual(suite["loaded"], [selected])
+        self.assertEqual(suite["methods"], {selected: "PASS"})
+
     def test_standalone_script_does_not_invent_declared_method_execution(self):
         self.script.write_text(
             "import os\nfrom pathlib import Path\n"
@@ -388,9 +454,6 @@ else:
 
 class CapturedCommandDescendantContracts(unittest.TestCase):
     def setUp(self):
-        self.assertEqual(
-            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only controls"
-        )
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -731,9 +794,6 @@ class ChildReceiptImageContracts(unittest.TestCase):
     """Collector image binding when a child's own tested cleanup deletes it."""
 
     def setUp(self):
-        self.assertEqual(
-            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
-        )
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -865,16 +925,13 @@ class ChildReceiptImageContracts(unittest.TestCase):
 
 
 class OwnedInstalledObservationContracts(unittest.TestCase):
-    """Actions source controls; never label a synthetic record native evidence.
+    """Nonbuilding source controls; never label a synthetic record native evidence.
 
     Actual compiled selector/installed qualification runs in final_public_mcp,
     with raw commands and no mocked launcher/doctor/platform path responses.
     """
 
     def setUp(self):
-        self.assertEqual(
-            os.environ.get("GITHUB_ACTIONS"), "true", "Actions-only control"
-        )
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()

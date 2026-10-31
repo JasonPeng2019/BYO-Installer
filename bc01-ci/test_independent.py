@@ -1,4 +1,4 @@
-"""Independent FR13 caller/authority controls. Execution is GitHub Actions-only.
+"""Independent nonbuilding FR13 caller/authority controls for supported hosts.
 
 Positive controls use the real caller, native processes and actual kernel reap.
 Named fault controls replace only their stated observation/permission premise.
@@ -70,8 +70,6 @@ def facts(pid: int, birth: float | None = None) -> dict:
 @unittest.skipUnless(os.name == "posix", "independent retained POSIX caller controls")
 class IndependentOwnership(unittest.TestCase):
     def setUp(self) -> None:
-        if os.environ.get("GITHUB_ACTIONS") != "true":
-            self.fail("FR13 independent controls are Actions-only")
         ARTIFACT.mkdir(parents=True, exist_ok=True)
         self.root = Path(tempfile.mkdtemp(prefix="v-fr13-", dir=ARTIFACT))
         self.store = processes.ProcessMarkerStore(self.root / "markers")

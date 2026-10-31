@@ -1,4 +1,4 @@
-"""Real identity-writing processes for validator controls; Actions execution only."""
+"""Real identity-writing processes for nonbuilding local and Actions controls."""
 
 from __future__ import annotations
 
@@ -29,8 +29,6 @@ def receipt(root: Path, role: str) -> None:
 
 
 def main() -> None:
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise SystemExit("validator fixtures are Actions-only")
     root = Path(sys.argv[2])
     role = sys.argv[1]
     receipt(root, role)

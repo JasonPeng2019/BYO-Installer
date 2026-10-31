@@ -6,11 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from ci_common import firmware_source
 from thread_error_control import CONTROL_METHOD, HERE, exercise
 
 
 class ThreadErrorAccounting(unittest.TestCase):
     def setUp(self):
+        self.firmware = firmware_source()
         parent = os.environ.get("FR13_CONTROL_EVIDENCE")
         if parent:
             Path(parent).mkdir(parents=True, exist_ok=True)
@@ -52,9 +54,7 @@ class ThreadErrorAccounting(unittest.TestCase):
             ("corrected", HERE / "run_unittest.py", 1),
         ):
             with self.subTest(recorder=label):
-                result = exercise(
-                    helper, HERE.parent / "Firmware MCP New", self.directory / label, True
-                )
+                result = exercise(helper, self.firmware, self.directory / label, True)
                 self.check_common(result)
                 self.assertEqual(result["exit_code"], expected, result)
                 self.assertEqual(result["prior_handler"]["message"], "release unlocked lock")
@@ -78,9 +78,7 @@ class ThreadErrorAccounting(unittest.TestCase):
             ("corrected", HERE / "run_unittest.py"),
         ):
             with self.subTest(recorder=label):
-                result = exercise(
-                    helper, HERE.parent / "Firmware MCP New", self.directory / label, False
-                )
+                result = exercise(helper, self.firmware, self.directory / label, False)
                 self.check_common(result)
                 self.assertEqual(result["exit_code"], 0, result)
                 self.assertEqual(result["summary"].get("uncaught_thread_errors", []), [])

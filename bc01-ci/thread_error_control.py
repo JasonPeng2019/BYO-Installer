@@ -1,4 +1,4 @@
-"""Execute exact recorder bytes against a real joined thread in Actions only."""
+"""Execute exact recorder bytes against a real joined thread without building."""
 
 import hashlib
 import json
@@ -13,8 +13,6 @@ CONTROL_METHOD = "thread_error_fixture.OrdinaryThreadProbe.test_joined_ordinary_
 
 
 def exercise(helper: Path, firmware: Path, directory: Path, fault: bool) -> dict:
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise RuntimeError("Thread accounting controls execute only in GitHub Actions")
     directory.mkdir(parents=True, exist_ok=False)
     copied = directory / "run_unittest.py"
     shutil.copyfile(helper, copied)

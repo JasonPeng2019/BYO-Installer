@@ -22,6 +22,7 @@ from ci_common import (
     VENV,
     actions_only,
     compact,
+    firmware_source,
     host_facts,
     source_snapshot,
     write,
@@ -139,6 +140,7 @@ def rescue(record, events) -> None:
 
 
 def run_command(directory: Path, argv: list[str], env: dict, timeout: int) -> dict:
+    command_cwd = firmware_source()
     directory.mkdir()
     owned = {}
     started = CLOCK()
@@ -155,7 +157,7 @@ def run_command(directory: Path, argv: list[str], env: dict, timeout: int) -> di
         ) as events:
             process = subprocess.Popen(
                 argv,
-                cwd=FIRMWARE,
+                cwd=command_cwd,
                 env=env,
                 stdout=out,
                 stderr=err,
@@ -255,7 +257,7 @@ def run_command(directory: Path, argv: list[str], env: dict, timeout: int) -> di
             )
             return {
                 "argv": argv,
-                "cwd": str(FIRMWARE),
+                "cwd": str(command_cwd),
                 "timeout": timeout,
                 "exit_code": code,
                 "timed_out": timed_out,

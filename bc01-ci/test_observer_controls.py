@@ -1,4 +1,4 @@
-"""Directed observer faults with real native commands; Actions execution only."""
+"""Nonbuilding observer faults with real commands, locally and in Actions."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ def native_failure(process):
 
 class ObserverContracts(unittest.TestCase):
     def setUp(self):
-        self.assertEqual(os.environ.get("GITHUB_ACTIONS"), "true")
         evidence = Path(
             os.environ.get(
                 "FR13_CONTROL_EVIDENCE",

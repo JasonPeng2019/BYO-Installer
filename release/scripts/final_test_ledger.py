@@ -1,6 +1,6 @@
 """Retain real unittest execution while running the release script's own entrypoint.
 
-Only Actions calls this helper. Plain function/script runners stay command-level
+Nonbuilding source selections run locally or in Actions. Plain function/script runners stay command-level
 in final_acceptance_checks; declarations alone never become executed methods.
 """
 
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import os
 from pathlib import Path
 import runpy
 import sys
@@ -29,8 +28,6 @@ def main():
     )
     parser.add_argument("--evidence", type=Path, required=True)
     args = parser.parse_args()
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        raise SystemExit("Final named-test execution is Actions-only after ROOT freeze")
     installer = Path(__file__).resolve().parents[2]
     script = args.script.resolve(strict=True) if args.script else None
     if script and script.parent != Path(__file__).resolve().parent:
@@ -38,6 +35,8 @@ def main():
             "Release ledger requires an actual selected release test script"
         )
     source = installer / "Firmware MCP New/tests/final_acceptance_suite.py"
+    if not source.is_file():
+        source = installer.parent / "BYO-Firmware-MCP/tests/final_acceptance_suite.py"
     # The file-loaded driver imports its real test siblings before selection.
     sys.path.insert(0, str(source.parent))
     spec = importlib.util.spec_from_file_location("frozen_firmware_ledger", source)
@@ -95,7 +94,7 @@ def main():
     # Only its result observer changes, in this fresh interpreter.
     unittest.TextTestRunner = RecordedRunner
     unittest.runner.TextTestRunner = RecordedRunner
-    import_root = script.parent if script else installer / "Firmware MCP New"
+    import_root = script.parent if script else source.parent.parent
     sys.path.insert(0, str(import_root))
     sys.argv = [str(script)] if script else ["unittest", "-v", *args.unittest_names]
     error, exit_code = None, 0
