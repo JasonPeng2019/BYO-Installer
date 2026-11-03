@@ -61,6 +61,10 @@ def main() -> None:
         publish(root, role)
         time.sleep(45)
     elif role == "branch":
+        if sys.platform == "win32":
+            # Only the Linux orphan-race test uses this role; the guard also lets
+            # the Windows type gate treat the os.fork path as unreachable.
+            raise SystemExit("branch role is the POSIX-only directed fork race")
         publish(root, role)
         await_gate(root / "fork-now")
         # The directed membership race needs a real new birth after its gate,

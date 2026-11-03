@@ -2,6 +2,8 @@
 
 The ordinary child-wait result stays raw. A later natural exit is a separate
 axis, tied to source, spawn, parent and target facts; image names grant nothing.
+The CREATE_NO_WINDOW helper owns a console host; such helper descendants join
+only by exact captured parent identities and must end naturally as well.
 """
 
 from __future__ import annotations
@@ -81,11 +83,13 @@ def select_observation(rows, parent, captured, expected):
     ):
         raise ValueError("Deferred target is not the exact owned update tombstone")
     live = [item for item in captured if item.get("alive_after") is True]
-    if len(live) != 1:
+    root = (parent["pid"], parent["creation_filetime"])
+    direct = [item for item in live if _parent_key(item) == root]
+    if len(direct) != 1:
         raise ValueError(
             "Other captured live children cannot receive a deferred exemption"
         )
-    helper = live[0]
+    helper = direct[0]
     fields = {
         "pid": row.get("helper_pid"),
         "creation_filetime": row.get("helper_creation_filetime"),
@@ -111,13 +115,49 @@ def select_observation(rows, parent, captured, expected):
         )
     if helper["creation_filetime"] < parent["creation_filetime"]:
         raise ValueError("Deferred helper predates its actual parent")
+    descendants = helper_descendants(live, helper)
     if target.exists() and (
         not target.is_file()
         or hashlib.sha256(target.read_bytes()).hexdigest()
         != expected["previous_launcher_sha256"]
     ):
         raise ValueError("Current owned tombstone differs from its exact prior image")
-    return row, helper, target
+    return row, helper, target, descendants
+
+
+def _parent_key(item):
+    return item.get("parent_pid"), item.get("parent_creation_filetime")
+
+
+def helper_descendants(live, helper):
+    """Return the other live survivors, each exactly descended from the helper.
+
+    Every link is an exact captured PID+creation parent identity, and a child
+    is never born before its parent. Any survivor outside that chain fails.
+    """
+
+    linked = {(helper["pid"], helper["creation_filetime"])}
+    pending = [item for item in live if item is not helper]
+    descendants = []
+    while pending:
+        children = [item for item in pending if _parent_key(item) in linked]
+        pending = [item for item in pending if _parent_key(item) not in linked]
+        if not children:
+            raise ValueError(
+                "Other captured live children cannot receive a deferred exemption"
+            )
+        for child in children:
+            identity = (child.get("pid"), child.get("creation_filetime"))
+            if (
+                any(type(value) is not int or value <= 0 for value in identity)
+                or identity[1] < child["parent_creation_filetime"]
+            ):
+                raise ValueError(
+                    "Deferred helper descendant lacks its exact captured birth join"
+                )
+            linked.add(identity)
+            descendants.append(child)
+    return descendants
 
 
 def qualify(directory, native, parent, captured, expected, parent_exit_at):
@@ -132,11 +172,13 @@ def qualify(directory, native, parent, captured, expected, parent_exit_at):
         "parent_exit_monotonic": parent_exit_at,
         "interventions": [],
     }
-    handle = None
+    retained = []
     try:
         paths = sorted(Path(directory).glob("*.json"))
         rows = [json.loads(path.read_bytes()) for path in paths]
-        row, helper, target = select_observation(rows, parent, captured, expected)
+        row, helper, target, descendants = select_observation(
+            rows, parent, captured, expected
+        )
         report.update(
             spawn=row,
             observation_files=[
@@ -147,17 +189,25 @@ def qualify(directory, native, parent, captured, expected, parent_exit_at):
                 for path in paths
             ],
         )
-        handle = native.retain_exact(helper)
+        for identity in (helper, *descendants):
+            retained.append((native.retain_exact(identity), identity))
         deadline = parent_exit_at + expected["contract"]["post_parent_seconds"]
         report["deadline_monotonic"] = deadline
         while True:
-            observed = native.observe_retained(handle, helper)
+            observed, *ended = [
+                native.observe_retained(handle, identity)
+                for handle, identity in retained
+            ]
             report["terminal_observation"] = observed
+            # Descendant exit codes are recorded, not judged: the contract is the
+            # helper's own exit code; its console host only has to end with it.
+            report["descendant_observations"] = ended
             report["target_exists"] = target.exists()
             report["observed_at_monotonic"] = time.monotonic()
             if (
                 observed["terminal"]
                 and observed["exit_code"] == 0
+                and all(item["terminal"] for item in ended)
                 and not report["target_exists"]
             ):
                 if report["observed_at_monotonic"] <= deadline:
@@ -175,9 +225,10 @@ def qualify(directory, native, parent, captured, expected, parent_exit_at):
     except Exception as error:
         report["error"] = repr(error)
     finally:
-        if handle is not None:
+        for handle, _identity in retained:
             try:
                 native.release_retained(handle)
             except Exception as error:
-                report.update(outcome="ERROR", handle_close_error=repr(error))
+                report["outcome"] = "ERROR"
+                report.setdefault("handle_close_errors", []).append(repr(error))
     return report

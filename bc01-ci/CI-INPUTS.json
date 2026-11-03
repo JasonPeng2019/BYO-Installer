@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fb27ad503ab9af3a70dc536bafe4ee1c983fedf9",
+  "candidate": "cb2716491be4c5527642b96f0d4c64af2f4cb6a2",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "ad32c2768c67a5c475c4c9fa9cdb678cf497511e",
+  "source_parent": "9eb6176c2dbb2fbf0a81e327c74a4c5d6082b889",
   "build_owner_base": "9ea195f71806ddc0f7ad26b87e63ade41d056efe",
-  "predecessor_input_sha256": "85b5a89f78690bcbeb097553ab2b149522ac3f47b937f59e283592f08e94b652",
+  "predecessor_input_sha256": "e4414087eda37897bc81b5f1a85d77e6a58a0db8f53585317db721baa30445b0",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -379,13 +379,13 @@
   "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
-  "task_base": "5449e9a7e9911adc9b4b5fde8ccd2ab589dd08e9",
+  "task_base": "c315b41ce10622cef72619c445b354a5c100a1f6",
   "firmware_export": {
-    "commit": "e63194bbe3cbd2fdf6b771670d10a5b7b161cd1d",
-    "tree": "d2deba6a30acaa7f406d5ecdb46787537cbb2e5e"
+    "commit": "11a249823b3e0d3e476151633f97cbe9619a1171",
+    "tree": "07642b5751b87e3531c05ffcd7c5401c7873d1f5"
   },
   "installer_source": {
-    "base_commit": "3fa5e31cffe9ada963b7a2935c3ce5ec42a874b0",
+    "base_commit": "5186309863d4d141031f318c618affc053f7bd86",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -1911,8 +1911,8 @@
       "sha256": "4eee51cd9656113d9cd0c67f74e389629865edf12761d08d0857ed600954f0e9"
     },
     "Firmware MCP New/tests/test_code_analysis_managed_runtime_unit.py": {
-      "bytes": 25873,
-      "sha256": "4580d967c612d4e95305794ae550c7d35a3b6ef58ae6b5814f7c463a9f71821b"
+      "bytes": 26345,
+      "sha256": "d5c0351f82ddf6fcdbebfa41cfbd7bce1241a7c37fb54c60acc7283ee613c42f"
     },
     "Firmware MCP New/tests/test_code_analysis_portability.py": {
       "bytes": 33747,
@@ -2083,8 +2083,8 @@
       "sha256": "bc3ae123575a5daef5e7cede28b0b27478248387abfc07a36434f59aae2d17b6"
     },
     "Firmware MCP New/tests/test_monitor_delivery.py": {
-      "bytes": 38673,
-      "sha256": "224082b6533a20b7771e44c0664e97dc19ca7c6d0bef9d5b2fb130b11bf6f780"
+      "bytes": 38681,
+      "sha256": "28d3c24706c4607f438f096edb0d95f95d291cbc3021b1e9e4b81aee76cb4e7d"
     },
     "Firmware MCP New/tests/test_monitor_ledger.py": {
       "bytes": 17602,
@@ -2251,8 +2251,8 @@
       "sha256": "d286bc98a233de6cbbb9a162122c9c70d78fe3e7e396e55feb18185510c99212"
     },
     "Firmware MCP New/tests/test_tiered_acceptance_support.py": {
-      "bytes": 6448,
-      "sha256": "8272c03330b245bac9ceea45a30669639e0b8dd9ed1285dcb8806e461dc16bef"
+      "bytes": 6677,
+      "sha256": "4b45b094c621d835258d8fcc1c2c33d86d76b8f14ff10f01d6f5ddcac08f744f"
     },
     "Firmware MCP New/tests/test_tiered_acceptance_workspace.py": {
       "bytes": 26460,
@@ -2403,8 +2403,8 @@
       "sha256": "49708ef5640109d8bb6872b175b9790988c2186363fe1f51e4facb2ad6362a85"
     },
     "bc01-ci/native_fixture.py": {
-      "bytes": 2934,
-      "sha256": "a7262653a57734565b90b59caeeaa3d78cdc4054d2e32158bf8860281ac7d510"
+      "bytes": 3208,
+      "sha256": "3a503fbce02019ac6b3d41cf39f4bc70805e0da53f8a26c928bb4dfd7e1bcfac"
     },
     "bc01-ci/probe_environment.py": {
       "bytes": 1706,
@@ -3015,8 +3015,8 @@
       "sha256": "a493b2eb1b4a94abb0e4eb15cb5de86aeabc57e95506a45dfe87db75b2abde37"
     },
     "release/scripts/deferred_launcher_cleanup.py": {
-      "bytes": 6933,
-      "sha256": "5155e032cc5a768d381ac0ee2e583fb7b944686969b90cec43a512da25807fb0"
+      "bytes": 9173,
+      "sha256": "fd987fccb416310535fde546515675ef8dfec00869871bf8a7e4807e342e1835"
     },
     "release/scripts/final_acceptance_checks.py": {
       "bytes": 49372,
@@ -3143,8 +3143,8 @@
       "sha256": "c7535de93a494d961438e58b10062325edaaafa89faea11a69a103ce80041eec"
     },
     "release/scripts/test_deferred_launcher_cleanup.py": {
-      "bytes": 9322,
-      "sha256": "6eb888ac8db2d9c1f898377ff40a9f7c8e78c186e6e5fe60e65372ad21a8d60c"
+      "bytes": 15007,
+      "sha256": "733e4d717d09118a579694698c4e47eb75764de51a51c838b6400953d038ddfe"
     },
     "release/scripts/test_e2e_harness.py": {
       "bytes": 1823,
@@ -3188,7 +3188,7 @@
     },
     "release/source-lock.json": {
       "bytes": 375,
-      "sha256": "2f1232ec67eebd74afc9fc9aab02118423cbc63113ce00189942c3cde53e8d92"
+      "sha256": "786d0fa7177308176f9f84a4bef889722f35e59f0b1fa318e1fa62e0c604db25"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
