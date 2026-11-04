@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "04f8cdcc75ec61596fb2f3521f5187f84bea7e3a",
+  "candidate": "4bf9be50223fe46cdedb08b23730842c4e68f224",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "c738f44d7c83d32c9edebfdfb7326606cf65d020",
+  "source_parent": "3abc4f08d5502f1107946aa5bc8d36e5b46a4228",
   "build_owner_base": "9ea195f71806ddc0f7ad26b87e63ade41d056efe",
-  "predecessor_input_sha256": "f266b4afc6ddd20cf4e7e8e063a067a034431725e4a0151ce21dc7a50f363573",
+  "predecessor_input_sha256": "5ed60ac714bf2f9199e955d6c38b20d1bcd2ff06a5c92724c47c6fdf74f99cdd",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -379,13 +379,13 @@
   "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
-  "task_base": "00724c15b7a66cfe67e6f9970923e3d1bb52a947",
+  "task_base": "fe16352f731265ef12672eddb39d60ca0a18a43e",
   "firmware_export": {
-    "commit": "1396ca98af25835ace139ff4331f5240da365874",
-    "tree": "86ce099bc84d675c48c78b679035e59b9db25901"
+    "commit": "26d954ebca56bbf456869de18bb0f0383918a34b",
+    "tree": "5f8cd3207afc2e9b5f21c885443ae21070a6331f"
   },
   "installer_source": {
-    "base_commit": "c900377276e3766672c388d5af35ef98ee979ea9",
+    "base_commit": "6e42aee7aac749716c3ae327b708265c6234ec83",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -2083,8 +2083,8 @@
       "sha256": "bc3ae123575a5daef5e7cede28b0b27478248387abfc07a36434f59aae2d17b6"
     },
     "Firmware MCP New/tests/test_monitor_delivery.py": {
-      "bytes": 42468,
-      "sha256": "c3345f3fb38bc346aff5b4b7c61866991c96cb972419ba485e12390cc0fcbd9d"
+      "bytes": 45861,
+      "sha256": "9df5340b3156e8ddf265f13bf0944ed8043da9baae11407a9580ae4bdabd054b"
     },
     "Firmware MCP New/tests/test_monitor_ledger.py": {
       "bytes": 17602,
@@ -3188,7 +3188,7 @@
     },
     "release/source-lock.json": {
       "bytes": 375,
-      "sha256": "dc0c64b37b1e703b192caeb6be8a0df7aeb6e8109e80bcfcbd25896a5c354294"
+      "sha256": "546a79aaccae1eddf3b80b804fa764ad90a55e7e07bf5685a5abe252e96657cf"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
