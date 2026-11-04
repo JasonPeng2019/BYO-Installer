@@ -108,8 +108,9 @@ private implementation detail, not a human-facing command.
    (`SIDECAR_ENVIRONMENT` in `main.rs`); the sidecar must not depend on
    variables outside it. On Windows that allowlist includes the native profile
    variables (`USERPROFILE`, `HOMEDRIVE`, `HOMEPATH`, `APPDATA`, and
-   `LOCALAPPDATA`); neither the launcher nor sidecar may require Unix-style
-   `HOME` on a clean Windows host.
+   `LOCALAPPDATA`) and `USERNAME`, which the activity ledger's best-effort
+   hardening uses to name the current account; neither the launcher nor sidecar
+   may require Unix-style `HOME` on a clean Windows host.
 
 ## 4. `self-test` output contract
 

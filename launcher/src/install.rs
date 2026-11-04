@@ -147,6 +147,78 @@ fn set_runtime_permissions(runtime: &Path, manifest: &ReleaseManifest) -> Result
     Ok(())
 }
 
+/// Nuitka's Windows bootstrap resolves the sidecar's own image path, and its
+/// extension-module loader builds module paths, in fixed 257-unit buffers
+/// (MAXPATHLEN + 1). A sidecar path longer than 256 UTF-16 units, as launched
+/// or in its resolved `\\?\` form, crashes the sidecar or keeps Windows from
+/// starting it. The budget conservatively covers every file in the sidecar
+/// tree, including the data files the sidecar opens itself.
+#[cfg(any(windows, test))]
+const WINDOWS_SIDECAR_PATH_UNITS: usize = 256;
+
+#[cfg(windows)]
+fn utf16_units(path: &Path) -> usize {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str().encode_wide().count()
+}
+
+#[cfg(all(test, not(windows)))]
+fn utf16_units(path: &Path) -> usize {
+    path.to_string_lossy().encode_utf16().count()
+}
+
+/// The longest sidecar-tree path under any spelling of one runtime directory,
+/// with its UTF-16 length, when it exceeds the Windows sidecar path budget.
+#[cfg(any(windows, test))]
+fn sidecar_path_over_budget(
+    runtime_spellings: &[PathBuf],
+    files: &[crate::manifest::ReleaseFile],
+) -> Option<(PathBuf, usize)> {
+    let mut longest: Option<(PathBuf, usize)> = None;
+    for runtime in runtime_spellings {
+        for file in files {
+            if !file.path.starts_with("sidecar/") {
+                continue;
+            }
+            let mut path = runtime.clone();
+            path.extend(file.path.split('/'));
+            let units = utf16_units(&path);
+            if longest.as_ref().is_none_or(|(_, most)| units > *most) {
+                longest = Some((path, units));
+            }
+        }
+    }
+    longest.filter(|(_, units)| *units > WINDOWS_SIDECAR_PATH_UNITS)
+}
+
+/// Refuses an installation root whose staged sidecar would exceed the Windows
+/// sidecar path budget before anything is staged. Staging is where the sidecar
+/// first runs, and its spelling is longer than the activated version directory.
+#[cfg(windows)]
+fn ensure_windows_sidecar_path_budget(staging: &Path, manifest: &ReleaseManifest) -> Result<()> {
+    let parent = staging
+        .parent()
+        .context("staging directory has no parent")?;
+    let name = staging
+        .file_name()
+        .context("staging directory has no name")?;
+    let spellings = [
+        std::path::absolute(staging)?,
+        parent
+            .canonicalize()
+            .with_context(|| format!("failed to resolve {}", parent.display()))?
+            .join(name),
+    ];
+    if let Some((path, units)) = sidecar_path_over_budget(&spellings, &manifest.files) {
+        let excess = units - WINDOWS_SIDECAR_PATH_UNITS;
+        bail!(
+            "the installation root is too deep for the Windows sidecar: {} would be {units} UTF-16 units, {excess} over the supported {WINDOWS_SIDECAR_PATH_UNITS}; shorten the installation root by at least {excess} characters (no runtime was staged or activated)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn sidecar_path(runtime: &Path) -> PathBuf {
     runtime.join(if cfg!(windows) {
         "sidecar/byo-mcp-sidecar.exe"
@@ -261,6 +333,8 @@ pub(crate) fn install_bundle_locked(
             source_manifest.version,
             rand::random::<u64>()
         ));
+        #[cfg(windows)]
+        ensure_windows_sidecar_path_budget(&staging, &source_manifest)?;
         retry_transient_io(|| std::fs::create_dir(&staging))
             .with_context(|| format!("failed to create staging directory {}", staging.display()))?;
         if let Err(error) = copy_tree(&bundle, &staging)
@@ -1035,6 +1109,67 @@ pub(crate) mod tests {
         }
         assert!(std::fs::read_dir(paths.staging()).unwrap().next().is_none());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(all(windows, feature = "development"))]
+    #[test]
+    fn too_deep_windows_root_is_refused_before_staging() {
+        let root =
+            std::env::temp_dir().join(format!("byo-deep-root-{:032x}", rand::random::<u128>()));
+        let bundle = root.join("bundle");
+        runtime_fixture(&bundle, "0.1.9", "");
+        let product = root.join("p".repeat(200));
+        let paths = crate::paths::ProductPaths::from_install_dir(&product).unwrap();
+        let error = super::install_bundle(&bundle, &paths).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("too deep for the Windows sidecar"));
+        assert!(message.contains("no runtime was staged or activated"));
+        assert_eq!(std::fs::read_dir(paths.staging()).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(paths.versions()).unwrap().count(), 0);
+        assert!(!paths.current().exists());
+        assert!(!paths.public_launcher().exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn windows_sidecar_path_budget_counts_utf16_units_of_the_sidecar_tree() {
+        use super::{sidecar_path_over_budget, utf16_units, WINDOWS_SIDECAR_PATH_UNITS};
+        let file = |path: &str| crate::manifest::ReleaseFile {
+            path: path.to_string(),
+            sha256: "0".repeat(64),
+            size: 0,
+            kind: "sidecar".to_string(),
+            executable: false,
+        };
+        // The longest sidecar-tree entry of the 0.1.12 Windows release.
+        let deepest =
+            "sidecar/jsonschema_specifications/schemas/draft202012/vocabularies/format-annotation";
+        let files = [
+            file("sidecar/byo-mcp-sidecar.exe"),
+            file(deepest),
+            file(&format!("analysis/{}", "r".repeat(400))),
+        ];
+        assert_eq!(utf16_units(std::path::Path::new("😀")), 2);
+        let root = std::env::temp_dir().join("byo deep 😀");
+        let mut probe = root.clone();
+        probe.extend(deepest.split('/'));
+        let spare = WINDOWS_SIDECAR_PATH_UNITS - utf16_units(&probe) - 1;
+        let fits = root.join("d".repeat(spare));
+        let deeper = root.join("d".repeat(spare + 1));
+        let over = WINDOWS_SIDECAR_PATH_UNITS + 1;
+        let mut expected = deeper.clone();
+        expected.extend(deepest.split('/'));
+        let fitting = sidecar_path_over_budget(&[fits.clone()], &files);
+        assert!(fitting.is_none(), "non-sidecar files are not budgeted");
+        assert_eq!(
+            sidecar_path_over_budget(&[deeper.clone()], &files),
+            Some((expected.clone(), over))
+        );
+        // Any over-budget spelling of the same runtime is refused.
+        assert_eq!(
+            sidecar_path_over_budget(&[fits, deeper], &files),
+            Some((expected, over))
+        );
     }
 
     fn write_registered_project(

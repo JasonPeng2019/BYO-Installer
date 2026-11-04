@@ -38,6 +38,7 @@ const SIDECAR_ENVIRONMENT: &[&str] = &[
     "COMSPEC",
     "PATHEXT",
     "USERPROFILE",
+    "USERNAME",
     "HOMEDRIVE",
     "HOMEPATH",
     "APPDATA",
@@ -1076,6 +1077,8 @@ mod tests {
     fn sidecar_environment_preserves_windows_profile_resolution() {
         for required in [
             "USERPROFILE",
+            // The sidecar's best-effort ledger hardening names the account.
+            "USERNAME",
             "HOMEDRIVE",
             "HOMEPATH",
             "APPDATA",

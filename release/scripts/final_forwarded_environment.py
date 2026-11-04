@@ -27,6 +27,7 @@ NAMES = (
     "COMSPEC",
     "PATHEXT",
     "USERPROFILE",
+    "USERNAME",
     "HOMEDRIVE",
     "HOMEPATH",
     "APPDATA",
