@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "64edbd7811bea5ed7027a93e44e9d2f22726d578",
+  "candidate": "b517214ee13faf58e0e08523a1b48e1f704faee4",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "3591e4bf6643471b86d4a5dff87055f9668cd151",
+  "source_parent": "51b042bdecd993c992f5e82fede89e617054bf9e",
   "build_owner_base": "9ea195f71806ddc0f7ad26b87e63ade41d056efe",
-  "predecessor_input_sha256": "303e88f1b75ac015c1e02408916dfbfc8105743e93fee3e63987f99d5520dd57",
+  "predecessor_input_sha256": "cfa475ce58c84673714aeb5fa255be9adcffde53339a8eaf055902d46341526d",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -379,13 +379,13 @@
   "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
-  "task_base": "7e83f2150c55ff74a2f646482c1fb83227c5ef26",
+  "task_base": "7cd8521a64748beddc619d6db2cd008997902eb5",
   "firmware_export": {
-    "commit": "63d31117eceeb87e4dc618fb1999bd4b69e5d1b3",
-    "tree": "93503fc77bef60a47fca783e17739730a720172f"
+    "commit": "8792f598541fd98954d33cb21df5d12d55cb2518",
+    "tree": "6f03d33a6db040433568731b2cee3b9389d2873a"
   },
   "installer_source": {
-    "base_commit": "eed9053a3d889eca9e26b6dac19e98cc1ecb5d74",
+    "base_commit": "9c7227588380b7ebc7d2f724f2766c0806bcbca6",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -860,7 +860,7 @@
     },
     "Firmware MCP New/pyproject.toml": {
       "bytes": 1433,
-      "sha256": "195ebd2da08be8fd9cf61ae6c00360c8399f60f86fd5379b6b754ea9c11946f8"
+      "sha256": "9e07ff47433b8d738d1bf430cb4c8103c4021bb52450593c901948746fcc00ea"
     },
     "Firmware MCP New/sentry-evidence/README.md": {
       "bytes": 1223,
@@ -1180,7 +1180,7 @@
     },
     "Firmware MCP New/src/pyocd_debug_mcp/__init__.py": {
       "bytes": 103,
-      "sha256": "d9615826b74abffce8e384768b99d187a2b344b6ccfb7da9477905ea78e4cc29"
+      "sha256": "24b0bdb9732e5e9b285617195eef3b75d88b1cccd110294ae0d552c5668a3e7f"
     },
     "Firmware MCP New/src/pyocd_debug_mcp/_analysis_native.py": {
       "bytes": 3833,
@@ -2368,11 +2368,11 @@
     },
     "Firmware MCP New/uv.lock": {
       "bytes": 281261,
-      "sha256": "139f792f09f84f763713bf465583b0939493f0f8adaf61b768dba5616a275e22"
+      "sha256": "f20717464717056cf2903db8a2c03421e27d7d0774cf1d528d4206063db8f27c"
     },
     "README.md": {
-      "bytes": 16533,
-      "sha256": "ac6161a90711cad8fecca0510bc22944e2708c5a9ee3f972f16445ad20adf2d1"
+      "bytes": 16610,
+      "sha256": "f21d1fdfc441a8e2c33a3e8254f9680ff9b5bf7d6cdaab11b2ea55fe2914d543"
     },
     "bc01-ci/.gitattributes": {
       "bytes": 8,
@@ -2576,11 +2576,11 @@
     },
     "launcher/Cargo.lock": {
       "bytes": 38347,
-      "sha256": "15d72c0ac0475dba5cb5b4896966e784ca31ae5a079a7496e9e91ab3fee91564"
+      "sha256": "9c2a479b4d82ea2e731eaaa4c7a7899e56d594e6ca02c96580cd47a48d528c1e"
     },
     "launcher/Cargo.toml": {
       "bytes": 1327,
-      "sha256": "c0ef73a814b631f7bc22ed58420f56eebd56bbb97cd5ce20932dc2cd57b209ef"
+      "sha256": "464898962b73f39b453b5f7413de877fe73edf2369cb761b10b9cd0c3a232dd1"
     },
     "launcher/src/b05_lifecycle_tests.rs": {
       "bytes": 56003,
@@ -3188,7 +3188,7 @@
     },
     "release/source-lock.json": {
       "bytes": 375,
-      "sha256": "175f61c51e8f1f7d43d61ad35d551dbebcf4efaa0c42d4be164e886869f0f6e7"
+      "sha256": "681ceeda20ab3ddbaaf0693e34456bb87cb52281fc868edac1bb8808aac63cc3"
     },
     "rust-toolchain.toml": {
       "bytes": 90,

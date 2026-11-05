@@ -265,7 +265,8 @@ Add `--install-dir <absolute-path>` on macOS/Linux or
 On Windows the compiled sidecar resolves its own files in fixed 257-unit
 buffers. Every file under a new runtime's `sidecar` directory, while staged in
 `data\staging\<version>-<16 hex digits>`, must therefore resolve to at most 256
-UTF-16 units including the `\\?\` prefix. With the 0.1.12 runtime this allows
+UTF-16 units including the `\\?\` prefix. With a six-character version such as
+0.1.13 and the 0.1.12 sidecar layout (deepest entry 84 units), this allows
 an installation root of up to 130 characters. A deeper root is refused before
 anything is staged (installation exits 24, `byo update` exits 40), and the
 error names the path and how much to shorten the root.
