@@ -523,8 +523,8 @@ jobs:
           BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/AgentWorkspace
           BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/fixture-inputs
         run: |
-          uv run --no-sync --project "Firmware MCP New" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
-          uv run --no-sync --project "Firmware MCP New" "$BYO_BUILD_PYTHON" -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
       - name: Record Linux stage prerequisites and exact checkout metadata
         if: always()

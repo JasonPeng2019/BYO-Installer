@@ -1159,10 +1159,10 @@ pub(crate) mod tests {
         let over = WINDOWS_SIDECAR_PATH_UNITS + 1;
         let mut expected = deeper.clone();
         expected.extend(deepest.split('/'));
-        let fitting = sidecar_path_over_budget(&[fits.clone()], &files);
+        let fitting = sidecar_path_over_budget(std::slice::from_ref(&fits), &files);
         assert!(fitting.is_none(), "non-sidecar files are not budgeted");
         assert_eq!(
-            sidecar_path_over_budget(&[deeper.clone()], &files),
+            sidecar_path_over_budget(std::slice::from_ref(&deeper), &files),
             Some((expected.clone(), over))
         );
         // Any over-budget spelling of the same runtime is refused.

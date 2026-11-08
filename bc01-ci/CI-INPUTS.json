@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "d5133d01f01d9bd9fe685475711f0bfc49cdda2c",
+  "candidate": "f3ae615ec0fcbda744fc126bb6b1d5d33e891de9",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "a4e3edf384ca3f39db1b456ea801fac363e17502",
-  "build_owner_base": "a4e3edf384ca3f39db1b456ea801fac363e17502",
-  "predecessor_input_sha256": "528fb2110d4c2a51b14836e2fed380518aad3423ae913db4b679774951c51fd0",
+  "source_parent": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
+  "build_owner_base": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
+  "predecessor_input_sha256": "882feee4fb94bf31948eacdeadfe7ec7ea4f95af50236b8f96b4e02d896b4fad",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -379,17 +379,77 @@
   "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
-  "task_base": "a4e3edf384ca3f39db1b456ea801fac363e17502",
+  "task_base": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
   "firmware_export": {
-    "commit": "8efd80841f38bc9487d70b7a59e940190e72817a",
-    "tree": "ad61f8be26713bb2f22507af8ac2ec84c079f12b"
+    "commit": "bb802a54e483b8212e4836f561f46c31e5de17a5",
+    "tree": "c705783bc4456b312d125257decd2b87c159843e"
   },
   "installer_source": {
-    "base_commit": "cd2ce4d6726de34d6d9a1a43269ab479293689ce",
+    "base_commit": "a8cf3c60ed7381ce47913834c58dbf91f216da59",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
   "files": {
+    ".gitattributes": {
+      "bytes": 98,
+      "sha256": "e478f1d595886fe9d29a8001307f7086246c3bcdc7a5ad27ab5ec21e230a4634"
+    },
+    ".github/CODEOWNERS": {
+      "bytes": 249,
+      "sha256": "30f221675fd53484438edd2011f2c82c391577a5a8d5094b1217265cfbad6a87"
+    },
+    ".github/actionlint.yaml": {
+      "bytes": 981,
+      "sha256": "1702595719c882acbe0afc166fad5fe5227434055a8063df56844decdf0db66c"
+    },
+    ".github/workflows/README-triggers.md": {
+      "bytes": 3480,
+      "sha256": "8dfa9adc17d94a251f638d42527c123719fc18eb8d4be4c9dac978f0b61af001"
+    },
+    ".github/workflows/arm-native-inputs.yml": {
+      "bytes": 3068,
+      "sha256": "361de3f21efde53938f9e4f6d51ea3380fc33f32e2f59c94db10bad5af2b6f3b"
+    },
+    ".github/workflows/arm-test-input-contracts.yml": {
+      "bytes": 1624,
+      "sha256": "b7d372fcf6fba59cd207cfa867cd5a35b450e7dfb1d8bbcc6a398fba696878e0"
+    },
+    ".github/workflows/build-matrix.yml": {
+      "bytes": 44813,
+      "sha256": "a2dd6f4d9673e2d6fede942d50ded00f650ad612ec66e877b9f753b19a672640"
+    },
+    ".github/workflows/channel-expiry.yml": {
+      "bytes": 1416,
+      "sha256": "009a25565a2ae45bae503401e23101e307626615059f872382060f646eec4c5d"
+    },
+    ".github/workflows/clean-machine.yml": {
+      "bytes": 3362,
+      "sha256": "01102154a7f8c2e9fc3e9a0ed83af652538e34215914e10a686a3b57865ecc52"
+    },
+    ".github/workflows/firmware-bump.yml": {
+      "bytes": 4557,
+      "sha256": "438f98fa173867343b81f04d61e2c002cd587f01e3f7896ce29cb1595afc2a29"
+    },
+    ".github/workflows/portability-input-audit.yml": {
+      "bytes": 1321,
+      "sha256": "8151e5824d309cb0d85994eee8190b15bc4c3e4cd009cafccf603f0aeeb7ecb8"
+    },
+    ".github/workflows/publish.yml": {
+      "bytes": 8493,
+      "sha256": "0384f07284028173fb0878dfe25435f53bf21ca03b2cc6646ea203008decd6b2"
+    },
+    ".github/workflows/quality.yml": {
+      "bytes": 14065,
+      "sha256": "79dce7447878a43a9a1dce8a3c99155091000018d2efb77f12e12aaf4e688d66"
+    },
+    ".github/workflows/release.yml": {
+      "bytes": 16146,
+      "sha256": "6e0af01b71b68b43a8dd93866e0c2aa5db69a4ba45c4fc9e32ded0d8baaed1b9"
+    },
+    ".gitignore": {
+      "bytes": 713,
+      "sha256": "9417055ffcef91441a3244b9484c2b070da6cc253dd2a19bbaf263e64b0b8f9f"
+    },
     "Firmware MCP New/.agent-workspace/runtime/manual-permissions/.protocol.lock": {
       "bytes": 1,
       "sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"
@@ -1883,8 +1943,8 @@
       "sha256": "39ae791400500f13c445233f5f860d951e7ba6027f3acad1f75970690b87ab3d"
     },
     "Firmware MCP New/tests/test_code_analysis_service_unit.py": {
-      "bytes": 101596,
-      "sha256": "14225bf06390d078b9d625d036182cb9940856b99f0649d4920d61c3a3f57ee3"
+      "bytes": 101783,
+      "sha256": "673dc075b7f845066878f338105a8173816fac050535656ed79ebb821c95ae69"
     },
     "Firmware MCP New/tests/test_code_analysis_windows_acceptance.py": {
       "bytes": 55131,
@@ -2294,66 +2354,6 @@
       "bytes": 300210,
       "sha256": "0d0d0c313c8aa3005d517647e8695675aad8bb76092a6ae43fd254f57868a7ce"
     },
-    ".gitattributes": {
-      "bytes": 98,
-      "sha256": "e478f1d595886fe9d29a8001307f7086246c3bcdc7a5ad27ab5ec21e230a4634"
-    },
-    ".github/CODEOWNERS": {
-      "bytes": 249,
-      "sha256": "30f221675fd53484438edd2011f2c82c391577a5a8d5094b1217265cfbad6a87"
-    },
-    ".github/actionlint.yaml": {
-      "bytes": 981,
-      "sha256": "1702595719c882acbe0afc166fad5fe5227434055a8063df56844decdf0db66c"
-    },
-    ".github/workflows/README-triggers.md": {
-      "bytes": 3480,
-      "sha256": "8dfa9adc17d94a251f638d42527c123719fc18eb8d4be4c9dac978f0b61af001"
-    },
-    ".github/workflows/arm-native-inputs.yml": {
-      "bytes": 3068,
-      "sha256": "361de3f21efde53938f9e4f6d51ea3380fc33f32e2f59c94db10bad5af2b6f3b"
-    },
-    ".github/workflows/arm-test-input-contracts.yml": {
-      "bytes": 1624,
-      "sha256": "b7d372fcf6fba59cd207cfa867cd5a35b450e7dfb1d8bbcc6a398fba696878e0"
-    },
-    ".github/workflows/build-matrix.yml": {
-      "bytes": 44768,
-      "sha256": "b87296c62f230458f81c02293850d77a8c5cada649d5a8cb00b1241ebf71f7d5"
-    },
-    ".github/workflows/channel-expiry.yml": {
-      "bytes": 1416,
-      "sha256": "009a25565a2ae45bae503401e23101e307626615059f872382060f646eec4c5d"
-    },
-    ".github/workflows/clean-machine.yml": {
-      "bytes": 3362,
-      "sha256": "01102154a7f8c2e9fc3e9a0ed83af652538e34215914e10a686a3b57865ecc52"
-    },
-    ".github/workflows/firmware-bump.yml": {
-      "bytes": 4557,
-      "sha256": "438f98fa173867343b81f04d61e2c002cd587f01e3f7896ce29cb1595afc2a29"
-    },
-    ".github/workflows/portability-input-audit.yml": {
-      "bytes": 1321,
-      "sha256": "8151e5824d309cb0d85994eee8190b15bc4c3e4cd009cafccf603f0aeeb7ecb8"
-    },
-    ".github/workflows/publish.yml": {
-      "bytes": 8493,
-      "sha256": "0384f07284028173fb0878dfe25435f53bf21ca03b2cc6646ea203008decd6b2"
-    },
-    ".github/workflows/quality.yml": {
-      "bytes": 14065,
-      "sha256": "79dce7447878a43a9a1dce8a3c99155091000018d2efb77f12e12aaf4e688d66"
-    },
-    ".github/workflows/release.yml": {
-      "bytes": 16146,
-      "sha256": "6e0af01b71b68b43a8dd93866e0c2aa5db69a4ba45c4fc9e32ded0d8baaed1b9"
-    },
-    ".gitignore": {
-      "bytes": 713,
-      "sha256": "9417055ffcef91441a3244b9484c2b070da6cc253dd2a19bbaf263e64b0b8f9f"
-    },
     "README.md": {
       "bytes": 16610,
       "sha256": "f21d1fdfc441a8e2c33a3e8254f9680ff9b5bf7d6cdaab11b2ea55fe2914d543"
@@ -2623,8 +2623,8 @@
       "sha256": "69867421dda99a2e35df227d95b0a893a0bd1131dbde4619deb69a2a39d947d5"
     },
     "launcher/src/install.rs": {
-      "bytes": 65966,
-      "sha256": "517d013a0dc813af1334991eb427ea0e1ccddacd69a4e01f57ceb78e711436e9"
+      "bytes": 65990,
+      "sha256": "ae130f0032d26a084c3c21350eda374661e7d2e087e77d259fdaa8d081b59d5c"
     },
     "launcher/src/lease.rs": {
       "bytes": 7475,
@@ -3136,7 +3136,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "b6243f14dcb8437cf1a0b7e45a1e11eea0038122d5f9e0211e99d3c465167e0e"
+      "sha256": "210d2db4077caefa26eeae50237d8fa24b581c0682cc9669a06c2c8964454146"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
@@ -3155,5 +3155,20 @@
       "sha256": "e1dfc35d151a44e982201d63062c7cd62326dd3a4eb815588bcb5a9167b9d629"
     }
   },
-  "bc07_fixed_pass": 3
+  "bc07_fixed_pass": 3,
+  "bc16_repaired_candidate": {
+    "initial_admitted_subject_sha256": "ee61606c9c5513afe98c8d3e7c5f4df88c781a332945507ad6fe93f312b795c9",
+    "repair": "f3ae615ec0fcbda744fc126bb6b1d5d33e891de9",
+    "initial_whole_Actions_pass": "FAILURE; all38jobs/73artifacts captured before diagnosis",
+    "independent_prebuild_gates": "BOTH_REQUIRED_AGAIN_BEFORE_CHANGED_SOURCE_PUSH_DISPATCH_BUILD",
+    "automated_CI": "ACTIONS_PENDING; no local product or CI execution",
+    "historical_fields_retained": [
+      "logical_family",
+      "full_attempt_number",
+      "bc07_fixed_pass",
+      "original_FR13_source",
+      "original_frozen_inventory_sha256",
+      "declared method inventories"
+    ]
+  }
 }
