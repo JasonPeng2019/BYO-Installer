@@ -70,9 +70,7 @@ Example (macOS Apple silicon, after a native build):
     --arm-gxx /opt/arm-gnu/bin/arm-none-eabi-g++ --arm-gxx-sha256 <hex> \
     --artifact-label candidate-<sha>
 
-A Windows-host run proves only the Windows bundle it was given. Helper controls
-(test_code_analysis_portable_smoke_controls.py) are behavior tests of this
-script, not native macOS/Linux evidence.
+A native-host run proves only the matching bundle it was given.
 """
 
 from __future__ import annotations

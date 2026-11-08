@@ -118,7 +118,7 @@ def main():
         # is published until all real compile and link commands have succeeded.
         sys.path.insert(0, str(firmware / "tests"))
         spec = importlib.util.spec_from_file_location(
-            "current_arm_corpus_builder", firmware / "tests/final_acceptance_suite.py"
+            "current_arm_corpus_builder", firmware / "tests/arm_corpus.py"
         )
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)

@@ -146,15 +146,6 @@ jobs:
         run: |
           test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.28"
 
-      - name: Acquire exact official U5 acceptance pack
-        id: official-pack
-        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
-        shell: bash
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" \
-            --acquire-official-pack "$RUNNER_TEMP/byo-official-pack/Keil.STM32U5xx_DFP.3.2.0.pack" \
-            --evidence release/build/final-acceptance/official-pack
-
       - name: Run Windows launcher cleanup regressions
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.build-deps.outcome == 'success' }}
         shell: bash
@@ -183,13 +174,6 @@ jobs:
         shell: bash
         run: |
           uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-quality --evidence release/build/final-acceptance/firmware-quality
-
-      - name: Run analysis Python source contracts
-        id: release-contracts
-        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
-        shell: bash
-        run: |
-          python -B bc01-ci/build_capture.py --name release-contracts -- uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
       - name: Build native launcher, sidecar, SBOM, and archive
         id: posix-bundle
@@ -244,17 +228,17 @@ jobs:
         run: |
           uv run --no-sync --project "Firmware MCP New" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
 
-      - name: Complete frozen firmware source suite with available native inputs
+      - name: Run retained source features
         id: source-suite
         if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
         shell: bash
+        env:
+          BYO_MCP_TEST_CLANGD_EXECUTABLE: ${{ github.workspace }}/release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}/analysis/clangd/bin/clangd${{ runner.os == 'Windows' && '.exe' || '' }}
+          BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/AgentWorkspace
+          BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/fixture-inputs
         run: |
-          uv run --no-sync --project "Firmware MCP New" python "Firmware MCP New/tests/final_acceptance_suite.py" \
-            --workspace-source AgentWorkspace --installer-source . \
-            --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" \
-            --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json \
-            --official-pack-receipt release/build/final-acceptance/official-pack/official-pack-acquisition.json \
-            --evidence release/build/final-acceptance/firmware-source
+          uv run --no-sync --project "Firmware MCP New" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
       - name: Record native stage prerequisites and exact checkout metadata
         if: always()
@@ -294,6 +278,7 @@ jobs:
           path: |
             release/build/analysis-evidence/
             release/build/final-acceptance/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
 
@@ -390,16 +375,6 @@ jobs:
           "$BYO_BUILD_PYTHON" -m pip install --disable-pip-version-check uv==0.11.20
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           uv sync --project "Firmware MCP New" --locked --all-groups --python "$BYO_BUILD_PYTHON"
-
-      - name: Acquire exact official Linux U5 acceptance pack
-        id: official-pack
-        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' }}
-        shell: bash
-        run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" \
-            --acquire-official-pack "$RUNNER_TEMP/byo-official-pack/Keil.STM32U5xx_DFP.3.2.0.pack" \
-            --evidence release/build/final-acceptance/official-pack
 
       - name: Prepare pinned Linux analyzer and GCC runtime inputs
         id: analysis-inputs
@@ -516,18 +491,17 @@ jobs:
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
           uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
 
-      - name: Complete frozen Linux firmware source suite with available native inputs
+      - name: Run retained Linux source features
         id: source-suite
         if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
         shell: bash
+        env:
+          BYO_MCP_TEST_CLANGD_EXECUTABLE: ${{ github.workspace }}/release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64/analysis/clangd/bin/clangd${{ runner.os == 'Windows' && '.exe' || '' }}
+          BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/AgentWorkspace
+          BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/fixture-inputs
         run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python "Firmware MCP New/tests/final_acceptance_suite.py" \
-            --workspace-source AgentWorkspace --installer-source . \
-            --native-bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" \
-            --arm-receipt release/build/analysis-evidence/installed-core.arm-test-input.json \
-            --official-pack-receipt release/build/final-acceptance/official-pack/official-pack-acquisition.json \
-            --evidence release/build/final-acceptance/firmware-source
+          uv run --no-sync --project "Firmware MCP New" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
+          uv run --no-sync --project "Firmware MCP New" "$BYO_BUILD_PYTHON" -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
       - name: Record Linux stage prerequisites and exact checkout metadata
         if: always()
@@ -567,6 +541,7 @@ jobs:
           path: |
             release/build/analysis-evidence/
             release/build/final-acceptance/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
 

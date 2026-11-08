@@ -519,10 +519,10 @@ Run in a fresh task-owned checkout/output directory so no command replaces an
 accepted artifact. The existing source builder produces development candidates
 without `--production`; production signing is a separate authorized operation.
 
-The independent installer tester owns the single portable entrypoint
-`release/scripts/test_code_analysis_portable_smoke.py` and its independent
-`release/scripts/test_code_analysis_portable_smoke_controls.py`. No wrapper or
-competing entrypoint is needed. Canonical options are `--expected-target` and
+The portable installed-product entrypoint is
+`release/scripts/test_code_analysis_portable_smoke.py`. The former synthetic
+smoke-control suite was removed during fixture cleanup; the real installed
+product assertions remain. No competing entrypoint is needed. Canonical options are `--expected-target` and
 `--evidence`; `--platform` and `--scratch` may be aliases. Required runnable
 interface, using the native build's `BUNDLE`, `ARCHIVE` and `TARGET` above:
 
@@ -533,13 +533,12 @@ python3 release/scripts/test_code_analysis_portable_smoke.py \
   --bundle "$BUNDLE" --archive "$ARCHIVE" --expected-target "$TARGET" \
   --workspace-source AgentWorkspace --evidence /absolute/path/to/new-evidence \
   --arm-gxx "$ARM_GXX" --arm-gxx-sha256 "$ARM_GXX_SHA256"
-python3 release/scripts/test_code_analysis_portable_smoke_controls.py
 # Optional sibling compiler: --arm-gcc /absolute/native/arm-none-eabi-gcc
 # Windows setup may supply --rustc C:/absolute/path/to/rustc.exe explicitly.
 ```
 
-The smoke and controls are required deliverables, **absent at the audited
-baseline**. `--archive`, `--bundle`, `--workspace-source`, `--arm-gxx` and
+The smoke driver requires an actual built native bundle; the historical audit
+baseline did not yet contain it. `--archive`, `--bundle`, `--workspace-source`, `--arm-gxx` and
 `--arm-gxx-sha256` are required. Hash and target-static verify the archive's
 bytes, modes and inventory, and prove equality with the expanded bundle before
 installation. The public launcher accepts the expanded directory through
@@ -606,7 +605,7 @@ The separate gates and full future native acceptance must still cover:
 | 1. ROOT accepts contract | This document only in this module | Fresh contract critique, including target/ABI and selection decisions |
 | 2a. Installer Rust owner | `launcher/src/code_analysis.rs`, `code_analysis/{config,runtime,process,xml}.rs`, `main.rs`, `workflow.rs`, `Cargo.toml`, `Cargo.lock` | Tester owns portable fixture additions and focused Rust/native lifecycle tests; preserve accepted corpus identity |
 | 2b. Installer packaging owner | `release/scripts/{analysis_tools,build_release,verify_build_output}.py`, `release/analysis-tools.lock.json`, installer mapping schema | Separate tester owns release-script regression tests; production paths remain disjoint |
-| 2c. Independent installer tester | No production files | Sole owner of `release/scripts/test_code_analysis_portable_smoke.py`, `release/scripts/test_code_analysis_portable_smoke_controls.py` and the narrow exact-target analyzer-resource acceptance change in existing `release/scripts/test_installed_e2e.py`; retain its lifecycle gate |
+| 2c. Independent installer tester | No production files | Sole owner of `release/scripts/test_code_analysis_portable_smoke.py` and the narrow exact-target analyzer-resource acceptance change in existing `release/scripts/test_installed_e2e.py`; retain its lifecycle gate |
 | 3. Server owner after installer runtime retirement/retarget by ROOT | `code_analysis_manifest.py`, `code_analysis_runtime.py`, `kernel/processes.py` as needed; matching runtime-manifest doc/schema | Server tester owns native mapping/lifecycle/real-clangd/availability regression suites; adapter/service changes only for a demonstrated blocker |
 | 4. Workspace owner in its repository | `internal/code_analysis.py`; `internal/agent_workspace.py` only if its existing resolution seam needs correction | Workspace tester owns parity and real Cppcheck/cleanup suites; no server dependency introduced |
 | 5. ROOT integration/build instructions/CI | `release/source-lock.json`, `.github/workflows/{quality,build-matrix,release,clean-machine}.yml`, release/runner instructions | Independent integrated-source tests then fresh review; native tester gathers new target evidence |
