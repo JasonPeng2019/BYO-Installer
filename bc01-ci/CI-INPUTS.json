@@ -1,394 +1,17 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "dc36fd9e5d02d050b5eff2843e063b75f9965cc0",
-  "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "2543a495f67c511d2a4024a41531b4f1a0088472",
-  "build_owner_base": "2543a495f67c511d2a4024a41531b4f1a0088472",
-  "predecessor_input_sha256": "5e4976af787666ef7229c1dd229a91b0953a5d9ba2d89494a245cd0fc6e5819a",
-  "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
-  "declared_methods_inventory_only": {
-    "tests.test_swd_process_isolation": [
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_worker_bootstrap_isolates_import_and_between_request_stdout",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_importing_worker_bootstrap_does_not_redirect_test_process",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_backend_stdout_is_forwarded_to_inherited_stderr_at_both_layers",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_selection_and_discovery_chatter_cannot_corrupt_protocol_result",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_process_backend_exposes_complete_swd_surface",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_parent_production_modules_do_not_dereference_native_handle_session",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_result_contracts_preserve_large_valid_values_and_exact_block_length",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_reader_accepts_large_complete_frames_and_partial_frames_timeout",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_wrong_id_malformed_frame_crash_and_timeout_are_terminal",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_startup_and_first_call_share_one_absolute_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_ready_hang_is_bounded",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_typed_child_errors_are_preserved_without_retry",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_confirmed_process_termination_makes_close_successful_and_idempotent",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_abrupt_locked_child_error_and_close_are_independent",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_normal_persistent_typed_error_closes_and_retires_owned_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_normal_persistent_locked_error_closes_and_retires_owned_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_actual_worker_dispatches_short_request_while_stdin_remains_open",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_actual_worker_no_session_protocol_does_not_import_native_provider",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_faulted_worker_does_not_interrupt_a_healthy_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_blocked_parent_write_has_a_hard_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_unconfirmed_termination_retains_recovery_marker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_marker_unlink_failure_is_typed_retained_and_retried_by_close",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_open_rollback_preserves_primary_when_marker_cleanup_fails",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_fails_only_when_process_termination_is_unconfirmed",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_terminates_when_default_deadline_is_already_exhausted",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_terminates_when_deadline_expires_between_check_and_call",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_terminate_helper_exception_closes_pipes_and_retains_marker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_confirmed_terminate_uses_helper_as_sole_cleanup_authority",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_parent_deadlines_use_explicit_or_managed_remaining_budget",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_generic_flash_and_recovery_calls_use_remaining_outer_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_stderr_is_inherited_not_captured_or_sanitized",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_frozen_metadata_and_uidless_runtime_identity",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_child_metadata_uses_detector_and_preserves_absent_uid_and_part",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_child_accepts_large_trusted_values_and_dispatches_complete_surface",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_terminal_typed_and_locked_workers_close_without_signal_and_reap",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_persistent_worker_preserves_errors_identity_and_idempotent_close",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_live_worker_with_faulted_membership_retains_marker"
-    ],
-    "tests.test_discovery_hook_process": [
-      "tests.test_discovery_hook_process.SuccessPathTests.test_probe_hook_output_is_parsed",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_uart_hook_output_is_parsed",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_empty_result_is_success_not_failure",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_successful_run_removes_its_ownership_marker",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_child_receives_utf8_io_encoding",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_noisy_stderr_does_not_prevent_a_successful_parse",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_is_reported_and_the_group_is_killed",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_reports_the_configured_deadline",
-      "tests.test_discovery_hook_process.DeadlineTests.test_output_written_before_a_timeout_does_not_make_it_a_success",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_kills_descendants_not_only_the_leader",
-      "tests.test_discovery_hook_process.DeadlineTests.test_a_hook_reading_stdin_gets_eof_instead_of_hanging",
-      "tests.test_discovery_hook_process.OutputCapTests.test_oversized_stdout_is_truncated_and_the_process_is_still_reaped",
-      "tests.test_discovery_hook_process.OutputCapTests.test_a_hook_that_never_stops_writing_is_still_bounded_by_its_deadline",
-      "tests.test_discovery_hook_process.OutputCapTests.test_captured_stdout_excerpt_is_bounded",
-      "tests.test_discovery_hook_process.OutputCapTests.test_oversized_stderr_is_bounded",
-      "tests.test_discovery_hook_process.FailureClassTests.test_nonzero_exit_is_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_nonzero_exit_with_valid_output_is_still_a_failure",
-      "tests.test_discovery_hook_process.FailureClassTests.test_malformed_utf8_is_parse_failed_not_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_malformed_json_is_parse_failed_not_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_every_failure_class_is_distinct",
-      "tests.test_discovery_hook_process.FailureClassTests.test_unknown_output_field_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_a_uart_document_from_a_probe_hook_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_row_count_over_the_cap_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_authority_injection_in_output_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_unknown_mode_reports_the_nonzero_exit_faithfully",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_unconfirmed_cleanup_is_reported_and_keeps_the_marker",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_confirmed_cleanup_removes_the_marker",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_cancellation_mid_run_still_terminates_the_group",
-      "tests.test_discovery_hook_process.LaunchFailureTests.test_popen_owned_raising_becomes_a_typed_launch_failed_execution",
-      "tests.test_discovery_hook_process.LaunchFailureTests.test_a_file_not_found_at_launch_is_also_a_typed_failure",
-      "tests.test_discovery_hook_process.DescriptorLeakTests.test_repeated_execution_does_not_leak_descriptors",
-      "tests.test_discovery_hook_process.DescriptorLeakTests.test_failing_runs_do_not_leak_descriptors_either",
-      "tests.test_discovery_hook_process.DeterminismTests.test_execution_order_is_deterministic_across_repeated_snapshots",
-      "tests.test_discovery_hook_process.DeterminismTests.test_execute_eligible_hooks_runs_each_hook_once_in_order",
-      "tests.test_discovery_hook_process.DeterminismTests.test_only_the_requested_kind_is_executed",
-      "tests.test_discovery_hook_process.DeterminismTests.test_ineligible_platform_hooks_are_never_launched",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_a_hook_path_containing_spaces_runs",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_executable_runner_without_the_execute_bit_fails_cleanly",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_executable_runner_with_the_execute_bit_runs",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_no_shell_is_ever_used",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_no_creationflags_are_passed_by_hand",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_run_owned_is_not_used_for_hooks",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_stdin_is_devnull",
-      "tests.test_discovery_hook_process.InterpreterTests.test_server_python_hooks_run_under_the_servers_interpreter",
-      "tests.test_discovery_hook_process.PosixNormalCompletionTests.test_normal_hook_clears_live_descendant_reaps_and_preserves_status_output",
-      "tests.test_discovery_hook_process.PosixNormalCompletionTests.test_unknown_normal_hook_retains_marker_and_preserves_live_child_and_peer"
-    ],
-    "tests.test_process_cleanup": [
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_exported_cleanup_budget_covers_every_cross_platform_phase",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_job_zero_and_leader_reap_have_separate_bounded_phases",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_unreaped_leader_after_separate_reap_grace_is_unconfirmed",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_real_job_creation_failure_reaps_suspended_leader_without_marker",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_unconfirmed_pre_resume_cleanup_retains_marker_and_primary",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_normal_run_owned_clears_live_descendant_then_reaps_and_preserves_output",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_terminal_only_group_is_confirmed_without_signalling_and_actually_reaped",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_timeout_and_baseexception_clear_live_group_preserving_original_error",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_denied_live_group_is_unconfirmed_and_retains_ownership",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_run_owned_denied_live_descendant_retains_marker_and_reports_failure",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_terminal_descendant_requires_full_group_proof_and_actual_reap",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_unknown_incomplete_foreign_and_reused_members_never_authorize_signals",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_faulted_anchor_and_failed_real_reap_cannot_confirm_cleanup",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_already_reaped_empty_group_succeeds_but_foreign_group_is_probe_only"
-    ],
-    "tests.test_code_analysis_posix_ownership": [
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_exact_retained_exit_survives_unavailable_leader_live_image",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_live_image_failure_after_actual_leader_exit_keeps_native_exit_authority",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_unavailable_exact_retained_exit_never_confirms_or_removes_marker",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_cached_correct_exit_cannot_replace_fresh_mismatched_retained_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_retained_leader_exit_cannot_hide_inaccessible_captured_detached_live_child",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_already_exited_before_begin_confirms_only_retained_group_and_captured_scope",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_never_observed_native_escape_remains_explicitly_not_proven",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_incomplete_native_observation_can_recover_with_final_proof_in_same_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_missing_final_native_observation_never_uses_earlier_complete_snapshot",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_final_native_membership_exhaustion_retains_marker_and_unchanged_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_term_eperm_after_real_child_exit_requires_fresh_terminal_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_eperm_retries_temporarily_incomplete_terminal_proof_in_same_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_eperm_phase_expiry_requires_fresh_proof_in_original_total_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_term_eperm_cannot_confirm_live_or_unavailable_terminal_membership",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_fresh_terminal_proof_cannot_erase_prior_captured_identity_failure",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_normal_leader_exit_cleans_term_ignoring_descendant_and_preserves_peer",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_stale_child_listing_cannot_acquire_new_birth_with_foreign_parent",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_retired_or_absent_ancestry_proposals_grant_nothing_without_uncertainty",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_churning_short_lived_descendants_keep_scoped_cleanup_confirmed",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_captured_detached_descendant_cannot_survive_normal_exit",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_natural_eof_retains_exact_exit_proof_until_owned_cleanup",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_deadline_and_cancellation_of_actual_version_probe_retire_exact_owned_process",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_late_spawn_is_cleaned_after_caller_abandons_admission",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_actual_unconfirmed_late_cleanup_retains_marker_and_refuses_new_spawn",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_actual_setup_exception_admission_depends_on_cleanup_for_timely_and_abandoned_callers",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_terminal_group_shrink_by_actual_parent_reap_requires_fresh_stable_native_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_registered_terminal_child_observer_failure_is_retired_without_rewriting_failure",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_marker_exact_start_mismatch_or_unknown_identity_never_signals_peer",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_owned_group_signal_permission_error_is_unconfirmed_and_marker_retained",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_captured_detached_live_child_with_unavailable_birth_stays_unconfirmed",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_recovery_requires_exact_session_group_and_rechecks_birth_before_escalation",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_lock_unavailable_state_snapshot_keeps_all_captured_identities_unknown"
-    ],
-    "tests.test_process_cleanup_churn": [
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_ordinary_normal_exit_preserves_status_streams_and_clears_churning_branch",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_ordinary_timeout_and_cancellation_preserve_error_and_clean_live_tree",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_real_fork_between_complete_scans_still_escalates_and_actually_reaps",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_actual_member_reap_after_live_read_is_retried_within_existing_budget",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_discovery_actual_churning_hook_normal_timeout_and_cancel",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_native_build_actual_churning_command_normal_and_timeout",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_directed_fixture_member_exit_diagnostic_records_actual_return_branch"
-    ],
-    "test_independent": [
-      "test_independent.IndependentOwnership.test_normal_communicate_caller_preserves_output_status_and_peer",
-      "test_independent.IndependentOwnership.test_normal_discovery_public_caller_preserves_output_status_and_peer",
-      "test_independent.IndependentOwnership.test_concurrent_poll_wait_never_releases_anchor_before_cleanup",
-      "test_independent.IndependentOwnership.test_faulted_current_native_observer_cannot_clear_normal_marker",
-      "test_independent.IndependentOwnership.test_fork_after_last_membership_read_cannot_produce_false_success"
-    ],
-    "test_observer_controls": [
-      "test_observer_controls.ObserverContracts.test_native_cmdline_error_keeps_exact_birth_and_real_status",
-      "test_observer_controls.ObserverContracts.test_native_status_error_remains_unknown",
-      "test_observer_controls.ObserverContracts.test_native_cmdline_fault_keeps_real_child_wait_and_streams",
-      "test_observer_controls.ObserverContracts.test_unexpected_sampler_error_keeps_wait_but_fails_observation"
-    ],
-    "test_validator": [
-      "test_validator.ValidatorCallerContracts.test_windows_foreign_spawn_root_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_windows_reused_spawn_root_birth_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_windows_unknown_spawn_root_birth_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_normal_zero_exit_caller_clears_live_child_and_preserves_exact_peer",
-      "test_validator.ValidatorCallerContracts.test_actual_terminal_only_leader_needs_no_group_signal",
-      "test_validator.ValidatorCallerContracts.test_denied_live_signals_keep_caller_error_marker_and_peer",
-      "test_validator.ValidatorCallerContracts.test_unknown_membership_grants_no_signal_and_keeps_marker",
-      "test_validator.ValidatorCallerContracts.test_actual_external_reap_releases_signal_authority_despite_cached_status",
-      "test_validator.ValidatorCallerContracts.test_reaped_plain_popen_live_group_receives_only_absence_probes"
-    ],
-    "test_source_binding": [
-      "test_source_binding.SourceBindingContracts.test_exact_export_is_the_checkout",
-      "test_source_binding.SourceBindingContracts.test_same_tree_stale_commit_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_mutated_lock_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_mutated_input_index_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_both_scoped_workflows_derive_checkout_from_resolver"
-    ],
-    "test_thread_errors": [
-      "test_thread_errors.ThreadErrorAccounting.test_unexpected_joined_thread_fails_command_without_rewriting_method",
-      "test_thread_errors.ThreadErrorAccounting.test_joined_thread_without_error_keeps_both_recorder_commands_successful"
-    ]
-  },
-  "prior_declared_methods_inventory_only": {
-    "tests.test_swd_process_isolation": [
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_worker_bootstrap_isolates_import_and_between_request_stdout",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_importing_worker_bootstrap_does_not_redirect_test_process",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_backend_stdout_is_forwarded_to_inherited_stderr_at_both_layers",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_selection_and_discovery_chatter_cannot_corrupt_protocol_result",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_process_backend_exposes_complete_swd_surface",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_parent_production_modules_do_not_dereference_native_handle_session",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_result_contracts_preserve_large_valid_values_and_exact_block_length",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_reader_accepts_large_complete_frames_and_partial_frames_timeout",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_wrong_id_malformed_frame_crash_and_timeout_are_terminal",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_startup_and_first_call_share_one_absolute_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_ready_hang_is_bounded",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_typed_child_errors_are_preserved_without_retry",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_confirmed_process_termination_makes_close_successful_and_idempotent",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_abrupt_locked_child_error_and_close_are_independent",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_normal_persistent_typed_error_closes_and_retires_owned_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_normal_persistent_locked_error_closes_and_retires_owned_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_actual_worker_dispatches_short_request_while_stdin_remains_open",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_faulted_worker_does_not_interrupt_a_healthy_worker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_blocked_parent_write_has_a_hard_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_unconfirmed_termination_retains_recovery_marker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_marker_unlink_failure_is_typed_retained_and_retried_by_close",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_open_rollback_preserves_primary_when_marker_cleanup_fails",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_fails_only_when_process_termination_is_unconfirmed",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_terminates_when_default_deadline_is_already_exhausted",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_close_terminates_when_deadline_expires_between_check_and_call",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_terminate_helper_exception_closes_pipes_and_retains_marker",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_confirmed_terminate_uses_helper_as_sole_cleanup_authority",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_parent_deadlines_use_explicit_or_managed_remaining_budget",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_generic_flash_and_recovery_calls_use_remaining_outer_deadline",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_stderr_is_inherited_not_captured_or_sanitized",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_frozen_metadata_and_uidless_runtime_identity",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_child_metadata_uses_detector_and_preserves_absent_uid_and_part",
-      "tests.test_swd_process_isolation.ProcessIsolationContractTests.test_child_accepts_large_trusted_values_and_dispatches_complete_surface",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_terminal_typed_and_locked_workers_close_without_signal_and_reap",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_persistent_worker_preserves_errors_identity_and_idempotent_close",
-      "tests.test_swd_process_isolation.PosixWorkerGroupCleanupTests.test_actual_live_worker_with_faulted_membership_retains_marker"
-    ],
-    "tests.test_discovery_hook_process": [
-      "tests.test_discovery_hook_process.SuccessPathTests.test_probe_hook_output_is_parsed",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_uart_hook_output_is_parsed",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_empty_result_is_success_not_failure",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_successful_run_removes_its_ownership_marker",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_child_receives_utf8_io_encoding",
-      "tests.test_discovery_hook_process.SuccessPathTests.test_noisy_stderr_does_not_prevent_a_successful_parse",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_is_reported_and_the_group_is_killed",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_reports_the_configured_deadline",
-      "tests.test_discovery_hook_process.DeadlineTests.test_output_written_before_a_timeout_does_not_make_it_a_success",
-      "tests.test_discovery_hook_process.DeadlineTests.test_timeout_kills_descendants_not_only_the_leader",
-      "tests.test_discovery_hook_process.DeadlineTests.test_a_hook_reading_stdin_gets_eof_instead_of_hanging",
-      "tests.test_discovery_hook_process.OutputCapTests.test_oversized_stdout_is_truncated_and_the_process_is_still_reaped",
-      "tests.test_discovery_hook_process.OutputCapTests.test_a_hook_that_never_stops_writing_is_still_bounded_by_its_deadline",
-      "tests.test_discovery_hook_process.OutputCapTests.test_captured_stdout_excerpt_is_bounded",
-      "tests.test_discovery_hook_process.OutputCapTests.test_oversized_stderr_is_bounded",
-      "tests.test_discovery_hook_process.FailureClassTests.test_nonzero_exit_is_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_nonzero_exit_with_valid_output_is_still_a_failure",
-      "tests.test_discovery_hook_process.FailureClassTests.test_malformed_utf8_is_parse_failed_not_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_malformed_json_is_parse_failed_not_hook_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_every_failure_class_is_distinct",
-      "tests.test_discovery_hook_process.FailureClassTests.test_unknown_output_field_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_a_uart_document_from_a_probe_hook_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_row_count_over_the_cap_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_authority_injection_in_output_is_parse_failed",
-      "tests.test_discovery_hook_process.FailureClassTests.test_unknown_mode_reports_the_nonzero_exit_faithfully",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_unconfirmed_cleanup_is_reported_and_keeps_the_marker",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_confirmed_cleanup_removes_the_marker",
-      "tests.test_discovery_hook_process.CleanupFailureTests.test_cancellation_mid_run_still_terminates_the_group",
-      "tests.test_discovery_hook_process.LaunchFailureTests.test_popen_owned_raising_becomes_a_typed_launch_failed_execution",
-      "tests.test_discovery_hook_process.LaunchFailureTests.test_a_file_not_found_at_launch_is_also_a_typed_failure",
-      "tests.test_discovery_hook_process.DescriptorLeakTests.test_repeated_execution_does_not_leak_descriptors",
-      "tests.test_discovery_hook_process.DescriptorLeakTests.test_failing_runs_do_not_leak_descriptors_either",
-      "tests.test_discovery_hook_process.DeterminismTests.test_execution_order_is_deterministic_across_repeated_snapshots",
-      "tests.test_discovery_hook_process.DeterminismTests.test_execute_eligible_hooks_runs_each_hook_once_in_order",
-      "tests.test_discovery_hook_process.DeterminismTests.test_only_the_requested_kind_is_executed",
-      "tests.test_discovery_hook_process.DeterminismTests.test_ineligible_platform_hooks_are_never_launched",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_a_hook_path_containing_spaces_runs",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_executable_runner_without_the_execute_bit_fails_cleanly",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_executable_runner_with_the_execute_bit_runs",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_no_shell_is_ever_used",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_no_creationflags_are_passed_by_hand",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_run_owned_is_not_used_for_hooks",
-      "tests.test_discovery_hook_process.PlatformSpecificTests.test_stdin_is_devnull",
-      "tests.test_discovery_hook_process.InterpreterTests.test_server_python_hooks_run_under_the_servers_interpreter",
-      "tests.test_discovery_hook_process.PosixNormalCompletionTests.test_normal_hook_clears_live_descendant_reaps_and_preserves_status_output",
-      "tests.test_discovery_hook_process.PosixNormalCompletionTests.test_unknown_normal_hook_retains_marker_and_preserves_live_child_and_peer"
-    ],
-    "tests.test_process_cleanup": [
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_exported_cleanup_budget_covers_every_cross_platform_phase",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_job_zero_and_leader_reap_have_separate_bounded_phases",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_unreaped_leader_after_separate_reap_grace_is_unconfirmed",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_real_job_creation_failure_reaps_suspended_leader_without_marker",
-      "tests.test_process_cleanup.WindowsProcessCleanupTests.test_unconfirmed_pre_resume_cleanup_retains_marker_and_primary",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_normal_run_owned_clears_live_descendant_then_reaps_and_preserves_output",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_terminal_only_group_is_confirmed_without_signalling_and_actually_reaped",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_timeout_and_baseexception_clear_live_group_preserving_original_error",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_denied_live_group_is_unconfirmed_and_retains_ownership",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_run_owned_denied_live_descendant_retains_marker_and_reports_failure",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_terminal_descendant_requires_full_group_proof_and_actual_reap",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_unknown_incomplete_foreign_and_reused_members_never_authorize_signals",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_faulted_anchor_and_failed_real_reap_cannot_confirm_cleanup",
-      "tests.test_process_cleanup.PosixProcessCleanupTests.test_already_reaped_empty_group_succeeds_but_foreign_group_is_probe_only"
-    ],
-    "tests.test_code_analysis_posix_ownership": [
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_exact_retained_exit_survives_unavailable_leader_live_image",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_live_image_failure_after_actual_leader_exit_keeps_native_exit_authority",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_unavailable_exact_retained_exit_never_confirms_or_removes_marker",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_cached_correct_exit_cannot_replace_fresh_mismatched_retained_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_retained_leader_exit_cannot_hide_inaccessible_captured_detached_live_child",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_already_exited_before_begin_confirms_only_retained_group_and_captured_scope",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_never_observed_native_escape_remains_explicitly_not_proven",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_incomplete_native_observation_can_recover_with_final_proof_in_same_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_missing_final_native_observation_never_uses_earlier_complete_snapshot",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_final_native_membership_exhaustion_retains_marker_and_unchanged_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_term_eperm_after_real_child_exit_requires_fresh_terminal_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_eperm_retries_temporarily_incomplete_terminal_proof_in_same_reserve",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_term_eperm_cannot_confirm_live_or_unavailable_terminal_membership",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_darwin_fresh_terminal_proof_cannot_erase_prior_captured_identity_failure",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_normal_leader_exit_cleans_term_ignoring_descendant_and_preserves_peer",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_stale_child_listing_cannot_acquire_new_birth_with_foreign_parent",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_retired_or_absent_ancestry_proposals_grant_nothing_without_uncertainty",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_churning_short_lived_descendants_keep_scoped_cleanup_confirmed",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_captured_detached_descendant_cannot_survive_normal_exit",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_natural_eof_retains_exact_exit_proof_until_owned_cleanup",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_deadline_and_cancellation_of_actual_version_probe_retire_exact_owned_process",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_late_spawn_is_cleaned_after_caller_abandons_admission",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_actual_unconfirmed_late_cleanup_retains_marker_and_refuses_new_spawn",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_actual_setup_exception_admission_depends_on_cleanup_for_timely_and_abandoned_callers",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_terminal_group_shrink_by_actual_parent_reap_requires_fresh_stable_native_proof",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_registered_terminal_child_observer_failure_is_retired_without_rewriting_failure",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_marker_exact_start_mismatch_or_unknown_identity_never_signals_peer",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_owned_group_signal_permission_error_is_unconfirmed_and_marker_retained",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_captured_detached_live_child_with_unavailable_birth_stays_unconfirmed",
-      "tests.test_code_analysis_posix_ownership.NativePosixOwnership.test_recovery_requires_exact_session_group_and_rechecks_birth_before_escalation"
-    ],
-    "tests.test_process_cleanup_churn": [
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_ordinary_normal_exit_preserves_status_streams_and_clears_churning_branch",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_ordinary_timeout_and_cancellation_preserve_error_and_clean_live_tree",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_real_fork_between_complete_scans_still_escalates_and_actually_reaps",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_actual_member_reap_after_live_read_is_retried_within_existing_budget",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_discovery_actual_churning_hook_normal_timeout_and_cancel",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_native_build_actual_churning_command_normal_and_timeout",
-      "tests.test_process_cleanup_churn.OrdinaryChurnContracts.test_directed_fixture_member_exit_diagnostic_records_actual_return_branch"
-    ],
-    "test_independent": [
-      "test_independent.IndependentOwnership.test_normal_communicate_caller_preserves_output_status_and_peer",
-      "test_independent.IndependentOwnership.test_normal_discovery_public_caller_preserves_output_status_and_peer",
-      "test_independent.IndependentOwnership.test_concurrent_poll_wait_never_releases_anchor_before_cleanup",
-      "test_independent.IndependentOwnership.test_faulted_current_native_observer_cannot_clear_normal_marker",
-      "test_independent.IndependentOwnership.test_fork_after_last_membership_read_cannot_produce_false_success"
-    ],
-    "test_observer_controls": [
-      "test_observer_controls.ObserverContracts.test_native_cmdline_error_keeps_exact_birth_and_real_status",
-      "test_observer_controls.ObserverContracts.test_native_status_error_remains_unknown",
-      "test_observer_controls.ObserverContracts.test_native_cmdline_fault_keeps_real_child_wait_and_streams",
-      "test_observer_controls.ObserverContracts.test_unexpected_sampler_error_keeps_wait_but_fails_observation"
-    ],
-    "test_validator": [
-      "test_validator.ValidatorCallerContracts.test_windows_foreign_spawn_root_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_windows_reused_spawn_root_birth_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_windows_unknown_spawn_root_birth_is_refused_before_release",
-      "test_validator.ValidatorCallerContracts.test_normal_zero_exit_caller_clears_live_child_and_preserves_exact_peer",
-      "test_validator.ValidatorCallerContracts.test_actual_terminal_only_leader_needs_no_group_signal",
-      "test_validator.ValidatorCallerContracts.test_denied_live_signals_keep_caller_error_marker_and_peer",
-      "test_validator.ValidatorCallerContracts.test_unknown_membership_grants_no_signal_and_keeps_marker",
-      "test_validator.ValidatorCallerContracts.test_actual_external_reap_releases_signal_authority_despite_cached_status",
-      "test_validator.ValidatorCallerContracts.test_reaped_plain_popen_live_group_receives_only_absence_probes"
-    ],
-    "test_source_binding": [
-      "test_source_binding.SourceBindingContracts.test_exact_export_is_the_checkout",
-      "test_source_binding.SourceBindingContracts.test_same_tree_stale_commit_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_mutated_lock_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_mutated_input_index_is_rejected",
-      "test_source_binding.SourceBindingContracts.test_both_scoped_workflows_derive_checkout_from_resolver"
-    ]
-  },
-  "declarations_are_execution_evidence": false,
-  "prior_156_IDs_preserved": true,
-  "prior_153_IDs_preserved": true,
-  "prior_141_IDs_preserved": true,
-  "declaration_count_inventory_only": 160,
-  "nested_control_declared_methods_inventory_only": {
-    "thread_error_fixture": [
-      "thread_error_fixture.OrdinaryThreadProbe.test_joined_ordinary_thread"
-    ]
-  },
-  "nested_control_declarations_are_execution_evidence": false,
-  "full_attempt_number": 3,
-  "logical_family": "BC06",
-  "persistent_canonical_inputs": true,
-  "task_base": "2543a495f67c511d2a4024a41531b4f1a0088472",
+  "candidate": "fb361688f7232f6df42f88cccd61ab684bcd5478",
+  "source_parent": "ce447fdcb084aa83a9b80db96fcd5ac1ba4be87c",
+  "predecessor_input_sha256": "791205579e124802740047e6dd6e8598f9328ebdeac8dea051dc6df4336245cb",
   "firmware_export": {
-    "commit": "c0f049f6ea3518c63dec36f8655b089595f13f51",
-    "tree": "e5f04f3476b37038530e94430cea01cee4511c19"
+    "commit": "9b4b83b5a124f423ce0d95bece0595aed05c788d",
+    "tree": "f125339ed6d5f9398b8584f24c766c985dedc398"
   },
   "installer_source": {
-    "base_commit": "44f36d288db59b7c83239a968265ac386df9fbe2",
-    "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
+    "base_commit": "d24b7170f9efe48ce34f9528faa9e86305875585",
+    "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
-  "validation_only_overlay": null,
+  "verification_scope": "Standalone test-suite cleanup; no product build, installed, model/client or hardware acceptance",
   "files": {
     ".gitattributes": {
       "bytes": 98,
@@ -403,20 +26,16 @@
       "sha256": "1702595719c882acbe0afc166fad5fe5227434055a8063df56844decdf0db66c"
     },
     ".github/workflows/README-triggers.md": {
-      "bytes": 3480,
-      "sha256": "8dfa9adc17d94a251f638d42527c123719fc18eb8d4be4c9dac978f0b61af001"
+      "bytes": 6847,
+      "sha256": "6a519a35dcb73dc3e5110168d225638cc3f715abbd6e9e4e58e6a08489b9751a"
     },
     ".github/workflows/arm-native-inputs.yml": {
       "bytes": 3068,
       "sha256": "361de3f21efde53938f9e4f6d51ea3380fc33f32e2f59c94db10bad5af2b6f3b"
     },
-    ".github/workflows/arm-test-input-contracts.yml": {
-      "bytes": 1624,
-      "sha256": "b7d372fcf6fba59cd207cfa867cd5a35b450e7dfb1d8bbcc6a398fba696878e0"
-    },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 49152,
-      "sha256": "4fd58a42bbebd8e39eca29affcbab7a00fa84bfaf218a044a408bb5744d7df6f"
+      "bytes": 51041,
+      "sha256": "b04b91d4d4251170e4b493e00cfc4390062342b0fb10bec2ce104c5c02952513"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -439,8 +58,8 @@
       "sha256": "0384f07284028173fb0878dfe25435f53bf21ca03b2cc6646ea203008decd6b2"
     },
     ".github/workflows/quality.yml": {
-      "bytes": 14065,
-      "sha256": "79dce7447878a43a9a1dce8a3c99155091000018d2efb77f12e12aaf4e688d66"
+      "bytes": 12033,
+      "sha256": "a7ba34046e29baebc14880c2ade1614091c823e61ab7b90e71df184f8ca18585"
     },
     ".github/workflows/release.yml": {
       "bytes": 16146,
@@ -1683,8 +1302,8 @@
       "sha256": "717aa9d419ff7580d2cdc5fbcca38e0a70a839b8b20df28db5fba2a3cc745fcc"
     },
     "Firmware MCP New/tests/README.md": {
-      "bytes": 9966,
-      "sha256": "110821b63077791d2e3c85c7f83ff05f76a15e0628817e6652d31773bb1f3668"
+      "bytes": 11409,
+      "sha256": "ba8b04b888a419812468bcda1059707520ff1fbdcf5151f69f704d8c4ae35998"
     },
     "Firmware MCP New/tests/arm_corpus.py": {
       "bytes": 3702,
@@ -1861,6 +1480,14 @@
     "Firmware MCP New/tests/prepared_model_method.py": {
       "bytes": 15366,
       "sha256": "e4d899355f68913fe8238219cf4741ac054d625351dbc3081ebaf1c04f2eca31"
+    },
+    "Firmware MCP New/tests/process_caller_fixture.py": {
+      "bytes": 3208,
+      "sha256": "3a503fbce02019ac6b3d41cf39f4bc70805e0da53f8a26c928bb4dfd7e1bcfac"
+    },
+    "Firmware MCP New/tests/process_release_fixture.py": {
+      "bytes": 2432,
+      "sha256": "143c645ae3a624078cc41f2298bc2d1d5c969cfe8c316384abc9e9e240eb4b11"
     },
     "Firmware MCP New/tests/store_cleanup.py": {
       "bytes": 5023,
@@ -2059,8 +1686,8 @@
       "sha256": "a8188a4a4b005063bdb168fbddd4433f3de4793f87737f2df2b63726a38b5056"
     },
     "Firmware MCP New/tests/test_model_pin.py": {
-      "bytes": 1393,
-      "sha256": "43fdebe7db80c1ae0b7797dca87489da1cd6bdd49d1cfcc3fbaf6919effa97da"
+      "bytes": 1341,
+      "sha256": "ec85fe205ac973f19a3f1ecdae0ec75fa9e353b38ac590c8f297c13b3795eed5"
     },
     "Firmware MCP New/tests/test_monitor_behaviour.py": {
       "bytes": 31725,
@@ -2138,6 +1765,10 @@
       "bytes": 29364,
       "sha256": "f27a2f9be1d1c4461b279c5b42674d2a500fbfbda7f8d8c6631f2c1bd25c071b"
     },
+    "Firmware MCP New/tests/test_process_callers.py": {
+      "bytes": 19904,
+      "sha256": "d7dc3ca73be65e56362724ba6035aa5f0296f6aa39efe4b500b4536e3eb5aef1"
+    },
     "Firmware MCP New/tests/test_process_cleanup.py": {
       "bytes": 29967,
       "sha256": "f6194bcf1d5769dc325ba4331c709303a1249204669f8b21486c1b0f7f562c90"
@@ -2145,6 +1776,10 @@
     "Firmware MCP New/tests/test_process_cleanup_churn.py": {
       "bytes": 15626,
       "sha256": "8cd5b732c63db14d3abc0f9af2108ba3fd263683351886175d9cfb003af73db0"
+    },
+    "Firmware MCP New/tests/test_process_release_identity.py": {
+      "bytes": 20340,
+      "sha256": "b65f0799ca719cef4372213509a33b87f93237804c863f377a6535f0038a1bda"
     },
     "Firmware MCP New/tests/test_regression_change_loop.py": {
       "bytes": 21070,
@@ -2367,88 +2002,16 @@
       "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
     },
     "bc01-ci/README.md": {
-      "bytes": 1796,
-      "sha256": "aef6ced896d258563a1f0680df8ce537ba4e5b57383ede759c51077b7d18b562"
-    },
-    "bc01-ci/build-and-native.yml": {
-      "bytes": 36844,
-      "sha256": "a4c5a2cd8582518e157f9ab94fb2de4a5c7de9ab953ab8ecf9336d820498a5d9"
+      "bytes": 2293,
+      "sha256": "38653c7b180be3dd67d8c5205f26fb5a84838f476d29da7a3b600f3165ef69d6"
     },
     "bc01-ci/build_capture.py": {
-      "bytes": 2997,
-      "sha256": "7682827c4beea913aa331fa183b651c204f9dc52a2ab87439278211b4347f71a"
-    },
-    "bc01-ci/ci_common.py": {
-      "bytes": 7275,
-      "sha256": "8d1adec00faf6e831a8ed5eaea2766d224690803ff094168a791dbef2ed1cc6a"
-    },
-    "bc01-ci/ci_setup.py": {
-      "bytes": 11698,
-      "sha256": "0d97919d52eccfd32893c9b2d0956f90b352dada697963f7033a3be3e044e461"
-    },
-    "bc01-ci/inputs/run_unittest.full01.py": {
-      "bytes": 11520,
-      "sha256": "49708ef5640109d8bb6872b175b9790988c2186363fe1f51e4facb2ad6362a85"
-    },
-    "bc01-ci/native_fixture.py": {
-      "bytes": 3208,
-      "sha256": "3a503fbce02019ac6b3d41cf39f4bc70805e0da53f8a26c928bb4dfd7e1bcfac"
-    },
-    "bc01-ci/probe_environment.py": {
-      "bytes": 1706,
-      "sha256": "e6fb803c34b6c4702258657d2ccb0d8e0e0a58c6ad03676621ea8f4d5372efe5"
+      "bytes": 2946,
+      "sha256": "156b960275de44d888ffd8375776e4aadd5fd5d3639a8980342d1f35bffdf7ec"
     },
     "bc01-ci/pyrightconfig.json": {
       "bytes": 171,
       "sha256": "4aab4df777269636a2236963b0913ab32493d672538a15d9565aa4d6802687a5"
-    },
-    "bc01-ci/resolve_source.py": {
-      "bytes": 3067,
-      "sha256": "313e263ee68cde8328e571049942df2a062eb28cb175c64395834e7f8b30f2b5"
-    },
-    "bc01-ci/run_actions.py": {
-      "bytes": 22857,
-      "sha256": "e04b0a9d96b7349ef9339ec83b3c737c4d22019f50cb5fe147e9302a89b25f1a"
-    },
-    "bc01-ci/run_unittest.py": {
-      "bytes": 12732,
-      "sha256": "0f7f4f26b428d87ec2de4b7b8723920dc9b9d4d72ee1d0ce7bc9f03ca805a29d"
-    },
-    "bc01-ci/test_independent.py": {
-      "bytes": 19880,
-      "sha256": "4e194b9b3331686c7241d54a9f824a8b91c15a297a7b5cfc8fa681b2f3e58ec7"
-    },
-    "bc01-ci/test_observer_controls.py": {
-      "bytes": 4069,
-      "sha256": "274209e6e04c5cc44eed360bec853fbc1843439ec7be8935a24f8a3b0dfcf27b"
-    },
-    "bc01-ci/test_source_binding.py": {
-      "bytes": 2961,
-      "sha256": "a34e4249998529317549e3ab1c8b32fa54a8b4b7d04d75fdefde8756dc2d9da1"
-    },
-    "bc01-ci/test_thread_errors.py": {
-      "bytes": 4196,
-      "sha256": "0273aa291fc0d64bfb1de95b63309f64b1948281bbccdeb855d16810c433483b"
-    },
-    "bc01-ci/test_validator.py": {
-      "bytes": 20308,
-      "sha256": "02d9cf7ec7b750fca74768927528dc58e2e1ab90e07689e984f919c701c91da5"
-    },
-    "bc01-ci/thread_error_control.py": {
-      "bytes": 3335,
-      "sha256": "0fd2cb75a01e06f1f012be05b56e861207a7411c0fe65bc1bca19f406fb84733"
-    },
-    "bc01-ci/thread_error_fixture.py": {
-      "bytes": 780,
-      "sha256": "447533b704493c3355b553472bc878c112056c11dc4e4efd62179d83e6f6448c"
-    },
-    "bc01-ci/thread_error_wrapper.py": {
-      "bytes": 1129,
-      "sha256": "291712f07e798975299ad07e7177cde54441f78aacbfb484a97e120cacdba80a"
-    },
-    "bc01-ci/validator_fixture.py": {
-      "bytes": 2432,
-      "sha256": "143c645ae3a624078cc41f2298bc2d1d5c969cfe8c316384abc9e9e240eb4b11"
     },
     "bc01-ci/verify_frozen_sources.py": {
       "bytes": 2720,
@@ -3007,8 +2570,8 @@
       "sha256": "fd987fccb416310535fde546515675ef8dfec00869871bf8a7e4807e342e1835"
     },
     "release/scripts/final_acceptance_checks.py": {
-      "bytes": 13012,
-      "sha256": "1ff87a3591e355b724737ba0cf4288f0bf057fffed7ee62089322d293f23225b"
+      "bytes": 12143,
+      "sha256": "305013c90d5901b8b5f2e7ecad1a87d39788d553fa90db500f43c5f0456cd549"
     },
     "release/scripts/final_forwarded_environment.py": {
       "bytes": 5552,
@@ -3019,8 +2582,8 @@
       "sha256": "24f9a91a139ee8f2884a6929e6f87ad63a7785db3bd5a4424e0b85c7318ad045"
     },
     "release/scripts/final_public_mcp.py": {
-      "bytes": 43836,
-      "sha256": "3c45ad16e36e9cbd70619185ab933a4377a92b5e986871cdb5c8e331221c8023"
+      "bytes": 44125,
+      "sha256": "84d90d0ea5047acee3d823466407da67649da59fab536e07cd4300682136ed86"
     },
     "release/scripts/fixtures/code-analysis-installed/README.md": {
       "bytes": 11103,
@@ -3140,7 +2703,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "5078fd0e8d51016271e3a6c31aa1ec0ad6da45078e9737d915374fb0476eff0d"
+      "sha256": "5f759ef7e38e47129a2147af304b4638b5cf97bdb9e5906e7c202c07b3b1342d"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
@@ -3158,48 +2721,5 @@
       "bytes": 2600,
       "sha256": "e1dfc35d151a44e982201d63062c7cd62326dd3a4eb815588bcb5a9167b9d629"
     }
-  },
-  "bc07_fixed_pass": 3,
-  "bc16_repaired_candidate": {
-    "initial_admitted_subject_sha256": "ee61606c9c5513afe98c8d3e7c5f4df88c781a332945507ad6fe93f312b795c9",
-    "repair": "f3ae615ec0fcbda744fc126bb6b1d5d33e891de9",
-    "initial_whole_Actions_pass": "FAILURE; all38jobs/73artifacts captured before diagnosis",
-    "independent_prebuild_gates": "BOTH_REQUIRED_AGAIN_BEFORE_CHANGED_SOURCE_PUSH_DISPATCH_BUILD",
-    "automated_CI": "ACTIONS_PENDING; no local product or CI execution",
-    "historical_fields_retained": [
-      "logical_family",
-      "full_attempt_number",
-      "bc07_fixed_pass",
-      "original_FR13_source",
-      "original_frozen_inventory_sha256",
-      "declared method inventories"
-    ]
-  },
-  "bc16_postbuild_source_repair": {
-    "phase": "SOURCE_ONLY_PREPARATION",
-    "repair_R": "dc36fd9e5d02d050b5eff2843e063b75f9965cc0",
-    "prior_source_M": "9ed2bea56eeec1ff9cbdc940abb1ec3532183d79",
-    "prior_notice_tip": "2543a495f67c511d2a4024a41531b4f1a0088472",
-    "findings": [
-      "EFR-01",
-      "EFR-02",
-      "EFR-03",
-      "EFR-04",
-      "EFR-05",
-      "EFR-06",
-      "EFR-07",
-      "EFR-08"
-    ],
-    "CI_execution": "ACTIONS_PENDING; no local deterministic execution",
-    "independent_gates": "BOTH_SAME_EXACT_CANDIDATE_PREBUILD_PASS_ROOT_ADMISSION_AND_CAPTURED_STOP_REQUIRED_BEFORE_CHANGED_SOURCE_REMOTE_BUILD",
-    "runtime_dependency_version_changes": false,
-    "same_logical_owner_push_budget": {
-      "failed": 2,
-      "pending": 0,
-      "passed": 2,
-      "max_failed": 7,
-      "reset": false
-    },
-    "historical_fields": "Retained as historical provenance; not new execution or current method discovery"
   }
 }

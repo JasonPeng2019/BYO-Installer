@@ -598,12 +598,14 @@ def main():
                     raise AssertionError(reply)
                 return reply["result"]
 
-    def tool(name, arguments):
+    def tool_text(name, arguments):
         result = rpc("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
             raise AssertionError(result)
-        text = "\n".join(item.get("text", "") for item in result.get("content", []))
-        return json.loads(text)
+        return "\n".join(item.get("text", "") for item in result.get("content", []))
+
+    def tool(name, arguments):
+        return json.loads(tool_text(name, arguments))
 
     qualified = case(
         "FR16.owned-effective-environment-before-effects",
@@ -824,7 +826,12 @@ def main():
         for name in ("downgrade.json", "mass-erase.json"):
             assert permission_state[name]["state"] == "locked", permission_state
             assert permission_state[name]["server_run_id"] == run_id, permission_state
-        handshake = tool("initialization_handshake", {"workspace_path": str(project)})
+        # The public handshake returns operating guidance as plain text.
+        handshake = tool_text(
+            "initialization_handshake", {"workspace_path": str(project)}
+        )
+        assert "Guarded Hardware Server operating guidance" in handshake, handshake
+        assert run_id in handshake, handshake
         health = tool("server_health_check", {})
         selector = observations.qualification["observed_selectors"][-1]
         state = health["recording"]["store_state"]

@@ -1,28 +1,38 @@
-# Canonical build inputs
+# Build inputs and small command capture
 
-The `chore/Proto-0.04` push runs the committed build matrix, its reusable quality
-workflow, and these retained native lifecycle controls. The expected input digest
-comes from the current Git commit's `bc01-ci/CI-INPUTS.json` blob. Every product,
-workflow, lock and runtime helper in that index is checked before and after the
-recorded commands. The source lock and index must name the identical complete
-Firmware MCP commit and tree. There is no dispatch-only source replacement.
+This directory keeps the committed `CI-INPUTS.json`, its
+`verify_frozen_sources.py` check, and a small Actions command capture helper.
+The separate FR13 observer, nested unittest recorder, source-binding self-tests
+and copied build workflow have been removed. There is no optional legacy suite.
 
-These controls continue the full02 build owner's actual runtime controls; the
-baseline recorder is retained solely for the intentional thread-error negative.
-Their historical FR13 labels do not claim independent or final acceptance.
-Hardware, model and complete final acceptance remain separate planned scopes.
+The build matrix checks the frozen source/input identity once before and once
+after each native job. Historical `FR13_EXECUTION_COMMIT` and
+`FR13_INPUT_SHA256` environment names remain compatible input metadata; they
+do not launch the deleted FR13 matrix or establish final acceptance.
 
-The build matrix invokes quality once. Its canonical push does not also trigger
-a second standalone quality workflow. Dispatch overrides are optional and must
-still match the checkout and committed input index. Complete canonical
-orchestration and compilation remain Actions-only.
+`build_capture.py --name <step> --cwd <directory> -- <command> <arguments>`
+records argv, working directory and RUNNING status before spawning the command.
+It writes stdout/stderr directly to files, records the actual exit or setup
+error, and propagates failure. The finite Actions job owns the deadline and
+process tree. A killed step can leave a RUNNING record and partial streams;
+that is incomplete evidence, never PASS. Existing artifact uploads retain it.
+No per-command full-tree snapshots or host process-history are required.
 
-The ordinary Python observer, interpreter, identity and thread-error controls
-also support local nonbuilding execution with the real locked dependencies.
-Use a private `TEMP`/`TMP` and `FR13_CONTROL_EVIDENCE` directory and the documented
-Firmware source import paths. For example, run `python -m unittest
-test_observer_controls test_thread_errors test_validator` from this directory
-after selecting that environment. Method outcomes, deliberate negatives and
-host-specific skips remain separate; a local control is not installed/native
-or final independent acceptance. PB01's full01 comparison changes only its old
-Actions restriction; the original recorder bytes are retained in PB01 evidence.
+The fourteen useful product process-ownership checks formerly mixed into
+`test_independent.py` and `test_validator.py`, with their two child fixtures,
+now live in Firmware MCP `tests/` as `test_process_callers.py` and
+`test_process_release_identity.py`. The existing four-host native regression
+step runs them through ordinary pytest, alongside the existing process tests.
+No assertion was discarded when removing the recorder.
+
+See [workflow triggers](../.github/workflows/README-triggers.md) for cheap push
+preparation and the single explicit native bundle/installed acceptance path.
+All automated checks and builds remain Actions-only. Genuine local client,
+model and hardware acceptance remains separate and required.
+
+The retained source lock and input index describe the previous exported
+candidate. This standalone cleanup does not publish or invent a new export.
+The next authorized source owner must adopt these changes and refresh the exact
+paired exports/index before gated CI. Do not restore deleted files to satisfy
+the historical index, relabel an old artifact, or bump the product version
+solely for fixture changes.

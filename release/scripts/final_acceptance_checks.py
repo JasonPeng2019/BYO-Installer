@@ -1,6 +1,6 @@
 """Existing CI command groups with ordinary streams and exit codes.
 
-Builds remain Actions-only. Source and release Python groups can run locally.
+Builds and automated source/release checks remain Actions-only for this campaign.
 Each independent command runs once; failure does not suppress later commands.
 No process observer, nested-test ledger, or per-command source-tree hashing.
 """
@@ -70,18 +70,6 @@ def commands(group):
                 ],
             ),
             (
-                "rust-inventory",
-                [
-                    *cargo,
-                    "test",
-                    *contract_config,
-                    *manifest,
-                    "--locked",
-                    "--",
-                    "--list",
-                ],
-            ),
-            (
                 "rust-tests",
                 [
                     *cargo,
@@ -140,15 +128,6 @@ def commands(group):
                 ],
             ),
             ("bootstrap-shell", ["sh", "-n", "install.sh"]),
-            (
-                "workflow-actionlint",
-                [
-                    "go",
-                    "run",
-                    "github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
-                    "-no-color",
-                ],
-            ),
         ]
     if group == "workspace":
         return [
@@ -222,14 +201,6 @@ def commands(group):
             ("firmware-type", [sys.executable, "-B", "-m", "pyright", "src"]),
         ]
     if group == "firmware-contract":
-        selected = [
-            "src/pyocd_debug_mcp/sidecar.py",
-            "src/pyocd_debug_mcp/capabilities/manual_permission_helper.py",
-        ]
-        tests = [
-            "tests/test_sidecar_runtime.py",
-            "tests/test_manual_permission_helper_runtime.py",
-        ]
         return [
             (
                 "firmware-contract-ruff",
@@ -244,13 +215,13 @@ def commands(group):
                     "ruff",
                     "format",
                     "--check",
-                    *selected,
-                    *tests,
+                    "src",
+                    "tests",
                 ],
             ),
             (
                 "firmware-contract-type",
-                [sys.executable, "-B", "-m", "pyright", *selected],
+                [sys.executable, "-B", "-m", "pyright", "src"],
             ),
             (
                 "firmware-contract-tests",

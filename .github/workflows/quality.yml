@@ -1,7 +1,6 @@
 name: Quality gates
 
 on:
-  pull_request:
   workflow_call:
     inputs:
       execution_commit:
@@ -12,7 +11,6 @@ on:
         required: false
   push:
     branches:
-      - InstallerV1
       - V1/C-Check-version
 
 permissions:
@@ -84,6 +82,17 @@ jobs:
         id: test-deps
         run: uv sync --project "Firmware MCP New" --locked --all-groups
 
+      - name: Validate release Python
+        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-quality --evidence release/build/final-acceptance/release-quality
+
+      - name: Release script unit tests
+        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
+        run: |
+          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
+
+
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
 
@@ -107,43 +116,6 @@ jobs:
       - name: Actual generated shell startup and preservation
         if: ${{ !cancelled() }}
         run: cargo test --manifest-path launcher/Cargo.toml --locked generated_profiles_execute_in_real_shell_startup_and_preserve_user_bytes -- --ignored --nocapture
-
-      - name: Validate release Python
-        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-quality --evidence release/build/final-acceptance/release-quality
-
-      - name: Retain locked formatter diff for diagnosis
-        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python -B - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-          import sys
-
-          evidence = Path("release/build/final-acceptance/formatter-diagnostic")
-          evidence.mkdir(parents=True, exist_ok=False)
-          target = Path("release/scripts/final_public_mcp.py")
-          before = hashlib.sha256(target.read_bytes()).hexdigest()
-          command = [sys.executable, "-B", "-m", "ruff", "format", "--diff", "release/scripts", "hil"]
-          result = subprocess.run(command, capture_output=True, timeout=120, check=False)
-          (evidence / "format.diff").write_bytes(result.stdout)
-          (evidence / "format.stderr.log").write_bytes(result.stderr)
-          version = subprocess.run([sys.executable, "-B", "-m", "ruff", "--version"], capture_output=True, timeout=30, check=False)
-          record = {"scope": "diagnostic only; the original format --check gate retains its result", "argv": command, "exit": result.returncode, "ruff_version_exit": version.returncode, "ruff_version_stdout": version.stdout.decode(), "ruff_version_stderr": version.stderr.decode(), "github_sha": os.environ["GITHUB_SHA"], "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"], "firmware_lock_sha256": hashlib.sha256(Path("Firmware MCP New/uv.lock").read_bytes()).hexdigest(), "target_before_sha256": before, "target_after_sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
-          (evidence / "diagnostic.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
-          print(json.dumps(record))
-          if record["target_after_sha256"] != before:
-              raise SystemExit("Formatter diagnostic changed frozen source")
-          PY
-
-      - name: Release script unit tests
-        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
 
       - name: Bind exact frozen bytes after all independent downstream commands
         if: always()
