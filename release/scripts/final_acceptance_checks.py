@@ -262,6 +262,14 @@ def main():
                 {
                     "source": os.environ.get("GITHUB_SHA"),
                     "steps": json.loads(os.environ.get("FINAL_STEP_RESULTS", "{}")),
+                    "commands": (
+                        [
+                            {"name": name, "argv": argv}
+                            for name, argv in commands(args.group)
+                        ]
+                        if args.group
+                        else []
+                    ),
                 },
                 indent=2,
             )

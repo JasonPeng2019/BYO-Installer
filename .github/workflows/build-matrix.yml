@@ -843,6 +843,7 @@ jobs:
     timeout-minutes: 40
     env:
       BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/fixture-cleanup/failed-inputs
+      BYO_FINAL_CHILD_EVIDENCE: ${{ github.workspace }}/release/build/fixture-cleanup/child-cases
       BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/CodexClaudeWorkflow
       EXPECTED_TARGET: ${{ matrix.target }}
     defaults:
@@ -901,7 +902,10 @@ jobs:
           uv run --no-sync python -m ruff format --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-format.patch || true
           uv run --no-sync python -m ruff check "${files[@]}"
           uv run --no-sync python -m ruff format --check "${files[@]}"
-          uv run --no-sync python -m pyright tests/conftest.py tests/fixture_directory.py
+      - name: Check small failure capture types
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
+        working-directory: Firmware MCP New
+        run: uv run --no-sync python -m pyright tests/conftest.py tests/fixture_directory.py
       - name: Check changed Installer test helpers
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
         run: |
