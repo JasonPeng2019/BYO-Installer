@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "caf16f624736a1d769bdc231915a824d901ea145",
-  "source_parent": "57c0db88a9093f8fda3767237407d8c01f59ac27",
-  "predecessor_input_sha256": "a00a55dcc95544f8d0cdbdc9192905ffb30454f257dd7b1633ca49aa091bebf8",
+  "candidate": "ef6812df71703a6546a22c4065c9af1b8dad5312",
+  "source_parent": "3c5caf123871360c6f325c4a13bf02d0b2e093dd",
+  "predecessor_input_sha256": "2077baffdb18deff9cd4fc6e78afc8a3def17fb2c3ea5e8d2ee8d83465465806",
   "firmware_export": {
-    "commit": "a779ead1861e9e2dc97e94ec6117951d2333924b",
-    "tree": "e55646fe1cbacf51de7eef2c027c0b219b2634a2"
+    "commit": "d0ed775669b8340cbe09a9cfa37f38596d34bc45",
+    "tree": "587d6751018ec5e739c679ea2ae5fb6bc9644293"
   },
   "installer_source": {
-    "base_commit": "7b7dd08baebbd7cf14f51a3b288b12a6615eded6",
+    "base_commit": "92e1ccf595733146bd88f77397b04f7b527424d1",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture necessity cleanup; no build, FR/FT, installed, model/client or hardware acceptance",
@@ -1398,8 +1398,8 @@
       "sha256": "dde32cab2787a2798d5f6e76707ff7cc3ee077992702ee75159db8f8898787ab"
     },
     "Firmware MCP New/tests/conftest.py": {
-      "bytes": 3740,
-      "sha256": "e83ced88838755bd22dae1591e764171d0fad4f1d09bcf0cdda409e40b7f53f1"
+      "bytes": 3769,
+      "sha256": "6357881edc3b5b7cc2fa0b974d060f91fbb136a324c4114060c3e09ae19dc65e"
     },
     "Firmware MCP New/tests/discovery_hook_fixtures.py": {
       "bytes": 4408,
@@ -2715,7 +2715,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "9375b28e29c5189ba3e39a59ca646bcd7d2dde68488048334d9729efd6d8edef"
+      "sha256": "150966e2c991282b3637f5283287c740e76739128122bb21a904e91e0ad06381"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
