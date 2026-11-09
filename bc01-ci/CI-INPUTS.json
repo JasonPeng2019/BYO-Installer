@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "95f90b465216cd88580ddaad15bd485f06e683be",
-  "source_parent": "715bfaaadc442e1a3659b57c1bbfb12c57ca199f",
-  "predecessor_input_sha256": "6ce34f98712a9948538969cc5eedf317202e882b90fea8afe76fb3b26785fa58",
+  "candidate": "caf16f624736a1d769bdc231915a824d901ea145",
+  "source_parent": "57c0db88a9093f8fda3767237407d8c01f59ac27",
+  "predecessor_input_sha256": "a00a55dcc95544f8d0cdbdc9192905ffb30454f257dd7b1633ca49aa091bebf8",
   "firmware_export": {
     "commit": "a779ead1861e9e2dc97e94ec6117951d2333924b",
     "tree": "e55646fe1cbacf51de7eef2c027c0b219b2634a2"
   },
   "installer_source": {
-    "base_commit": "e067630df77f3e801b96cfde72f4a8c538dc39e5",
+    "base_commit": "7b7dd08baebbd7cf14f51a3b288b12a6615eded6",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture necessity cleanup; no build, FR/FT, installed, model/client or hardware acceptance",
@@ -30,8 +30,8 @@
       "sha256": "a869157ed4ecf1d6285fe25fdb8f0e391917c8dde469050a30d6d0f06bb33138"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 56183,
-      "sha256": "cde069b9deaa70740a129f36d5a499f70551d5396b30f02d14591b3e6c08965d"
+      "bytes": 58364,
+      "sha256": "35e29701695545193039fedb943d2438e690c1e6ada1e5f9e78e930d0d8779ae"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,

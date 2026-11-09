@@ -892,28 +892,6 @@ jobs:
         run: |
           uv sync --project "Firmware MCP New" --locked --group dev
           uv run --no-sync --project "Firmware MCP New" python -c "import pytest, pyocd_debug_mcp; print('pytest ready:', pytest.__version__)"
-      - name: Check changed Firmware fixtures
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
-        run: |
-          cd "Firmware MCP New"
-          files=(); while IFS= read -r path; do files+=("${path%$'\r'}"); done < ../bc01-ci/fixture-cleanup-files.txt
-          mkdir -p ../release/build/fixture-cleanup
-          uv run --no-sync python -m ruff check --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-lint.patch || true
-          uv run --no-sync python -m ruff format --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-format.patch || true
-          uv run --no-sync python -m ruff check "${files[@]}"
-          uv run --no-sync python -m ruff format --check "${files[@]}"
-      - name: Check small failure capture types
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
-        working-directory: Firmware MCP New
-        run: uv run --no-sync python -m pyright tests/conftest.py tests/fixture_directory.py
-      - name: Check changed Installer test helpers
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
-        run: |
-          files=(release/scripts/final_acceptance_checks.py)
-          uv run --no-sync --project "Firmware MCP New" python -m ruff check --diff "${files[@]}" > release/build/fixture-cleanup/installer-lint.patch || true
-          uv run --no-sync --project "Firmware MCP New" python -m ruff format --diff "${files[@]}" > release/build/fixture-cleanup/installer-format.patch || true
-          uv run --no-sync --project "Firmware MCP New" python -m ruff check "${files[@]}"
-          uv run --no-sync --project "Firmware MCP New" python -m ruff format --check "${files[@]}"
       - name: Prepare pinned analysis programs for source fixtures only
         id: analysis-fixtures
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
@@ -988,7 +966,7 @@ jobs:
           retention-days: 30
 
   workflow-quality:
-    name: Workflow lint
+    name: ${{ inputs.build_kind == 'cleanup' && 'Fixture quality' || 'Workflow lint' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1005,11 +983,76 @@ jobs:
           echo "$code" > workflow-evidence/actionlint.exit.txt
           cat workflow-evidence/actionlint.stdout.log workflow-evidence/actionlint.stderr.log
           exit "$code"
+      - name: Bind fixture quality inputs
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        id: fixture-source
+        shell: bash
+        run: |
+          if [ -z "$FR13_INPUT_SHA256" ]; then
+            echo "FR13_INPUT_SHA256=$(git show HEAD:bc01-ci/CI-INPUTS.json | sha256sum | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+          fi
+          echo "firmware=$(python3 -c 'import json; print(json.load(open("release/source-lock.json"))["firmware_mcp"]["commit"])')" >> "$GITHUB_OUTPUT"
+      - name: Check out locked fixture source for cheap checks
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        id: fixture-checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: JasonPeng2019/BYO-Firmware-MCP
+          ref: ${{ steps.fixture-source.outputs.firmware }}
+          path: Firmware MCP New
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Install fixture check Python
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12.10'
+      - name: Install fixture check uv
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: '0.11.20'
+          enable-cache: false
+      - name: Bind exact bytes before fixture quality
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        run: python -B bc01-ci/verify_frozen_sources.py --phase before-fixture-quality
+      - name: Install locked fixture check dependencies
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        id: fixture-dependencies
+        run: uv sync --project "Firmware MCP New" --locked --group dev
+      - name: Check changed Firmware fixtures
+        if: ${{ !cancelled() && steps.fixture-dependencies.outcome == 'success' }}
+        run: |
+          cd "Firmware MCP New"
+          files=(); while IFS= read -r path; do files+=("${path%$'\r'}"); done < ../bc01-ci/fixture-cleanup-files.txt
+          mkdir -p ../release/build/fixture-cleanup
+          uv run --no-sync python -m ruff check --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-lint.patch || true
+          uv run --no-sync python -m ruff format --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-format.patch || true
+          uv run --no-sync python -m ruff check "${files[@]}"
+          uv run --no-sync python -m ruff format --check "${files[@]}"
+      - name: Check small failure capture types
+        if: ${{ !cancelled() && steps.fixture-dependencies.outcome == 'success' }}
+        working-directory: Firmware MCP New
+        run: uv run --no-sync python -m pyright tests/conftest.py tests/fixture_directory.py
+      - name: Check changed Installer test helpers
+        if: ${{ !cancelled() && steps.fixture-dependencies.outcome == 'success' }}
+        run: |
+          files=(release/scripts/final_acceptance_checks.py)
+          uv run --no-sync --project "Firmware MCP New" python -m ruff check --diff "${files[@]}" > release/build/fixture-cleanup/installer-lint.patch || true
+          uv run --no-sync --project "Firmware MCP New" python -m ruff format --diff "${files[@]}" > release/build/fixture-cleanup/installer-format.patch || true
+          uv run --no-sync --project "Firmware MCP New" python -m ruff check "${files[@]}"
+          uv run --no-sync --project "Firmware MCP New" python -m ruff format --check "${files[@]}"
+      - name: Bind exact bytes after fixture quality
+        if: ${{ always() && inputs.build_kind == 'cleanup' && steps.fixture-checkout.outcome == 'success' }}
+        run: python -B bc01-ci/verify_frozen_sources.py --phase after-fixture-quality
       - name: Retain workflow quality
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: workflow-quality-${{ github.run_id }}-${{ github.run_attempt }}
-          path: workflow-evidence/
+          path: |
+            workflow-evidence/
+            release/build/fixture-cleanup/
+            release/build/final-acceptance/exact-source-*-fixture-quality.json
           if-no-files-found: error
           retention-days: 90
