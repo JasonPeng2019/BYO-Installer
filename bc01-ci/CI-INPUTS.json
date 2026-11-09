@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "7658a4e854a95d805071ad5f0f62658f43a2a433",
-  "source_parent": "7ca934871179ccb8ec6cf0bf40399f427240e53f",
-  "predecessor_input_sha256": "fb7c7390e45638c2695ca655d3f9be5c60f4fe3e337ea7b61f53aa4e8b6973f0",
+  "candidate": "1fc1b507c2e0a26360380a55f4a14fc95459c465",
+  "source_parent": "8136132f8c75cd9d53fbc3628a6ec03d4153098d",
+  "predecessor_input_sha256": "c357d0c893c6154b4aa1fbee7fa0726e82c20925f54399d59ecd9ee8af01acc1",
   "firmware_export": {
-    "commit": "d0ed775669b8340cbe09a9cfa37f38596d34bc45",
-    "tree": "587d6751018ec5e739c679ea2ae5fb6bc9644293"
+    "commit": "4c9a07cbceae8d48833895216970b0bbec1e4e17",
+    "tree": "38aff646d81d5e6772d646a4e27cbbca27be8902"
   },
   "installer_source": {
-    "base_commit": "9523298ce5328bc4f03867c6124d899c56ab5e30",
+    "base_commit": "4d9ccd7aa817c8bc6f2a354518354442dd941a44",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture necessity cleanup; no build, FR/FT, installed, model/client or hardware acceptance",
@@ -98,8 +98,8 @@
       "sha256": "613220a9ee63daee9c10620da36ea12a77c86c81f198c878e41dad2e4ad76cdf"
     },
     "Firmware MCP New/.github/workflows/code-analysis-portability.yml": {
-      "bytes": 8595,
-      "sha256": "71cce04725ff5d7e363af0b37478ac127a9fcebffde98f3d5317ad3052a99d20"
+      "bytes": 8576,
+      "sha256": "ee1d16152b037864113f49914e8706d6eb7f3de3094d01e2ff076227d97f9a25"
     },
     "Firmware MCP New/.gitignore": {
       "bytes": 468,
@@ -2715,7 +2715,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "150966e2c991282b3637f5283287c740e76739128122bb21a904e91e0ad06381"
+      "sha256": "bc63098aee2f46d11999bd3d64c99fdd0e00a92bf61cd6d9f913c591f89e43f1"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
