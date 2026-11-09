@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "3b6ac1cc5823b126ac1b7a9ed2e29f718b28dda0",
-  "source_parent": "155c67b8f7708e5af0fc6295db75c606858b1408",
-  "predecessor_input_sha256": "1e20d0833e199de0e235f13d9e2349541e0b4a69f62a51799bc7432afae89922",
+  "candidate": "8155ea8971ef37fecee75eb2c89b7a270ae0dd49",
+  "source_parent": "56001c1253b06903e4c133ed7a239b8cac34c3a7",
+  "predecessor_input_sha256": "a845e5748ea32b420fd568bdc3bc518cd949d18bdfd2a61c64b5465c4e5d02a5",
   "firmware_export": {
-    "commit": "368307631db73c35bc866b1ab833efb463cf4b0f",
-    "tree": "a24b1ef648902cb57b7f9a183f6776f753560b7f"
+    "commit": "0b14a6976bf697c2e393859a81aa4479c9666617",
+    "tree": "67b028be283f2d9f113f1f1f174cdad135748438"
   },
   "installer_source": {
-    "base_commit": "da5cc61b53cce173a63675b7fdc8bd9acabb1822",
+    "base_commit": "93a93dee25c85c695feb36fabe124ee51c30703b",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture necessity cleanup; no build, FR/FT, installed, model/client or hardware acceptance",
@@ -30,8 +30,8 @@
       "sha256": "a869157ed4ecf1d6285fe25fdb8f0e391917c8dde469050a30d6d0f06bb33138"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 56907,
-      "sha256": "40466e4e101fdd0c7b6cd1127e147af27099cf5e2fd13aaa8b75759001a4beee"
+      "bytes": 55891,
+      "sha256": "0827cbeaaffe18478907dbdda77fc8de2a1c75d4ae56f2ad23d01f592a3bd1fd"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -98,8 +98,8 @@
       "sha256": "613220a9ee63daee9c10620da36ea12a77c86c81f198c878e41dad2e4ad76cdf"
     },
     "Firmware MCP New/.github/workflows/code-analysis-portability.yml": {
-      "bytes": 8436,
-      "sha256": "85bb907ddd412a6f85bab539480d4088772c4be70fc13dec75faade5f61f4812"
+      "bytes": 8595,
+      "sha256": "71cce04725ff5d7e363af0b37478ac127a9fcebffde98f3d5317ad3052a99d20"
     },
     "Firmware MCP New/.gitignore": {
       "bytes": 468,
@@ -1298,8 +1298,8 @@
       "sha256": "717aa9d419ff7580d2cdc5fbcca38e0a70a839b8b20df28db5fba2a3cc745fcc"
     },
     "Firmware MCP New/tests/README.md": {
-      "bytes": 12579,
-      "sha256": "02ede82ede185d54532b57fc0efac3ab25489a170ec4ad5874c8663f7910e028"
+      "bytes": 12582,
+      "sha256": "74036c05b8f6ffdd60f0f652d262b37763e586a593f824a5605d7692449ace3c"
     },
     "Firmware MCP New/tests/arm_corpus.py": {
       "bytes": 3702,
@@ -1382,24 +1382,24 @@
       "sha256": "908127a122f65ac86cd2d5238901b0899d83b96566b98454d79c29c774fe52a9"
     },
     "Firmware MCP New/tests/code_analysis_managed_support.py": {
-      "bytes": 35907,
-      "sha256": "5aa9b4c9681126bbb6aa3dfb8b0e23288357defc2a43a473ea01e16cb3eeb2ba"
+      "bytes": 35905,
+      "sha256": "0d5a7abfbe5e83c1ecb94ff46d07b880265642c4c53741810b651c282415abfc"
     },
     "Firmware MCP New/tests/code_analysis_peer_support.py": {
       "bytes": 4279,
       "sha256": "18b9e0d06b5b6f48d8540520bd347b3355f4a7f62d0930d215422ad4218fa7fe"
     },
     "Firmware MCP New/tests/code_analysis_support.py": {
-      "bytes": 45024,
-      "sha256": "57d8a3fcae054f84974d5d3bd122822b679c7ec3378e1526d22a9efa4584650f"
+      "bytes": 45016,
+      "sha256": "9e9ead690fae17ff9be6da1d69a2fa66db1855fae0bd0fa2c76166283c7c87e1"
     },
     "Firmware MCP New/tests/codex_harness.py": {
       "bytes": 17502,
       "sha256": "dde32cab2787a2798d5f6e76707ff7cc3ee077992702ee75159db8f8898787ab"
     },
     "Firmware MCP New/tests/conftest.py": {
-      "bytes": 3530,
-      "sha256": "f9553a0728e1efde887c012fc24055816acb83dd0aeed85f7986ee19d3c4ca8a"
+      "bytes": 3531,
+      "sha256": "9dc914c0f05109ff7dd255467c8e789d6e4fcf4f7a53a273c9483c470044f36a"
     },
     "Firmware MCP New/tests/discovery_hook_fixtures.py": {
       "bytes": 4408,
@@ -1462,8 +1462,8 @@
       "sha256": "5b97b4f69b3dba552647622f6893c51f7aee592018a0dfa907a43868dfcbf991"
     },
     "Firmware MCP New/tests/lite_flash_support.py": {
-      "bytes": 14721,
-      "sha256": "7e894de5bd859df83ae57f476800fb5ac63f903564ea938daeb5014a27a6c453"
+      "bytes": 14855,
+      "sha256": "40a7e61fa30443e597f169f12f4dbc4eb4c69451f6816ac443de9b8b0b39f032"
     },
     "Firmware MCP New/tests/monitor_support.py": {
       "bytes": 8599,
@@ -1514,8 +1514,8 @@
       "sha256": "73c5441cef43ea7f4dcce1e70c13ed5a7ac722e7500542b302ada5efe6ab0784"
     },
     "Firmware MCP New/tests/test_change_loop.py": {
-      "bytes": 33775,
-      "sha256": "96decb503428d422a874ce0fb5a776dbcbaafcce51e4a79c9d13859357aa478e"
+      "bytes": 33632,
+      "sha256": "cb20474a0d950f2b0be7e3a6e997b1523ff584f0b5f1c5b8c5966780d9b4b4b0"
     },
     "Firmware MCP New/tests/test_clangd_adapter_unit.py": {
       "bytes": 15459,
@@ -1558,16 +1558,16 @@
       "sha256": "34746a195483eaedf89564f2d27f57bef392746e2cdd576137fa17e459266967"
     },
     "Firmware MCP New/tests/test_code_analysis_posix_ownership.py": {
-      "bytes": 109696,
-      "sha256": "dd25710683ea1ec784829139b52a4494161e214b51e4ff2417ec1f1c50721d3d"
+      "bytes": 109692,
+      "sha256": "8ef837727221026c471df1dc0f3247d527ab5d42d2adbcfc9543c2917f68d10f"
     },
     "Firmware MCP New/tests/test_code_analysis_protocol_contract.py": {
       "bytes": 32257,
       "sha256": "9d0f1e595278ac9981b024bc8fbd1c35c671314a1ae40acb80cdeb1c5561e714"
     },
     "Firmware MCP New/tests/test_code_analysis_real_clangd.py": {
-      "bytes": 27953,
-      "sha256": "5e994de01d34ad88922e1cd96111591cacb56a1030e403be89ccb1fb94371560"
+      "bytes": 27977,
+      "sha256": "d4f1149c3724ae600b1e5364ab733464980f8c55c0af84fae06b79ea4138be55"
     },
     "Firmware MCP New/tests/test_code_analysis_results.py": {
       "bytes": 34506,
@@ -1578,8 +1578,8 @@
       "sha256": "39ae791400500f13c445233f5f860d951e7ba6027f3acad1f75970690b87ab3d"
     },
     "Firmware MCP New/tests/test_code_analysis_service_unit.py": {
-      "bytes": 101304,
-      "sha256": "8c886851993364ab4611c3d5288972de6883de870128be43ea6d7e998d3ebaf6"
+      "bytes": 101572,
+      "sha256": "de57b29f5a8d142ef13a39dbd851d56c7e1b13cbee9c3b7d93cf6813fd3b22bf"
     },
     "Firmware MCP New/tests/test_code_analysis_windows_acceptance.py": {
       "bytes": 55131,
@@ -1630,8 +1630,8 @@
       "sha256": "db0a88e0df73eda9290d2f2b7bc49c050bb72c31baef3ef49a9aab2c577a2691"
     },
     "Firmware MCP New/tests/test_discovery_hook_safety.py": {
-      "bytes": 21963,
-      "sha256": "6c2ee68d56565127eb37688b7667e65d27de59d504623e1dbb3b0a99172fbdeb"
+      "bytes": 21961,
+      "sha256": "f7fc313abcfc86bd4a4e93b1de7c5dd33eafd2dd0f7db042e7f780d64c8fb275"
     },
     "Firmware MCP New/tests/test_discovery_hook_workflow.py": {
       "bytes": 27097,
@@ -1642,8 +1642,8 @@
       "sha256": "b94671c773ca60c66906c149c3888450590bdafa60d9eac22ef5b2ab9b9751df"
     },
     "Firmware MCP New/tests/test_discovery_tool_contract.py": {
-      "bytes": 22378,
-      "sha256": "621099b32568c2f5698821db225b7ed309ee216857559d80ee9a3cb5af44b64f"
+      "bytes": 22376,
+      "sha256": "50b867a877a02eeb02115c43896f0aea3e0c776ff6dd8220b02e93bd7272bc38"
     },
     "Firmware MCP New/tests/test_duplicate_elf_symbols.py": {
       "bytes": 40078,
@@ -1678,16 +1678,16 @@
       "sha256": "49979b321f4669af184809435281e84d7ce6f8b3c4a12e90203acf9a4de7f04f"
     },
     "Firmware MCP New/tests/test_hook_gating_and_budget.py": {
-      "bytes": 30707,
-      "sha256": "8f52468f9170d1fd214af74de3f8fecc320b846be7f3ac53de3a6db5cf125c69"
+      "bytes": 30710,
+      "sha256": "917711abbf35d23186d75d612b59ea596d9e64a4caca64789944747b544c6d0c"
     },
     "Firmware MCP New/tests/test_inventory_snapshot_concurrency.py": {
-      "bytes": 10989,
-      "sha256": "a3ad5ea77a62fa57e48a08b7fed95e17f183ab0693dfd165c3e21c6ba818c70e"
+      "bytes": 10992,
+      "sha256": "c8d42ed6ca27b619cd94d62df002366c2f264d5d2bb555cc191447193dd27017"
     },
     "Firmware MCP New/tests/test_lite_application_flash.py": {
-      "bytes": 10880,
-      "sha256": "fa4d077bfb470a61e3c81db4fa8247daffcc79a2541e82b19a8706d025653f43"
+      "bytes": 10876,
+      "sha256": "364ab8ab90f286a67712bbb8376c4c660785c300124d038e2ee178965a68ad90"
     },
     "Firmware MCP New/tests/test_lite_protective_overlaps.py": {
       "bytes": 18420,
@@ -1718,12 +1718,12 @@
       "sha256": "bc3ae123575a5daef5e7cede28b0b27478248387abfc07a36434f59aae2d17b6"
     },
     "Firmware MCP New/tests/test_monitor_delivery.py": {
-      "bytes": 34717,
-      "sha256": "604fd8fc7fd230862dfc0fa3510d4373a62e16e03d7adde9457ef054a72c3f54"
+      "bytes": 34709,
+      "sha256": "7644b01e884a107498bb62a5e93f9a896e91e0031ff9c00311a706b653492a77"
     },
     "Firmware MCP New/tests/test_monitor_ledger.py": {
-      "bytes": 15922,
-      "sha256": "b3bf61063a7f1af3fc5aa7bdf3491f64ae4bc0c415dd4335260ad802dc142112"
+      "bytes": 15938,
+      "sha256": "0492f59c58ca0010127ba0531f0ef40e6a70d028a9e24b0edd64236df5e66690"
     },
     "Firmware MCP New/tests/test_monitor_narrative_tools.py": {
       "bytes": 11196,
@@ -1758,8 +1758,8 @@
       "sha256": "e4ceffbb1dadda4e0826c7c44efa91bf739595a7fd2aeeed1704c9a6fe3c1871"
     },
     "Firmware MCP New/tests/test_phase2_uncovered.py": {
-      "bytes": 26007,
-      "sha256": "56b5af42246fcc438d5ce0a85e2f29a6b2fa0241df583578a7f6855396244053"
+      "bytes": 26003,
+      "sha256": "157be11dc179ad03efadebfd355671b80fba3d9fbf2b49f90e553dbb373ec101"
     },
     "Firmware MCP New/tests/test_preflight_probe_guidance.py": {
       "bytes": 750,
@@ -1803,15 +1803,15 @@
     },
     "Firmware MCP New/tests/test_serial_resolver_identity.py": {
       "bytes": 30024,
-      "sha256": "5e88bc04efab5800a141d94635f4330522e657f08e7b37813fe3d83e59414c7d"
+      "sha256": "e9f5d26dda75bdfcc317b12b65aa7e811c80609b943906cb92df44d1eb36abb0"
     },
     "Firmware MCP New/tests/test_server_assignment_connect.py": {
       "bytes": 38473,
       "sha256": "9a055f415df185cfc205c7e92a8586f335298230a2988280e580f72a0f24f358"
     },
     "Firmware MCP New/tests/test_setup_allowance.py": {
-      "bytes": 14331,
-      "sha256": "fc49b4f714eeaee4f75ae62de4a703c418a48ef827088288e5d6d31aca603571"
+      "bytes": 14192,
+      "sha256": "f6f404f04c3c3c6af2f4ce80b5e09037e7c2b239879bde58f8df6a73c517a663"
     },
     "Firmware MCP New/tests/test_setup_overview_no_probe.py": {
       "bytes": 27983,
@@ -1866,8 +1866,8 @@
       "sha256": "458fad82fb1812810a37894c7f6b021a9f180c3039cad9229447c95114d1a953"
     },
     "Firmware MCP New/tests/test_tiered_acceptance_workspace.py": {
-      "bytes": 18746,
-      "sha256": "590a40ac38827003279708edff0e190d29fb25ee4b7655314935813e83992d93"
+      "bytes": 18744,
+      "sha256": "0a2a85e82039304350e7213d3869178029ce51cbb44f7417bd6e23bf0b0f7c2b"
     },
     "Firmware MCP New/tests/test_tiered_core_lite.py": {
       "bytes": 6530,
@@ -1894,8 +1894,8 @@
       "sha256": "f8ca434205d0187187c1accf6283a1cfb16cad175479c73a6c257a5979490149"
     },
     "Firmware MCP New/tests/test_trusted_artifact_pack_boundaries.py": {
-      "bytes": 18286,
-      "sha256": "65d52cdc96593bb912d1c51222d40d9cccf289d0733b5bd29f8c5495a1f44461"
+      "bytes": 17753,
+      "sha256": "afd9d6bfa93174492e1c2b8d94f8b40b3eccfd3f8c2288057fc0c7eae17ab228"
     },
     "Firmware MCP New/tests/test_trusted_caller_limits.py": {
       "bytes": 11861,
@@ -1906,24 +1906,24 @@
       "sha256": "a09c5fd8e8b9f2218a334366e6d0292595354f95eee6cd8481fd2e5fb3b97167"
     },
     "Firmware MCP New/tests/test_trusted_input_identity.py": {
-      "bytes": 6061,
-      "sha256": "97227b87c5100fed08019bf1f1d8d45c121db0275b7f87a6172a3b9765ffd397"
+      "bytes": 5780,
+      "sha256": "938b047df78f4c82935d0e8e64ac1e074041bc2c92f9d31721402bd5088292f5"
     },
     "Firmware MCP New/tests/test_trusted_pack_allocation.py": {
-      "bytes": 29297,
-      "sha256": "8c477a9fbe4c4830d8177c735070e2ff48bd63c76f3f7c8b6bd48bc1e4e8df67"
+      "bytes": 28831,
+      "sha256": "36c41bc8ed6d21e9c1691f0ba98bb9cf7f6d820cb6e210b4ae274c37ff9822da"
     },
     "Firmware MCP New/tests/test_trusted_symbol_serial.py": {
-      "bytes": 11521,
-      "sha256": "b8b5004ed3af3aca5949f44b0fdbc10b2ff36cfac7b6bbbdcf51b7b35f96c9dd"
+      "bytes": 9373,
+      "sha256": "48305911293dab6300609fe85bfc8911266390b844bf98fe959b044237e5e684"
     },
     "Firmware MCP New/tests/test_uart_capture_evidence.py": {
       "bytes": 16260,
       "sha256": "93e53edc38c1abfee0ca32cdf08ac849b378cfa652df873b8a563aba945b5d32"
     },
     "Firmware MCP New/tests/test_unified_inventory.py": {
-      "bytes": 30146,
-      "sha256": "4fcd53ead68fc44cc459a8715a3f724241565de92557c01f5caf4d754ce2c37b"
+      "bytes": 30144,
+      "sha256": "d534e9e7c2e9aa80b9358477f4d8c45701332a5fc7a1a0f72e577894ed314112"
     },
     "Firmware MCP New/tests/test_validation_honesty.py": {
       "bytes": 43165,
@@ -1954,16 +1954,16 @@
       "sha256": "3940f8594c55be6d0a64e12f7d84689f645c047da3b1bedc1c003c6dd342cf23"
     },
     "Firmware MCP New/tests/test_vi06_uart_ownership.py": {
-      "bytes": 16024,
-      "sha256": "0acd1df9244c0f4bda75d2379654dbc258a8afc5beadea0dba64012d315b4ca0"
+      "bytes": 16018,
+      "sha256": "722f0e7662760a0ed0f6a5f856067cfe72d10aa3b71f6f7ba14c6274b6515e11"
     },
     "Firmware MCP New/tests/test_vi07_uart_provenance.py": {
-      "bytes": 13358,
-      "sha256": "03d09ed6bf2ce64324a950d26fd2541eec72f57ba35cdd36c919292f2e4843b1"
+      "bytes": 13352,
+      "sha256": "7f13c2d7447ca1aecb5ab241f704e38795db82f11efc7ec70983a76ed25427cf"
     },
     "Firmware MCP New/tests/test_vi08_attachment_cache_refusal.py": {
-      "bytes": 12733,
-      "sha256": "c5c26522863a8b618740adee9dcd1d9a6f03b1d1e45265f128740540825c0436"
+      "bytes": 12731,
+      "sha256": "12145d1bd6b97d047816e2e299746db83db7f47fb72f3ec043a96eaf8ce47ddf"
     },
     "Firmware MCP New/tests/test_vi09_selector_chain.py": {
       "bytes": 29246,
@@ -1986,8 +1986,8 @@
       "sha256": "2a84820cb67ae3aa2e2d7e3fcbcb7b0c4a1982290eb3619a115c4df775d753f9"
     },
     "Firmware MCP New/tests/uart_fixture_support.py": {
-      "bytes": 5220,
-      "sha256": "28493560e15fb7c3f81e43678e2151201360a45adc6cb938eb12c4628fac5206"
+      "bytes": 5209,
+      "sha256": "46adcbc95fa591b8178d49cb17970ad66fe9bc0e1153eafc724b6c115352561c"
     },
     "Firmware MCP New/tests/vi09_provider_fixture.py": {
       "bytes": 4989,
@@ -2020,10 +2020,6 @@
     "bc01-ci/build_capture.py": {
       "bytes": 2946,
       "sha256": "156b960275de44d888ffd8375776e4aadd5fd5d3639a8980342d1f35bffdf7ec"
-    },
-    "bc01-ci/fixture-cleanup-baseline.txt": {
-      "bytes": 2948,
-      "sha256": "003ac00db19f7611d165679805614a58c72ea92b2bdd657b3eef9fa3a9b2f70e"
     },
     "bc01-ci/fixture-cleanup-files.txt": {
       "bytes": 2419,
@@ -2719,7 +2715,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "b268e7d89d75391d92e7c535316be71e367365dc721e9d5537a7e31469fabb3a"
+      "sha256": "d4ce129b3d366c619b9ee225e1c6e564cb0afdfd9bb38a36f32c85604119b509"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
