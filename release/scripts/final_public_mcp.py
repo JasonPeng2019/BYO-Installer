@@ -460,6 +460,9 @@ def main():
     records, commands, wire = [], [], []
     server = None
     request_id = 10
+    capsule_before_startup = None
+    project_after_startup = None
+    monitor_store = None
 
     def save():
         (evidence / "ledger.json").write_text(
@@ -618,6 +621,8 @@ def main():
             "VI15.initialize-from-runtime-cwd",
             "VI15.real-tools-list",
             "FR16.actual-monitor-store-health",
+            "VI15.compiled-monitor-project-passivity",
+            "VI15.compiled-monitor-record-privacy",
             "VI15.named-overview-controlled-no-probe",
             "VI15.public-relative-input-and-output",
             "VI15.immutable-runtime-destination-refusal",
@@ -742,7 +747,8 @@ def main():
     )
 
     def initialize():
-        nonlocal server
+        nonlocal server, capsule_before_startup, project_after_startup
+        capsule_before_startup = snapshot(project)
         server = start_initialized_mcp(
             byo,
             project,
@@ -752,6 +758,7 @@ def main():
             diagnostics_path=evidence / "mcp-stderr.log",
         )
         wire.append({"initialize_response_raw": server.initialization_raw})
+        project_after_startup = snapshot(project)
         return {"pid": server.process.pid, "cwd": str(runtime), "project": str(project)}
 
     protocol = case("VI15.initialize-from-runtime-cwd", initialize, initialized)
@@ -781,6 +788,71 @@ def main():
         return {"public_health": reply, "qualified_store_candidate": str(root)}
 
     case("FR16.actual-monitor-store-health", monitor_health, protocol)
+
+    def monitor_project_passivity():
+        nonlocal monitor_store
+        # A compiled project needs its generated capsule. The only-README live
+        # source-fixture oracle cannot describe this baseline. Permission reset
+        # is a separate startup component, not monitor output.
+        assert capsule_before_startup and project_after_startup
+        permission_root = ".agent-workspace/runtime/manual-permissions/"
+        permission_paths = {
+            permission_root + name
+            for name in (
+                ".protocol.lock",
+                "epoch.json",
+                "downgrade.json",
+                "mass-erase.json",
+            )
+        }
+        startup_changes = {
+            path
+            for path in capsule_before_startup.keys() | project_after_startup.keys()
+            if capsule_before_startup.get(path) != project_after_startup.get(path)
+        }
+        assert not capsule_before_startup.keys() - project_after_startup.keys()
+        assert startup_changes <= permission_paths, startup_changes
+        assert permission_paths <= project_after_startup.keys()
+        permission_state = {
+            name: json.loads(
+                (project / permission_root / name).read_text(encoding="utf-8")
+            )
+            for name in ("epoch.json", "downgrade.json", "mass-erase.json")
+        }
+        run_id = permission_state["epoch.json"]["server_run_id"]
+        assert run_id
+        for name in ("downgrade.json", "mass-erase.json"):
+            assert permission_state[name]["state"] == "locked", permission_state
+            assert permission_state[name]["server_run_id"] == run_id, permission_state
+        handshake = tool("initialization_handshake", {"workspace_path": str(project)})
+        health = tool("server_health_check", {})
+        selector = observations.qualification["observed_selectors"][-1]
+        state = health["recording"]["store_state"]
+        assert state == "app_data", health
+        store = observations.owned_path(selector["app_data"])
+        assert not store.is_relative_to(project)
+        monitor_store = store
+        after = snapshot(project)
+        assert after == project_after_startup, {
+            "before_monitor": project_after_startup,
+            "after_monitor": after,
+        }
+        return {
+            "capsule_before_startup": capsule_before_startup,
+            "project_after_startup": project_after_startup,
+            "permission_startup_changes": sorted(startup_changes),
+            "permission_startup_state": permission_state,
+            "after_monitor": after,
+            "handshake": handshake,
+            "health": health,
+            "monitor_store": str(store),
+            "scope": "Compiled public protocol and real records; native model/client passivity remains separate",
+            "original_only_README_predicate": "Retained false historical predicate; not reclassified as PASS",
+        }
+
+    monitor_passive = case(
+        "VI15.compiled-monitor-project-passivity", monitor_project_passivity, protocol
+    )
 
     def overview():
         reply = tool("setup_overview", {"board_names": ["Hosted final acceptance"]})
@@ -892,6 +964,7 @@ def main():
         )
 
     def eof():
+        before_eof = snapshot(project)
         stop_mcp(server)
         drained = queue.Queue()
 
@@ -908,9 +981,19 @@ def main():
         save()
         assert server.process.poll() == 0
         assert not list((home / "state/leases").glob("*.json"))
-        return {"exit": server.process.returncode, "leases": []}
+        after_eof = snapshot(project)
+        assert after_eof == before_eof, {
+            "before_EOF": before_eof,
+            "after_EOF": after_eof,
+        }
+        return {
+            "exit": server.process.returncode,
+            "leases": [],
+            "project_before_EOF": before_eof,
+            "project_after_EOF": after_eof,
+        }
 
-    case("VI15.protocol-EOF-and-lease-cleanup", eof, protocol)
+    clean_eof = case("VI15.protocol-EOF-and-lease-cleanup", eof, protocol)
     if server is not None and server.process.poll() is None:
         # Exact owned Popen only; forced cleanup is recorded separately, never EOF PASS.
         server.process.kill()
@@ -923,6 +1006,30 @@ def main():
                 "exit": server.process.returncode,
             }
         )
+
+    def monitor_record_privacy():
+        # Read once after actual EOF, when the compiled process and delivery
+        # workers are terminal; a moving spool file is not a privacy defect.
+        assert monitor_store is not None
+        retained = {
+            path.relative_to(monitor_store).as_posix(): path.read_text(encoding="utf-8")
+            for path in sorted(monitor_store.rglob("*"))
+            if path.is_file() and path.suffix in (".json", ".jsonl", ".txt")
+        }
+        assert any(text.strip() for text in retained.values()), retained
+        for text in retained.values():
+            assert str(project) not in text and project.as_posix() not in text
+            assert project.name not in text
+        return {
+            "monitor_store": str(monitor_store),
+            "retained_monitor_records": retained,
+        }
+
+    case(
+        "VI15.compiled-monitor-record-privacy",
+        monitor_record_privacy,
+        clean_eof and monitor_passive,
+    )
 
     for index in range(5):
         for label, payload, expected in (

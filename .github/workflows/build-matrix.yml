@@ -255,6 +255,44 @@ jobs:
           uv run --no-sync --project "Firmware MCP New" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
           uv run --no-sync --project "Firmware MCP New" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
+      - name: Retained protection, ownership, recovery and privacy regressions
+        id: safety-regressions
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
+        working-directory: Firmware MCP New
+        env:
+          BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/AgentWorkspace
+          BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/safety-inputs
+          BYO_FINAL_CASE_EVIDENCE: ${{ github.workspace }}/release/build/final-acceptance/safety-public-cases
+          VI11_RECORD_EVIDENCE: ${{ github.workspace }}/release/build/final-acceptance/safety-full-records
+        run: >-
+          uv run --no-sync python -m pytest -o addopts= -m 'not live' -q
+          tests/test_lite_protective_overlaps.py
+          tests/test_lite_application_flash.py
+          tests/test_vi02_operation_resource_ownership.py
+          tests/test_vi02a_async_queue_deadline.py
+          tests/test_final_supported_batch_cancellation.py
+          tests/test_vi03_fresh_recovery_grant.py
+          tests/test_vi03_prebackend_diagnostics.py
+          tests/test_vi03_reserved_diagnostics.py
+          tests/test_vi03_unlock_diagnostics.py
+          tests/test_serial_resolver_identity.py
+          tests/test_vi06_uart_ownership.py
+          tests/test_vi07_uart_provenance.py
+          tests/test_vi08_attachment_cache_refusal.py
+          tests/test_final_attachment_replacement.py
+          tests/test_inventory_snapshot_concurrency.py
+          tests/test_vi09_selector_chain.py
+          tests/test_duplicate_elf_symbols.py
+          tests/test_final_registered_symbol_events.py
+          tests/test_monitor_trail_identity.py
+          tests/test_monitor_counters_trail.py
+          tests/test_monitor_thrash_block.py::BlockDiagnostics
+          tests/test_final_posix_startup.py
+          tests/test_design_flaws_2_b06.py::ConnectSafetyTests
+          tests/test_tiered_acceptance_paths.py
+          tests/test_final_regenerated_map.py
+          --junitxml=../release/build/final-acceptance/safety-regressions.xml
+
       - name: Record native stage prerequisites and exact checkout metadata
         if: always()
         shell: bash
@@ -525,6 +563,44 @@ jobs:
         run: |
           uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
           uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
+
+      - name: Retained Linux protection, ownership, recovery and privacy regressions
+        id: safety-regressions
+        if: ${{ !cancelled() && inputs.final_acceptance == true && steps.build-deps.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
+        working-directory: Firmware MCP New
+        env:
+          BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/AgentWorkspace
+          BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/safety-inputs
+          BYO_FINAL_CASE_EVIDENCE: ${{ github.workspace }}/release/build/final-acceptance/safety-public-cases
+          VI11_RECORD_EVIDENCE: ${{ github.workspace }}/release/build/final-acceptance/safety-full-records
+        run: >-
+          uv run --no-sync --python "$BYO_BUILD_PYTHON" python -m pytest -o addopts= -m 'not live' -q
+          tests/test_lite_protective_overlaps.py
+          tests/test_lite_application_flash.py
+          tests/test_vi02_operation_resource_ownership.py
+          tests/test_vi02a_async_queue_deadline.py
+          tests/test_final_supported_batch_cancellation.py
+          tests/test_vi03_fresh_recovery_grant.py
+          tests/test_vi03_prebackend_diagnostics.py
+          tests/test_vi03_reserved_diagnostics.py
+          tests/test_vi03_unlock_diagnostics.py
+          tests/test_serial_resolver_identity.py
+          tests/test_vi06_uart_ownership.py
+          tests/test_vi07_uart_provenance.py
+          tests/test_vi08_attachment_cache_refusal.py
+          tests/test_final_attachment_replacement.py
+          tests/test_inventory_snapshot_concurrency.py
+          tests/test_vi09_selector_chain.py
+          tests/test_duplicate_elf_symbols.py
+          tests/test_final_registered_symbol_events.py
+          tests/test_monitor_trail_identity.py
+          tests/test_monitor_counters_trail.py
+          tests/test_monitor_thrash_block.py::BlockDiagnostics
+          tests/test_final_posix_startup.py
+          tests/test_design_flaws_2_b06.py::ConnectSafetyTests
+          tests/test_tiered_acceptance_paths.py
+          tests/test_final_regenerated_map.py
+          --junitxml=../release/build/final-acceptance/safety-regressions.xml
 
       - name: Record Linux stage prerequisites and exact checkout metadata
         if: always()

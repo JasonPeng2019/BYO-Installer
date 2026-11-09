@@ -1,10 +1,10 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "f3ae615ec0fcbda744fc126bb6b1d5d33e891de9",
+  "candidate": "dc36fd9e5d02d050b5eff2843e063b75f9965cc0",
   "original_FR13_source": "3c0f2a91f391b6fde3514193af6a461a8de3369b",
-  "source_parent": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
-  "build_owner_base": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
-  "predecessor_input_sha256": "882feee4fb94bf31948eacdeadfe7ec7ea4f95af50236b8f96b4e02d896b4fad",
+  "source_parent": "2543a495f67c511d2a4024a41531b4f1a0088472",
+  "build_owner_base": "2543a495f67c511d2a4024a41531b4f1a0088472",
+  "predecessor_input_sha256": "5e4976af787666ef7229c1dd229a91b0953a5d9ba2d89494a245cd0fc6e5819a",
   "original_frozen_inventory_sha256": "1d51edf4d245534b9c1756f2e8fd42ca2ac8c675f473496183bbd3597709110e",
   "declared_methods_inventory_only": {
     "tests.test_swd_process_isolation": [
@@ -379,13 +379,13 @@
   "full_attempt_number": 3,
   "logical_family": "BC06",
   "persistent_canonical_inputs": true,
-  "task_base": "ad39581b14214f2ac5ff045c35ce490ad6ecd9c3",
+  "task_base": "2543a495f67c511d2a4024a41531b4f1a0088472",
   "firmware_export": {
-    "commit": "bb802a54e483b8212e4836f561f46c31e5de17a5",
-    "tree": "c705783bc4456b312d125257decd2b87c159843e"
+    "commit": "c0f049f6ea3518c63dec36f8655b089595f13f51",
+    "tree": "e5f04f3476b37038530e94430cea01cee4511c19"
   },
   "installer_source": {
-    "base_commit": "a8cf3c60ed7381ce47913834c58dbf91f216da59",
+    "base_commit": "44f36d288db59b7c83239a968265ac386df9fbe2",
     "current_commit": "GITHUB_SHA; bound independently by exact checkout and committed index blob"
   },
   "validation_only_overlay": null,
@@ -415,8 +415,8 @@
       "sha256": "b7d372fcf6fba59cd207cfa867cd5a35b450e7dfb1d8bbcc6a398fba696878e0"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 44813,
-      "sha256": "a2dd6f4d9673e2d6fede942d50ded00f650ad612ec66e877b9f753b19a672640"
+      "bytes": 49152,
+      "sha256": "4fd58a42bbebd8e39eca29affcbab7a00fa84bfaf218a044a408bb5744d7df6f"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -1683,8 +1683,8 @@
       "sha256": "717aa9d419ff7580d2cdc5fbcca38e0a70a839b8b20df28db5fba2a3cc745fcc"
     },
     "Firmware MCP New/tests/README.md": {
-      "bytes": 8951,
-      "sha256": "0e9c9ef38fe8af3aad1756190fd6c0bda3a82c50d077f396faab6f9cd1c2d80b"
+      "bytes": 9966,
+      "sha256": "110821b63077791d2e3c85c7f83ff05f76a15e0628817e6652d31773bb1f3668"
     },
     "Firmware MCP New/tests/arm_corpus.py": {
       "bytes": 3702,
@@ -1783,8 +1783,8 @@
       "sha256": "58109e21049e55754ceadf3cd1d8202cc184b3edba07a04c76a64a8089d0843d"
     },
     "Firmware MCP New/tests/codex_harness.py": {
-      "bytes": 17166,
-      "sha256": "2efd4fdaf03cd7786c54f7c0a096e42720de3cea67d28ed4d9485ebd141b6a37"
+      "bytes": 17502,
+      "sha256": "dde32cab2787a2798d5f6e76707ff7cc3ee077992702ee75159db8f8898787ab"
     },
     "Firmware MCP New/tests/conftest.py": {
       "bytes": 2896,
@@ -2057,6 +2057,10 @@
     "Firmware MCP New/tests/test_manual_permission_helper_runtime.py": {
       "bytes": 4847,
       "sha256": "a8188a4a4b005063bdb168fbddd4433f3de4793f87737f2df2b63726a38b5056"
+    },
+    "Firmware MCP New/tests/test_model_pin.py": {
+      "bytes": 1393,
+      "sha256": "43fdebe7db80c1ae0b7797dca87489da1cd6bdd49d1cfcc3fbaf6919effa97da"
     },
     "Firmware MCP New/tests/test_monitor_behaviour.py": {
       "bytes": 31725,
@@ -3015,8 +3019,8 @@
       "sha256": "24f9a91a139ee8f2884a6929e6f87ad63a7785db3bd5a4424e0b85c7318ad045"
     },
     "release/scripts/final_public_mcp.py": {
-      "bytes": 39117,
-      "sha256": "103b2bcf6385e6a88fe59a2d8ed5ba6e49a079ba7a949e2ca9805e3a55261915"
+      "bytes": 43836,
+      "sha256": "3c45ad16e36e9cbd70619185ab933a4377a92b5e986871cdb5c8e331221c8023"
     },
     "release/scripts/fixtures/code-analysis-installed/README.md": {
       "bytes": 11103,
@@ -3136,7 +3140,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "210d2db4077caefa26eeae50237d8fa24b581c0682cc9669a06c2c8964454146"
+      "sha256": "5078fd0e8d51016271e3a6c31aa1ec0ad6da45078e9737d915374fb0476eff0d"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
@@ -3170,5 +3174,32 @@
       "original_frozen_inventory_sha256",
       "declared method inventories"
     ]
+  },
+  "bc16_postbuild_source_repair": {
+    "phase": "SOURCE_ONLY_PREPARATION",
+    "repair_R": "dc36fd9e5d02d050b5eff2843e063b75f9965cc0",
+    "prior_source_M": "9ed2bea56eeec1ff9cbdc940abb1ec3532183d79",
+    "prior_notice_tip": "2543a495f67c511d2a4024a41531b4f1a0088472",
+    "findings": [
+      "EFR-01",
+      "EFR-02",
+      "EFR-03",
+      "EFR-04",
+      "EFR-05",
+      "EFR-06",
+      "EFR-07",
+      "EFR-08"
+    ],
+    "CI_execution": "ACTIONS_PENDING; no local deterministic execution",
+    "independent_gates": "BOTH_SAME_EXACT_CANDIDATE_PREBUILD_PASS_ROOT_ADMISSION_AND_CAPTURED_STOP_REQUIRED_BEFORE_CHANGED_SOURCE_REMOTE_BUILD",
+    "runtime_dependency_version_changes": false,
+    "same_logical_owner_push_budget": {
+      "failed": 2,
+      "pending": 0,
+      "passed": 2,
+      "max_failed": 7,
+      "reset": false
+    },
+    "historical_fields": "Retained as historical provenance; not new execution or current method discovery"
   }
 }
