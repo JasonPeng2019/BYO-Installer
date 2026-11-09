@@ -182,7 +182,7 @@ def commands(group):
                 ],
             ),
         ]
-    if group == "firmware-quality":
+    if group == "firmware-lint":
         return [
             ("firmware-ruff", [sys.executable, "-B", "-m", "ruff", "check", "."]),
             (
@@ -198,41 +198,23 @@ def commands(group):
                     "tests",
                 ],
             ),
-            ("firmware-type", [sys.executable, "-B", "-m", "pyright", "src"]),
         ]
+    if group == "firmware-host-type":
+        return [("firmware-type", [sys.executable, "-B", "-m", "pyright", "src"])]
+    if group == "firmware-quality":
+        return commands("firmware-lint") + commands("firmware-host-type")
     if group == "firmware-contract":
-        return [
-            (
-                "firmware-contract-ruff",
-                [sys.executable, "-B", "-m", "ruff", "check", "."],
-            ),
-            (
-                "firmware-contract-format",
-                [
-                    sys.executable,
-                    "-B",
-                    "-m",
-                    "ruff",
-                    "format",
-                    "--check",
-                    "src",
-                    "tests",
-                ],
-            ),
-            (
-                "firmware-contract-type",
-                [sys.executable, "-B", "-m", "pyright", "src"],
-            ),
+        # Neutral lint/format is owned by the Linux quality job. Retain type
+        # checks on every host and source contracts through the capture hook.
+        return commands("firmware-host-type") + [
             (
                 "firmware-contract-tests",
                 [
-                    sys.executable,
-                    "-B",
-                    "-m",
-                    "unittest",
-                    "-v",
-                    "tests.test_sidecar_runtime",
-                    "tests.test_manual_permission_helper_runtime",
+                    sys.executable, "-B", "-m", "pytest", "-o", "addopts=",
+                    "--strict-markers", "-m", "not live", "-v",
+                    "tests/test_sidecar_runtime.py",
+                    "tests/test_manual_permission_helper_runtime.py",
+                    "--junitxml=" + str(ROOT / "release/build/final-acceptance/firmware-contract.xml"),
                 ],
             ),
         ]
@@ -250,6 +232,8 @@ def main():
             "release-quality",
             "workspace",
             "firmware-quality",
+            "firmware-lint",
+            "firmware-host-type",
             "firmware-contract",
         ],
     )
@@ -335,7 +319,13 @@ def main():
                     stdout=out,
                     stderr=err,
                     marker_store=store,
-                    env={**os.environ, "BYO_FIRMWARE_MCP_SOURCE": str(firmware)},
+                    env={
+                        **os.environ,
+                        "BYO_FIRMWARE_MCP_SOURCE": str(firmware),
+                        "BYO_TEST_FAILURES": os.environ.get(
+                            "BYO_TEST_FAILURES", str(args.evidence.resolve() / "failed-inputs")
+                        ),
+                    },
                 )
                 record["phase"] = "command"
                 record["exit_code"] = process.wait(timeout=args.timeout)

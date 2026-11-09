@@ -109,3 +109,18 @@ These are GitHub-account/secret actions the workflows cannot self-provision:
   commit SHA. Expect a `bot/firmware-pin-<short>` branch and a PR.
 - From firmware: push a `v*` tag in `BYO-Firmware-MCP`; the sender fires the
   dispatch and the bump PR appears here within a minute.
+
+## Standalone fixture cleanup
+
+`build-matrix.yml` dispatched with `build_kind=cleanup` runs workflow lint and
+the fixture-only matrix on Linux, Windows and both macOS architectures. Native
+bundle, source/product quality, Rust, installed and release jobs are excluded.
+The two plain `bc01-ci/fixture-cleanup-*.txt` lists name affected tests and changed
+Python files; they are scoped cleanup selections, not the product acceptance
+suite. Exact committed source is bound before/after. Standard collection, JUnit,
+command/exit streams and failed owned inputs are uploaded even on failure.
+
+Neutral Firmware lint/format runs once in reusable quality's Linux source job;
+other hosts retain their type/contracts, and native bundle jobs retain their own
+host/toolchain type check. A fixture result supplies no installed, real client,
+model or hardware acceptance.

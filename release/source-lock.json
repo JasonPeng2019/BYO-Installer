@@ -8,6 +8,6 @@
   "firmware_mcp": {
     "repository": "JasonPeng2019/BYO-Firmware-MCP",
     "branch": "chore/Proto-0.04",
-    "commit": "4d097bd7c3cbe5186fb5cc444b8a109f2e0bb086"
+    "commit": "0225230abafba0a1140e75f17b695f134b339289"
   }
 }

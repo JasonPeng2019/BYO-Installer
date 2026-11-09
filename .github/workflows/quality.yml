@@ -22,6 +22,7 @@ env:
   GIT_CONFIG_VALUE_0: "false"
   FR13_EXECUTION_COMMIT: ${{ inputs.execution_commit || github.sha }}
   FR13_INPUT_SHA256: ${{ inputs.input_sha256 }}
+  BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/failed-inputs
   PYRIGHT_PYTHON_NODE_VERSION: '22.15.0'
 
 jobs:
@@ -284,6 +285,10 @@ jobs:
         run: |
           uv sync --locked --all-groups
 
+      - name: Check platform-neutral Firmware lint and formatting once
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.firmware-deps.outcome == 'success' }}
+        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-lint --evidence release/build/final-acceptance/firmware-lint
+
       - name: Run independent Firmware MCP contract commands
         if: ${{ !cancelled() && steps.firmware-deps.outcome == 'success' }}
         run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-contract --evidence release/build/final-acceptance/firmware-contract
@@ -291,7 +296,7 @@ jobs:
       - name: Run Windows SWD isolation contract
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.firmware-deps.outcome == 'success' }}
         working-directory: Firmware MCP New
-        run: uv run python -m unittest tests.test_swd_process_isolation
+        run: uv run --no-sync python -m pytest -o addopts= --strict-markers -m "not live" -v tests/test_swd_process_isolation.py --junitxml=../release/build/final-acceptance/swd-isolation.xml
 
       - name: Bind exact frozen bytes after all independent downstream commands
         if: always()
