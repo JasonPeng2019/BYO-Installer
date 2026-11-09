@@ -30,9 +30,9 @@ preparation and the single explicit native bundle/installed acceptance path.
 All automated checks and builds remain Actions-only. Genuine local client,
 model and hardware acceptance remains separate and required.
 
-The retained source lock and input index describe the previous exported
-candidate. This standalone cleanup does not publish or invent a new export.
-The next authorized source owner must adopt these changes and refresh the exact
-paired exports/index before gated CI. Do not restore deleted files to satisfy
-the historical index, relabel an old artifact, or bump the product version
-solely for fixture changes.
+The source lock and input index must describe the exact exported candidate
+being checked. Refresh the paired exports/index when source/helper inputs
+change; the checkout and committed digest must agree. Do not restore deleted
+files to satisfy a stale index, relabel an old artifact, or bump the product
+version solely for fixture changes. Standalone cleanup verification uses
+`build_kind=cleanup` and does not establish a passing product build.

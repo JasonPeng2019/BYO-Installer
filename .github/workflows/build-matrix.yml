@@ -880,7 +880,7 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           cd "Firmware MCP New"
-          files=(tests/test_model_pin.py tests/test_process_callers.py tests/test_process_release_identity.py tests/process_caller_fixture.py tests/process_release_fixture.py)
+          files=(tests/test_model_pin.py tests/test_process_callers.py tests/test_process_release_identity.py tests/process_caller_fixture.py tests/process_release_fixture.py tests/test_code_analysis_posix_ownership.py tests/conftest.py)
           uv run --no-sync python -m ruff check "${files[@]}"
           uv run --no-sync python -m ruff format --check "${files[@]}"
       - name: Check changed Installer test helpers

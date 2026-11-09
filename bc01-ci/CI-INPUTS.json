@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fb361688f7232f6df42f88cccd61ab684bcd5478",
-  "source_parent": "ce447fdcb084aa83a9b80db96fcd5ac1ba4be87c",
-  "predecessor_input_sha256": "791205579e124802740047e6dd6e8598f9328ebdeac8dea051dc6df4336245cb",
+  "candidate": "de3aba99c62448a5eee816643e20def5664e787c",
+  "source_parent": "c5c09cb4ab98dc31cee639ba6d2cc13af6c23fad",
+  "predecessor_input_sha256": "094691aeeb7ce99300531a76c598535f4b1e0b83610eb2e327cb0c57f7c68af3",
   "firmware_export": {
-    "commit": "9b4b83b5a124f423ce0d95bece0595aed05c788d",
-    "tree": "f125339ed6d5f9398b8584f24c766c985dedc398"
+    "commit": "4d097bd7c3cbe5186fb5cc444b8a109f2e0bb086",
+    "tree": "e3d1641cae1031887ab907efe50ec1d6181db0ee"
   },
   "installer_source": {
-    "base_commit": "d24b7170f9efe48ce34f9528faa9e86305875585",
+    "base_commit": "8289cf9acf92eabf251b5dbcba0829992308c6f2",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone test-suite cleanup; no product build, installed, model/client or hardware acceptance",
@@ -34,8 +34,8 @@
       "sha256": "361de3f21efde53938f9e4f6d51ea3380fc33f32e2f59c94db10bad5af2b6f3b"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 51041,
-      "sha256": "b04b91d4d4251170e4b493e00cfc4390062342b0fb10bec2ce104c5c02952513"
+      "bytes": 51103,
+      "sha256": "794212ceaa95ce4864eecb31b5e5ee7b4ee38a72cde37f66953b836482639eed"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -1302,8 +1302,8 @@
       "sha256": "717aa9d419ff7580d2cdc5fbcca38e0a70a839b8b20df28db5fba2a3cc745fcc"
     },
     "Firmware MCP New/tests/README.md": {
-      "bytes": 11409,
-      "sha256": "ba8b04b888a419812468bcda1059707520ff1fbdcf5151f69f704d8c4ae35998"
+      "bytes": 11401,
+      "sha256": "2c821bfc4ba84cc905eeaf5f3019f7fbd388823ecfe248802a62e7d96d91da02"
     },
     "Firmware MCP New/tests/arm_corpus.py": {
       "bytes": 3702,
@@ -1406,8 +1406,8 @@
       "sha256": "dde32cab2787a2798d5f6e76707ff7cc3ee077992702ee75159db8f8898787ab"
     },
     "Firmware MCP New/tests/conftest.py": {
-      "bytes": 2896,
-      "sha256": "f6359633baa03b8372253cb867eef302760237896dbc780493c68a718a899947"
+      "bytes": 3382,
+      "sha256": "0851b0999c37f6f2271905ffe2f4ddded003566d34ab5fe5b93ce1dddaff899c"
     },
     "Firmware MCP New/tests/discovery_hook_fixtures.py": {
       "bytes": 4408,
@@ -1550,8 +1550,8 @@
       "sha256": "34746a195483eaedf89564f2d27f57bef392746e2cdd576137fa17e459266967"
     },
     "Firmware MCP New/tests/test_code_analysis_posix_ownership.py": {
-      "bytes": 111382,
-      "sha256": "849f6f8bf038374109ac91e9efc5a418708dd801ec7bc393c02498783c37458d"
+      "bytes": 111405,
+      "sha256": "359e1e0ffd3c9315a099198e185ff84126ca79da1216f44a35bf2bb0e26fb5e9"
     },
     "Firmware MCP New/tests/test_code_analysis_protocol_contract.py": {
       "bytes": 32257,
@@ -2002,8 +2002,8 @@
       "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
     },
     "bc01-ci/README.md": {
-      "bytes": 2293,
-      "sha256": "38653c7b180be3dd67d8c5205f26fb5a84838f476d29da7a3b600f3165ef69d6"
+      "bytes": 2329,
+      "sha256": "49357c5a705740ce0a6d59cba2460abace7dd9633f5ed21fb3b3977b3465a7e9"
     },
     "bc01-ci/build_capture.py": {
       "bytes": 2946,
@@ -2703,7 +2703,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "5f759ef7e38e47129a2147af304b4638b5cf97bdb9e5906e7c202c07b3b1342d"
+      "sha256": "6eda00b41a9e8d36499dddaeb1f74881477d6e4ac5aeebd5e25d49c040c1b759"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
