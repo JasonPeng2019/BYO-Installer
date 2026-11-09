@@ -1002,6 +1002,16 @@ jobs:
           path: Firmware MCP New
           fetch-depth: 1
           persist-credentials: false
+      - name: Lint changed Firmware workflow without running it
+        if: ${{ inputs.build_kind == 'cleanup' }}
+        shell: bash
+        run: |
+          set +e
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -config-file .github/actionlint.yaml "Firmware MCP New/.github/workflows/code-analysis-portability.yml" > workflow-evidence/firmware-actionlint.log 2>&1
+          code=$?
+          echo "$code" > workflow-evidence/firmware-actionlint.exit.txt
+          cat workflow-evidence/firmware-actionlint.log
+          exit "$code"
       - name: Install fixture check Python
         if: ${{ inputs.build_kind == 'cleanup' }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
