@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "4ebff33544c127c61ce0fd3fafbb000090214cd2",
-  "source_parent": "4bd067413369d669f5a45121c8c641ee9e421746",
-  "predecessor_input_sha256": "575fd1c33470d7347d03bdd8205527fd2c980274a1770dacddc69e8126cc1523",
+  "candidate": "3b6ac1cc5823b126ac1b7a9ed2e29f718b28dda0",
+  "source_parent": "155c67b8f7708e5af0fc6295db75c606858b1408",
+  "predecessor_input_sha256": "1e20d0833e199de0e235f13d9e2349541e0b4a69f62a51799bc7432afae89922",
   "firmware_export": {
-    "commit": "0225230abafba0a1140e75f17b695f134b339289",
-    "tree": "54ea69ed1ae203cc68eb2396796d5a115a092ebb"
+    "commit": "368307631db73c35bc866b1ab833efb463cf4b0f",
+    "tree": "a24b1ef648902cb57b7f9a183f6776f753560b7f"
   },
   "installer_source": {
-    "base_commit": "5626bd7953818eafa3dabd7203f5016dd35f1263",
+    "base_commit": "da5cc61b53cce173a63675b7fdc8bd9acabb1822",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture necessity cleanup; no build, FR/FT, installed, model/client or hardware acceptance",
@@ -30,8 +30,8 @@
       "sha256": "a869157ed4ecf1d6285fe25fdb8f0e391917c8dde469050a30d6d0f06bb33138"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 59997,
-      "sha256": "3a49394b06e2c0c35b4fdb88781d5e9798609b3b5bad4eef3744160f7ed0b311"
+      "bytes": 56907,
+      "sha256": "40466e4e101fdd0c7b6cd1127e147af27099cf5e2fd13aaa8b75759001a4beee"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -1678,8 +1678,8 @@
       "sha256": "49979b321f4669af184809435281e84d7ce6f8b3c4a12e90203acf9a4de7f04f"
     },
     "Firmware MCP New/tests/test_hook_gating_and_budget.py": {
-      "bytes": 30772,
-      "sha256": "f5412088ae6e4d3df370bc7aa29d719d8869b09af81cacd5f467b32cc5d97c19"
+      "bytes": 30707,
+      "sha256": "8f52468f9170d1fd214af74de3f8fecc320b846be7f3ac53de3a6db5cf125c69"
     },
     "Firmware MCP New/tests/test_inventory_snapshot_concurrency.py": {
       "bytes": 10989,
@@ -2022,16 +2022,16 @@
       "sha256": "156b960275de44d888ffd8375776e4aadd5fd5d3639a8980342d1f35bffdf7ec"
     },
     "bc01-ci/fixture-cleanup-baseline.txt": {
-      "bytes": 3024,
-      "sha256": "f0627e04fbd534092c0646c308e9f9cd63317afe492d8ba1131ed9be27731f90"
+      "bytes": 2948,
+      "sha256": "003ac00db19f7611d165679805614a58c72ea92b2bdd657b3eef9fa3a9b2f70e"
     },
     "bc01-ci/fixture-cleanup-files.txt": {
-      "bytes": 2485,
-      "sha256": "c725f63ceabc372ca93e323f74edcd9680f3ca97e4fa70e124ca4e46039f0ecb"
+      "bytes": 2419,
+      "sha256": "127d99098bae6485a68bb1982f816d518b1a2793e6976d185b7e2ffe49b0ac29"
     },
     "bc01-ci/fixture-cleanup-tests.txt": {
-      "bytes": 2942,
-      "sha256": "aeab99d4d56a16d5574406d5af67440b7ef3d4642113737a8f83215bc42623c6"
+      "bytes": 2867,
+      "sha256": "e566d3f345248a1d5108cd23c731a53d7061803edab788766d28421c0778cad2"
     },
     "bc01-ci/pyrightconfig.json": {
       "bytes": 171,
@@ -2590,8 +2590,8 @@
       "sha256": "fd987fccb416310535fde546515675ef8dfec00869871bf8a7e4807e342e1835"
     },
     "release/scripts/final_acceptance_checks.py": {
-      "bytes": 12285,
-      "sha256": "420436d8bcbd039ef1f1fa75e645cd337d3a32182f52fcc51e9168642ad40cf6"
+      "bytes": 12540,
+      "sha256": "b2a7a93886ae80ebbdade1299f48d18f92ec2494703199d9b41318e13780f63d"
     },
     "release/scripts/final_forwarded_environment.py": {
       "bytes": 5552,
@@ -2719,7 +2719,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "6b42461196783382e9343eb55af988def0f9851f2436d0fffb3240fb9bd56bae"
+      "sha256": "b268e7d89d75391d92e7c535316be71e367365dc721e9d5537a7e31469fabb3a"
     },
     "rust-toolchain.toml": {
       "bytes": 90,

@@ -210,11 +210,22 @@ def commands(group):
             (
                 "firmware-contract-tests",
                 [
-                    sys.executable, "-B", "-m", "pytest", "-o", "addopts=",
-                    "--strict-markers", "-m", "not live", "-v",
+                    sys.executable,
+                    "-B",
+                    "-m",
+                    "pytest",
+                    "-o",
+                    "addopts=",
+                    "--strict-markers",
+                    "-m",
+                    "not live",
+                    "-v",
                     "tests/test_sidecar_runtime.py",
                     "tests/test_manual_permission_helper_runtime.py",
-                    "--junitxml=" + str(ROOT / "release/build/final-acceptance/firmware-contract.xml"),
+                    "--junitxml="
+                    + str(
+                        ROOT / "release/build/final-acceptance/firmware-contract.xml"
+                    ),
                 ],
             ),
         ]
@@ -323,7 +334,8 @@ def main():
                         **os.environ,
                         "BYO_FIRMWARE_MCP_SOURCE": str(firmware),
                         "BYO_TEST_FAILURES": os.environ.get(
-                            "BYO_TEST_FAILURES", str(args.evidence.resolve() / "failed-inputs")
+                            "BYO_TEST_FAILURES",
+                            str(args.evidence.resolve() / "failed-inputs"),
                         ),
                     },
                 )

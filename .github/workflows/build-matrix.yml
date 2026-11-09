@@ -870,7 +870,7 @@ jobs:
           repository: JasonPeng2019/BYO-Firmware-MCP
           ref: ${{ steps.source.outputs.firmware }}
           path: Firmware MCP New
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
       - name: Check out locked workspace helper fixture
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -895,7 +895,7 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
         run: |
           cd "Firmware MCP New"
-          files=(); while IFS= read -r path; do files+=("$path"); done < ../bc01-ci/fixture-cleanup-files.txt
+          files=(); while IFS= read -r path; do files+=("${path%$'\r'}"); done < ../bc01-ci/fixture-cleanup-files.txt
           mkdir -p ../release/build/fixture-cleanup
           uv run --no-sync python -m ruff check --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-lint.patch || true
           uv run --no-sync python -m ruff format --diff "${files[@]}" > ../release/build/fixture-cleanup/firmware-format.patch || true
@@ -947,7 +947,7 @@ jobs:
       - name: Record affected source collection
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
-          cases=(); while IFS= read -r path; do cases+=("$path"); done < bc01-ci/fixture-cleanup-tests.txt
+          cases=(); while IFS= read -r path; do cases+=("${path%$'\r'}"); done < bc01-ci/fixture-cleanup-tests.txt
           uv run --no-sync --project "Firmware MCP New" python -B bc01-ci/build_capture.py --name fixture-collection --cwd "Firmware MCP New" -- \
             uv run --no-sync python -m pytest -o addopts= --strict-markers -m 'not live' --collect-only -q "${cases[@]}"
       # One-time comparison/probe; remove after observed verification.
@@ -955,71 +955,16 @@ jobs:
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
         run: |
           baseline="$RUNNER_TEMP/fixture-baseline"
+          git -C "Firmware MCP New" fetch --no-tags --depth=1 https://github.com/JasonPeng2019/BYO-Firmware-MCP.git 4d097bd7c3cbe5186fb5cc444b8a109f2e0bb086
           git -C "Firmware MCP New" worktree add --detach "$baseline" 4d097bd7c3cbe5186fb5cc444b8a109f2e0bb086
-          cases=(); while IFS= read -r path; do cases+=("$baseline/$path"); done < bc01-ci/fixture-cleanup-baseline.txt
+          cases=(); while IFS= read -r path; do cases+=("$baseline/${path%$'\r'}"); done < bc01-ci/fixture-cleanup-baseline.txt
           uv run --no-sync --project "Firmware MCP New" python -B bc01-ci/build_capture.py --name fixture-baseline-collection --cwd "$baseline" -- \
             uv run --no-sync --project "$GITHUB_WORKSPACE/Firmware MCP New" python -m pytest -o addopts= --strict-markers -m 'not live' --collect-only -q "${cases[@]}"
-      - name: Demonstrate failure retention once with disposable inputs
-        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python - <<'PY'
-          import json, os, subprocess, sys
-          from pathlib import Path
-          firmware = Path("Firmware MCP New").resolve()
-          output = Path("release/build/fixture-cleanup").resolve()
-          probe = firmware / "tests/_cleanup_capture_probe.py"
-          probe.write_text('''import shutil, tempfile, unittest
-          from pathlib import Path
-          from tests.monitor_support import MonitorTestCase
-          def setup(case):
-              case.root = Path(tempfile.mkdtemp(prefix="capture-proof-"))
-              case.addCleanup(shutil.rmtree, case.root)
-              (case.root / "capture-marker.txt").write_text(case.phase)
-              if case.phase == "setup":
-                  raise RuntimeError("intentional-setup")
-          class Setup(unittest.TestCase):
-              phase = "setup"
-              setUp = setup
-              def test_fixture(self): pass
-          class Assertion(unittest.TestCase):
-              phase = "assertion"
-              setUp = setup
-              def test_fixture(self): self.assertEqual("observed", "expected", "intentional-assertion")
-          class Subtest(unittest.TestCase):
-              phase = "subtest"
-              setUp = setup
-              def test_fixture(self):
-                  with self.subTest(step="intentional-subtest"):
-                      self.assertEqual("observed", "expected")
-          class Closeout:
-              def closeout(self, reason): raise RuntimeError("intentional-closeout")
-          class Cleanup(MonitorTestCase):
-              def test_fixture(self):
-                  (self.store_dir / "capture-marker.txt").write_text("cleanup")
-                  self._monitors.append(Closeout())
-                  self.fail("intentional-primary")
-          ''', encoding="utf-8")
-          try:
-              argv = [sys.executable, "-m", "pytest", "-o", "addopts=", "--strict-markers", "-v",
-                      str(probe), "--junitxml=" + str(output / "intentional-capture.xml")]
-              result = subprocess.run(argv, cwd=firmware, capture_output=True, timeout=180)
-              (output / "intentional-capture.stdout").write_bytes(result.stdout)
-              (output / "intentional-capture.stderr").write_bytes(result.stderr)
-              retained = {p.read_text() for p in Path(os.environ["BYO_TEST_FAILURES"]).rglob("capture-marker.txt")}
-              xml = (output / "intentional-capture.xml").read_text()
-              assert result.returncode == 1, result.returncode
-              assert {"setup", "assertion", "subtest", "cleanup"} <= retained, retained
-              for text in ("intentional-setup", "intentional-assertion", "intentional-subtest", "intentional-primary", "intentional-closeout"):
-                  assert text in xml, text
-              (output / "intentional-capture.json").write_text(json.dumps({"argv": argv, "exit": result.returncode, "classification": "EXPECTED_CONTROLLED_FAILURE", "retained": sorted(retained)}))
-          finally:
-              probe.unlink()
-          PY
       - name: Run affected source fixtures through standard pytest and small capture
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.analysis-fixtures.outcome == 'success' }}
         run: |
           mkdir -p release/build/fixture-cleanup
-          cases=(); while IFS= read -r path; do cases+=("$path"); done < bc01-ci/fixture-cleanup-tests.txt
+          cases=(); while IFS= read -r path; do cases+=("${path%$'\r'}"); done < bc01-ci/fixture-cleanup-tests.txt
           uv run --no-sync --project "Firmware MCP New" python -B bc01-ci/build_capture.py --name fixture-process --cwd "Firmware MCP New" -- \
             uv run --no-sync python -m pytest -o addopts= --strict-markers -m 'not live' -q "${cases[@]}" \
             --junitxml="$GITHUB_WORKSPACE/release/build/fixture-cleanup/process.xml"
