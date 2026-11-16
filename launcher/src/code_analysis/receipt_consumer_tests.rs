@@ -478,13 +478,29 @@ fn version_errors_mismatch_and_deadline_cannot_admit_analysis() {
     let mut program = runtime::resolve(&fixture.root, &fixture.release, &Budget::new()).unwrap();
     let directory = fixture.root.join("version-control");
     fs::create_dir(&directory).unwrap();
-    assert_eq!(probe(&program, &fixture.root, &Budget::new(), &directory, &mut Vec::new()).unwrap(), "2.22.0");
-    for (mode, expected) in [(1, "analysis/version-failed"), (2, "analysis/executable-unavailable"),
-                             (3, "analysis/version-failed"), (4, "analysis/version-failed"),
-                             (5, "analysis/timeout")] {
+    assert_eq!(
+        probe(
+            &program,
+            &fixture.root,
+            &Budget::new(),
+            &directory,
+            &mut Vec::new()
+        )
+        .unwrap(),
+        "2.22.0"
+    );
+    for (mode, expected) in [
+        (1, "analysis/version-failed"),
+        (2, "analysis/executable-unavailable"),
+        (3, "analysis/version-failed"),
+        (4, "analysis/version-failed"),
+        (5, "analysis/timeout"),
+    ] {
         program.executable = fake_mode(mode).to_path_buf();
         let mut budget = Budget::new();
-        budget.configure(if mode == 5 { 0.3 } else { 10.0 }).unwrap();
+        budget
+            .configure(if mode == 5 { 0.3 } else { 10.0 })
+            .unwrap();
         let directory = fixture.root.join(format!("version-{mode}"));
         fs::create_dir(&directory).unwrap();
         let started = Instant::now();
@@ -492,11 +508,20 @@ fn version_errors_mismatch_and_deadline_cannot_admit_analysis() {
         let error = probe(&program, &fixture.root, &budget, &directory, &mut events).unwrap_err();
         assert_eq!(error.code, expected, "mode {mode}: {error:?}");
         assert!(!events.is_empty(), "the actual owned probe must run");
-        if mode == 5 { assert!(started.elapsed() < Duration::from_secs(5)); }
+        if mode == 5 {
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
     }
     program.executable = fake_mode(2).to_path_buf();
     program.version = "2.21.0".into();
-    let error = probe(&program, &fixture.root, &Budget::new(), &directory, &mut Vec::new()).unwrap_err();
+    let error = probe(
+        &program,
+        &fixture.root,
+        &Budget::new(),
+        &directory,
+        &mut Vec::new(),
+    )
+    .unwrap_err();
     assert_eq!(error.code, "analysis/version-unsupported");
 }
 

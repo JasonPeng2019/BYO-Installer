@@ -856,11 +856,17 @@ mod tests {
     #[test]
     fn invalid_mapping_refuses_after_valid_integrity_control() {
         let cases: &[(&str, fn(&mut Value))] = &[
-            ("unknown field", |v| v["programs"]["cppcheck"]["extra"] = json!(true)),
-            ("path escape", |v| v["programs"]["cppcheck"]["cfg_dir"] = json!("analysis/cppcheck/../../workflow")),
+            ("unknown field", |v| {
+                v["programs"]["cppcheck"]["extra"] = json!(true)
+            }),
+            ("path escape", |v| {
+                v["programs"]["cppcheck"]["cfg_dir"] = json!("analysis/cppcheck/../../workflow")
+            }),
             ("boolean schema", |v| v["schema_version"] = json!(true)),
             ("wrong target", |v| v["architecture"] = json!("unsupported")),
-            ("resource major", |v| v["programs"]["clangd"]["resource_dir"] = json!("analysis/clangd/lib/clang/22")),
+            ("resource major", |v| {
+                v["programs"]["clangd"]["resource_dir"] = json!("analysis/clangd/lib/clang/22")
+            }),
         ];
         for (label, edit) in cases {
             let mut fixture = fixture();
@@ -869,30 +875,59 @@ mod tests {
             let mut mapping: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             edit(&mut mapping);
             write_json(&path, &mapping).unwrap();
-            let leaf = fixture.release.files.iter_mut().find(|f| f.path == "analysis/runtime.json").unwrap();
+            let leaf = fixture
+                .release
+                .files
+                .iter_mut()
+                .find(|f| f.path == "analysis/runtime.json")
+                .unwrap();
             leaf.sha256 = crate::manifest::sha256_file(&path).unwrap();
             leaf.size = fs::metadata(&path).unwrap().len();
             fixture.save_release();
-            let error = resolve(&fixture.root, &fixture.release, &Budget::new()).err().expect(label);
-            assert_eq!(error.code, "analysis/executable-unavailable", "{label}: {error:?}");
-            assert!(!error.message.contains("size/hash/identity mismatch"), "{label}: {error:?}");
+            let error = resolve(&fixture.root, &fixture.release, &Budget::new())
+                .err()
+                .expect(label);
+            assert_eq!(
+                error.code, "analysis/executable-unavailable",
+                "{label}: {error:?}"
+            );
+            assert!(
+                !error.message.contains("size/hash/identity mismatch"),
+                "{label}: {error:?}"
+            );
         }
     }
 
     #[test]
     fn missing_required_runtime_inputs_and_wrong_native_format_refuse() {
-        for path in ["analysis/runtime.json", "analysis/cppcheck/cfg/std.cfg",
-                     "analysis/cppcheck/platforms/target.xml", "analysis/cppcheck/licenses/COPYING"] {
+        for path in [
+            "analysis/runtime.json",
+            "analysis/cppcheck/cfg/std.cfg",
+            "analysis/cppcheck/platforms/target.xml",
+            "analysis/cppcheck/licenses/COPYING",
+        ] {
             let fixture = fixture();
             resolve(&fixture.root, &fixture.release, &Budget::new()).unwrap();
             fs::remove_file(fixture.root.join(path)).unwrap();
-            let error = resolve(&fixture.root, &fixture.release, &Budget::new()).err().unwrap();
-            assert_eq!(error.code, "analysis/executable-unavailable", "{path}: {error:?}");
+            let error = resolve(&fixture.root, &fixture.release, &Budget::new())
+                .err()
+                .unwrap();
+            assert_eq!(
+                error.code, "analysis/executable-unavailable",
+                "{path}: {error:?}"
+            );
         }
         let mut fixture = fixture();
-        let path = fixture.root.join(Target::host().unwrap().executable("cppcheck"));
+        let path = fixture
+            .root
+            .join(Target::host().unwrap().executable("cppcheck"));
         fs::write(&path, b"not a native executable").unwrap();
-        let leaf = fixture.release.files.iter_mut().find(|f| f.path == Target::host().unwrap().executable("cppcheck")).unwrap();
+        let leaf = fixture
+            .release
+            .files
+            .iter_mut()
+            .find(|f| f.path == Target::host().unwrap().executable("cppcheck"))
+            .unwrap();
         leaf.sha256 = crate::manifest::sha256_file(&path).unwrap();
         leaf.size = fs::metadata(&path).unwrap().len();
         fixture.save_release();

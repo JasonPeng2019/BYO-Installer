@@ -197,5 +197,4 @@ mod tests {
         drop(guard);
         std::fs::remove_dir_all(root).unwrap();
     }
-
 }

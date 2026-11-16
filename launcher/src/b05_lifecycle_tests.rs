@@ -131,13 +131,23 @@ fn formatting_survives_doctor_guard_and_init_but_meaningful_changes_refuse() {
     let mode = project.join(".generated/byo/active-mode.json");
     let mode_original = std::fs::read(&mode).unwrap();
     for (path, bytes) in [
-        (&codex, b"[mcp_servers.byo]\ncommand='byo'\ncommand='other'\n".as_slice()),
-        (&mode, br#"{"permissions":{"allow":false,"allow":true}}"#.as_slice()),
+        (
+            &codex,
+            b"[mcp_servers.byo]\ncommand='byo'\ncommand='other'\n".as_slice(),
+        ),
+        (
+            &mode,
+            br#"{"permissions":{"allow":false,"allow":true}}"#.as_slice(),
+        ),
     ] {
         std::fs::write(path, bytes).unwrap();
         assert!(doctor_project(&project, &paths).is_err());
         assert!(init_project(&project, "firmware", false, false, &paths).is_err());
-        assert_eq!(std::fs::read(path).unwrap(), bytes, "refusal preserves the user's input");
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            bytes,
+            "refusal preserves the user's input"
+        );
         std::fs::write(&codex, &original).unwrap();
         std::fs::write(&mode, &mode_original).unwrap();
     }

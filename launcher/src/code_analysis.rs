@@ -972,8 +972,12 @@ mod owner_tests {
 
     #[test]
     fn findings_keep_resolved_source_coordinates_and_complete_messages() {
-        let report = parse_report(&fs::read(fixtures().join("findings.xml")).unwrap(),
-                                  &fixtures().join("project"), &[]).unwrap();
+        let report = parse_report(
+            &fs::read(fixtures().join("findings.xml")).unwrap(),
+            &fixtures().join("project"),
+            &[],
+        )
+        .unwrap();
         let finding = &report.diagnostics[0];
         assert_eq!(finding["id"], "nullPointer");
         assert_eq!(finding["severity"], "error");
@@ -981,8 +985,10 @@ mod owner_tests {
         assert_eq!(finding["verbose_message"], "complete fixture diagnostic");
         assert_eq!(finding["inconclusive"], false);
         let location = &finding["locations"][0];
-        assert_eq!(PathBuf::from(location["file"].as_str().unwrap()),
-                   canonical(&fixtures().join("project/src/a.c")).unwrap());
+        assert_eq!(
+            PathBuf::from(location["file"].as_str().unwrap()),
+            canonical(&fixtures().join("project/src/a.c")).unwrap()
+        );
         assert_eq!(location["line"], 1);
         assert_eq!(location["column"], 1);
     }
@@ -1368,5 +1374,4 @@ mod owner_tests {
         assert!(result["report_directory"].is_null());
         assert!(result["owned_processes"].as_array().unwrap().is_empty());
     }
-
 }
