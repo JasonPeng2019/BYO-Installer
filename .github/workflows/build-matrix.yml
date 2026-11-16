@@ -913,7 +913,7 @@ jobs:
             esac
           fi
           uv sync --project CodexClaudeWorkflow --locked --group dev
-          uv run --no-sync --project CodexClaudeWorkflow python -m pytest -o addopts= -v CodexClaudeWorkflow/tests --basetemp="$GITHUB_WORKSPACE/release/build/fixture-cleanup/companion-temp" --junitxml=release/build/fixture-cleanup/companion.xml
+          uv run --no-sync --project CodexClaudeWorkflow python -m pytest -o addopts= -v CodexClaudeWorkflow/tests --basetemp="$GITHUB_WORKSPACE/release/build/fixture-cleanup/companion-temp" -o tmp_path_retention_policy=failed --junitxml=release/build/fixture-cleanup/companion.xml
       - name: Check retained companion fixture style
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
         run: |
@@ -930,6 +930,20 @@ jobs:
       - name: Verify unchanged cleanup inputs after execution
         if: always()
         run: python -B bc01-ci/verify_frozen_sources.py --phase after-cleanup
+      - name: Preserve reports before temporary input upload
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: fixture-reports-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            build-runtime/evidence/fixture-*/
+            release/build/fixture-cleanup/*.xml
+            release/build/fixture-cleanup/*.json
+            release/build/fixture-cleanup/*.log
+            release/build/fixture-cleanup/*.patch
+            release/build/final-acceptance/exact-source-*-cleanup.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Preserve cleanup reports and failure inputs
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
@@ -938,6 +952,8 @@ jobs:
           path: |
             build-runtime/evidence/fixture-*/
             release/build/fixture-cleanup/
+            !release/build/fixture-cleanup/companion-temp/**/.venv/**
+            !release/build/fixture-cleanup/companion-temp/**/.git/**
             release/build/final-acceptance/exact-source-*-cleanup.json
             Firmware MCP New/.test-failures/
           include-hidden-files: true

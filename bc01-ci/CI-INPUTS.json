@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fixture-minimal-20261116-02",
-  "source_parent": "249cc6953772d1c1d55bbc17559cd6f506492377",
-  "predecessor_input_sha256": "fac7d29ddbc7101aeda8e6d98d6c3f8d1fa857c517384610de6a25971c205502",
+  "candidate": "fixture-minimal-20261116-03",
+  "source_parent": "706244de12a2587cfbb542a95e44b6d4817de62a",
+  "predecessor_input_sha256": "7cc1aca3315eabc7c783b8ff1560bad42f3481897f8811a5eeb440129701ebb7",
   "firmware_export": {
-    "commit": "861d9b1dd534e494ad13c5de7f0285e2708d550e",
-    "tree": "ed5465ce8455fc2cba12e43372a146a1525335fc"
+    "commit": "871ca1a43e1dc5ed9492e8c93c275d0347b07479",
+    "tree": "4886e9fa57d317da5dd97a322bba0dabd3dd3922"
   },
   "installer_source": {
-    "base_commit": "1c304d70cdc57fd73976107b3c601577a43a7110",
+    "base_commit": "54afc99ff4b99bad7c323f327e77663d90882aff",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture minimization; source fixtures only; no product build, FR/FT, installed/client/model/hardware acceptance",
@@ -30,8 +30,8 @@
       "sha256": "ee8de424909f5d881f0481275fb6fe3bbf64705ea5b564c573a73f8b832c50c6"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 56781,
-      "sha256": "ef5b3177e7c671e140304db4d2e71617c619b1070e8dd53ddd6abf72b6a77271"
+      "bytes": 57625,
+      "sha256": "2ab7c41a6764120cabb2779d16e31dc8846ce0979050e29feff530fff9e5ca63"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -1298,16 +1298,16 @@
       "sha256": "717aa9d419ff7580d2cdc5fbcca38e0a70a839b8b20df28db5fba2a3cc745fcc"
     },
     "Firmware MCP New/tests/README.md": {
-      "bytes": 12582,
-      "sha256": "74036c05b8f6ffdd60f0f652d262b37763e586a593f824a5605d7692449ace3c"
+      "bytes": 3912,
+      "sha256": "d3196590a0583bf5ab9808d04ac3dc7573fa3a9d4a926bb8fd165e85c6d5d55d"
     },
     "Firmware MCP New/tests/code_analysis_fixtures/.gitattributes": {
       "bytes": 8,
       "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
     },
     "Firmware MCP New/tests/code_analysis_fixtures/COVERAGE.md": {
-      "bytes": 5753,
-      "sha256": "826df36b49c221a03d84b839866e6314123d213adbc26d0c23ef9642bac30c1f"
+      "bytes": 1313,
+      "sha256": "7e5890dcd0b1d54bbd005cc6518c2d3172c06a70d70c63619e66e5a10fd76398"
     },
     "Firmware MCP New/tests/code_analysis_fixtures/README.md": {
       "bytes": 2641,
@@ -1421,10 +1421,6 @@
       "bytes": 1718,
       "sha256": "e6095992c5c95a96fb97f8c6a0e394dd26edde23b1b9fe73442ffb9eaa17b45b"
     },
-    "Firmware MCP New/tests/fixtures/model-boundary.template.json": {
-      "bytes": 3184,
-      "sha256": "dd69aad492d0ca062ebca6e0f9931000c8a78dfc8b1fc1386f1f853dceae2218"
-    },
     "Firmware MCP New/tests/fixtures/nordic/NordicSemiconductor.nRF_DeviceFamilyPack.8.44.1.pack": {
       "bytes": 2218801,
       "sha256": "95136b57a8310ba367aa46cb66c8d149561fc7876c5f3736f323a9dbfb8f559e"
@@ -1498,8 +1494,8 @@
       "sha256": "926fb01761094bb945dc126d19947e3c3f73f355b803f20f44697ca7b09bab58"
     },
     "Firmware MCP New/tests/test_clangd_adapter_unit.py": {
-      "bytes": 1910,
-      "sha256": "b5f98ecabfc51efa519022bb0a043669f950f86e63acbb163dcde163ee9bd25f"
+      "bytes": 1900,
+      "sha256": "ddf2a0651003238431746daff4ff2e3c9e6df7e940a6edf4cd4f052105d5b289"
     },
     "Firmware MCP New/tests/test_code_analysis_config_contract.py": {
       "bytes": 6209,
@@ -1534,8 +1530,8 @@
       "sha256": "69f187bf0e45b805dc3800d351de3406d1925cf77f77c8d63e2e90bd05180927"
     },
     "Firmware MCP New/tests/test_code_analysis_service_unit.py": {
-      "bytes": 6927,
-      "sha256": "4a1a2df88fff45dabacd1cf2c14aedd52fd42fa52f25acf07e5dc0c94a6f0583"
+      "bytes": 6913,
+      "sha256": "61d7c9376430af843406227ca6d5e0fb0d4c16285f290a44534c516fa9c1ff8e"
     },
     "Firmware MCP New/tests/test_code_analysis_windows_acceptance.py": {
       "bytes": 12484,
@@ -1597,10 +1593,6 @@
       "bytes": 4729,
       "sha256": "4efb421dc4f7a9238a43e8b889a830dece98cf21243a62a6b0d8418abb3f0c98"
     },
-    "Firmware MCP New/tests/test_model_pin.py": {
-      "bytes": 1296,
-      "sha256": "52f245f7f6886e29776b68dfd0574d4620cf1c6b7e8f8d256bd8964a73f70d08"
-    },
     "Firmware MCP New/tests/test_monitor_behaviour.py": {
       "bytes": 6209,
       "sha256": "88b609a715a5eb8b7cf3d08a93c7eb1c589728b7e38fd036dcebc598267c60dd"
@@ -1634,8 +1626,8 @@
       "sha256": "e5c3b769745d883b8077b958308461d1b9ee306ea2696c99c67c8a257ecbb418"
     },
     "Firmware MCP New/tests/test_monitor_wiring.py": {
-      "bytes": 11716,
-      "sha256": "a78f5a6f053380828dd7898074d10c0c7659895134b501adae3163116b5aa1ca"
+      "bytes": 11792,
+      "sha256": "88feac60d54c88958eeb5441c6271c1a4dffa52309eb7ee1b5e90b9679468a29"
     },
     "Firmware MCP New/tests/test_preflight_probe_guidance.py": {
       "bytes": 725,
@@ -1757,10 +1749,6 @@
       "bytes": 2118,
       "sha256": "5f45e3f5cd1b7a79d62b892656842023840e24763495927c45a2685bc4384254"
     },
-    "Firmware MCP New/tests/tiered_acceptance_fixtures/legacy_states.json": {
-      "bytes": 2539,
-      "sha256": "f0c35585740cca20e5543b9ef628c44f0adc09564abfda17f27b8e2b729eb6e8"
-    },
     "Firmware MCP New/tests/tiered_acceptance_fixtures/lite_confirmation.json": {
       "bytes": 1130,
       "sha256": "465351b023a5d8dc5bae7377c1bd07d16f5367a78eaa2280ca475567fbc54832"
@@ -1806,12 +1794,12 @@
       "sha256": "156b960275de44d888ffd8375776e4aadd5fd5d3639a8980342d1f35bffdf7ec"
     },
     "bc01-ci/fixture-cleanup-files.txt": {
-      "bytes": 3375,
-      "sha256": "c0ced876da10d4a49c69e4fc202090ffb13f76195e5fab12bb0b84c78a0eae98"
+      "bytes": 3351,
+      "sha256": "cfcca924007984e24896a8dce1cef67d8e94fd3c438017e3e9f75c60ebbf56d3"
     },
     "bc01-ci/fixture-cleanup-tests.txt": {
-      "bytes": 2510,
-      "sha256": "abb1dc5ee1cbdffa0386dcaf3b5eea380fd7a2f1dff50b3e1354304c4bb1ff83"
+      "bytes": 2486,
+      "sha256": "4e511e17ee05b2e96c8fedf881e9acb72202a29e9db1e709acd1c0c81f1c2e62"
     },
     "bc01-ci/pyrightconfig.json": {
       "bytes": 171,
@@ -1826,8 +1814,8 @@
       "sha256": "736986bfcfa01f0323e4b1fd5bb73621c653cdf58c0b69fb9e00bb38af224243"
     },
     "docs/code-analysis-portability-contract.md": {
-      "bytes": 43305,
-      "sha256": "f92adcdc7939d4a5412e100e1e3b10f8685e3d1efa7f586d3741fa66456c0f5e"
+      "bytes": 43271,
+      "sha256": "6efcca54909bed7a8a077625c94af69e82aaf12ec25748bfeda9561941fe610a"
     },
     "docs/code-analysis-posix-lifecycle-scope.md": {
       "bytes": 3187,
@@ -2189,70 +2177,6 @@
       "bytes": 413,
       "sha256": "4f3ae83ccca396bead692598037dac1fe6e8127d1b61a63aacbabd6b8b30ce7b"
     },
-    "launcher/tests/fixtures/cppcheck-acceptance/.gitattributes": {
-      "bytes": 8,
-      "sha256": "705fd4d6451a31d36b3df7de96f83f30ac976c9b4a6d1e51671d8e2f33e2d0da"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/README.md": {
-      "bytes": 6691,
-      "sha256": "438572512be8eec297f325898986767015619afc0218268eca79128f17cc910c"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/arm-originals.json": {
-      "bytes": 2228,
-      "sha256": "ab3a5ea27dd222b753def82b36066c1e803c8eec76d0b2947f2d61e893ed6291"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/manifest.json": {
-      "bytes": 2465,
-      "sha256": "6606b33e370e74f6d9943b2fb78f735f8979415733e2ca13923c088db8c1fe53"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/clean.c": {
-      "bytes": 58,
-      "sha256": "271872141a84b3ea969b7a8c3ddd3070624eff328a2a9ca3b099015b5a25a7bd"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/config/ilp32.xml": {
-      "bytes": 317,
-      "sha256": "8a3909a1545440cf2f2a5b2e6b5865b224c5ce4fad296b8d75d326f8cedfb7b2"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/config/int16.xml": {
-      "bytes": 317,
-      "sha256": "b0de15f67b4e0a4edcd30d080f3f11e7c6771b56aa51659902052bf23b3a321a"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/gated_null.c": {
-      "bytes": 131,
-      "sha256": "1118730fa3f715d57e1f9617c85f3b5158862e93cbd9d9fd711196528a086b79"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/inc/entry_local.h": {
-      "bytes": 24,
-      "sha256": "d82389bf1f3de728d82f3ab8baa1729328a8814df9d240a9a43c8c3ec61400f9"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/null_deref.c": {
-      "bytes": 63,
-      "sha256": "56405d1a30d2d02ac6db74313ccd606a420a860c0332d35f381ae88af483cfac"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/platform_shift.c": {
-      "bytes": 42,
-      "sha256": "269774f8efbe757a5b3829742045f1a234945151184549e4b1037b890e9ba34f"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/style_unread.c": {
-      "bytes": 69,
-      "sha256": "64ec5a00f046e8d886890befb3c9f5d76a5c88985e2714275c9a264165f70000"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/syntax_broken.c": {
-      "bytes": 39,
-      "sha256": "b122633774302e08d73666c939dddd9c5513195e7a4f57c8e2daec463bd8b817"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/uses_entry_header.c": {
-      "bytes": 107,
-      "sha256": "df7fa19781d693295e3bf2077aeba94a1b07572571c86206a16a55f72bef289a"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/uses_generated.c": {
-      "bytes": 89,
-      "sha256": "6a1bf6cae3dcf5b7ad5947ddc9bcae3f86920f37b112d7f1aa2f4fa2cfa90d14"
-    },
-    "launcher/tests/fixtures/cppcheck-acceptance/real/uses_system.c": {
-      "bytes": 70,
-      "sha256": "0a1182fbb912d883bab0e4cf72d48c5436e5f02a04efdbae76d842c0cfb2ae99"
-    },
     "launcher/tests/fixtures/runtime-switch/fake_runtime.rs": {
       "bytes": 2335,
       "sha256": "0fa36d825cd17d8e2e00e2f45592f03e90239c8869f18d754b4580513a009889"
@@ -2439,7 +2363,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "61361b435f72da511820a1738fd18bb9006f3b133cec01ee4c01d58198c6da98"
+      "sha256": "59a2047d96bacf40f246a2729dfa4b8836cfc16db91ca93887afd3fc5b0441ee"
     },
     "rust-toolchain.toml": {
       "bytes": 90,

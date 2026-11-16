@@ -441,8 +441,8 @@ before an offline run; `uv sync --locked --all-groups` uses the server `uv.lock`
 No firmware hardware is required. ROOT has provisioned Rust 1.97.1 standard
 libraries for all four targets on Windows; availability is neither a successful
 cross compile nor native execution evidence. The core smoke requires a real
-native `arm-none-eabi-g++`, its expected SHA-256, and an embedded, hash-bound
-authoritative fixture from `launcher/tests/fixtures/cppcheck-acceptance/arm-originals.json`.
+native `arm-none-eabi-g++` from the pinned acquisition helper and the ARM source
+inputs in `release/scripts/test_installed_analysis.py`.
 Build that fixture with the supplied compiler and retain generated headers,
 compile database, ABI file and build evidence. Host C or handcrafted database
 flags cannot substitute for this required ARM case; no external fixture-source
