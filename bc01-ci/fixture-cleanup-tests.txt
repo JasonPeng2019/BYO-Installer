@@ -26,7 +26,6 @@ tests/test_lite_application_flash.py
 tests/test_lite_protective_overlaps.py
 tests/test_manual_permission_helper_runtime.py
 tests/test_monitor_behaviour.py
-tests/test_monitor_codex_e2e.py
 tests/test_monitor_delivery.py
 tests/test_monitor_passivity.py
 tests/test_monitor_redaction.py

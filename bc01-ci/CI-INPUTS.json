@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fixture-minimal-20261116-04",
-  "source_parent": "46b0052749a29e6caa31643d6553a1047134e4df",
-  "predecessor_input_sha256": "78105d88962cece5fa1ad07486a8c6239330ae423ebb4924bdcaf60bfaded38c",
+  "candidate": "fixture-minimal-20261116-05",
+  "source_parent": "b127226f559510a6ea2f42959cf0df741b19bbb3",
+  "predecessor_input_sha256": "76e344b856a10135c79accecc2cdc084312c162798faec20410da2d80ffebfb2",
   "firmware_export": {
-    "commit": "b845a99933cd878e43b2022a9c435b109b624bef",
-    "tree": "3c89117edddf1f4293256840ad5cb87d2757a35b"
+    "commit": "3162c99abb8a932e608e14a38b6174afd686bed1",
+    "tree": "c10a84bc6e8a8d326d402100d6c5b99251a4f3fd"
   },
   "installer_source": {
-    "base_commit": "f5e69725376b8a53ecc868cca0372bff121f2efc",
+    "base_commit": "5542e326f3aab9e6c576322a5458cedd93336cfe",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture minimization; source fixtures only; no product build, FR/FT, installed/client/model/hardware acceptance",
@@ -1386,8 +1386,8 @@
       "sha256": "e23dff730d8d357842e4e620078b439a9624adbfda08602edf23b3973ba87c18"
     },
     "Firmware MCP New/tests/codex_harness.py": {
-      "bytes": 15738,
-      "sha256": "1053a269a50ffce04a18e5f0763d0e499876c23a1589fe823ab5b9b6401cafec"
+      "bytes": 15885,
+      "sha256": "956564192933f70fb61e863d08f93187512a5d372058877205f1308fd765bcac"
     },
     "Firmware MCP New/tests/conftest.py": {
       "bytes": 3769,
@@ -1798,8 +1798,8 @@
       "sha256": "cfcca924007984e24896a8dce1cef67d8e94fd3c438017e3e9f75c60ebbf56d3"
     },
     "bc01-ci/fixture-cleanup-tests.txt": {
-      "bytes": 2486,
-      "sha256": "4e511e17ee05b2e96c8fedf881e9acb72202a29e9db1e709acd1c0c81f1c2e62"
+      "bytes": 2454,
+      "sha256": "d458857d1c0be50d7f8c25d963ae7c193615616e8ae0304a4a89bf60343396ed"
     },
     "bc01-ci/pyrightconfig.json": {
       "bytes": 171,
@@ -2363,7 +2363,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "aa2e3b027ea7511bf1800bb9bce450766a2f4054fcc5fc240247550fa2e9b8d2"
+      "sha256": "2a0fd0515b7bb87f2d77df08b9e6516526fa2b04b05753e5dfa15856c4419c33"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
