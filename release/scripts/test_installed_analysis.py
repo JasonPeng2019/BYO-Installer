@@ -636,7 +636,12 @@ def test_genuine_distinct_version_activation_and_rollback_preserve_authored_stat
     old_version = json.loads(
         (old / "release-manifest.json").read_text(encoding="utf-8")
     )["version"]
-    with installed_lab() as lab:
+    new_bundle = (
+        "BYO_INSTALLED_UPGRADE_BUNDLE"
+        if os.environ.get("BYO_INSTALLED_UPGRADE_BUNDLE")
+        else "BYO_INSTALLED_BUNDLE"
+    )
+    with installed_lab(new_bundle) as lab:
         assert old_version != lab.version, "same-version reinstall is not upgrade proof"
         invoke(
             [str(lab.byo), "install-runtime", "--bundle", str(old)],

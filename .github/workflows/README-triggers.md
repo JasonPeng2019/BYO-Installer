@@ -20,8 +20,9 @@ workflow lint and the affected source fixtures on Linux, Windows and both
 macOS architectures, using locked Python dependencies and ordinary pytest.
 It checks the changed fixture/helper formatting and lint, and exercises the
 small command capture with the source tests. `bundle` remains the default;
-`contracts` retains its existing behavior. Cleanup mode does not run Clippy,
-Rust, analyzer/bundle builds, installed acceptance, real clients or hardware.
+`contracts` retains its existing behavior. Cleanup checks Rust format/syntax;
+it does not compile Rust or run Clippy, analyzer/bundle builds, installed
+acceptance, real clients or hardware.
 A cleanup PASS verifies those changed test paths, not the product candidate.
 Product build failures do not prevent this independent source verification.
 
@@ -54,7 +55,10 @@ or duplicate raw archive is needed.
 Existing external drivers can check a verified extracted bundle, for example
 `BYO_INSTALLED_BUNDLE=<bundle> python -m pytest -v
 release/scripts/test_installed_analysis.py`. Such automated execution remains in
-Actions. Reuse is valid only when all actual build inputs are unchanged,
+Actions. `BYO_INSTALLED_PROFESSIONAL_BUNDLE` supplies the separate profile;
+`BYO_INSTALLED_OLD_BUNDLE` and optional `BYO_INSTALLED_UPGRADE_BUNDLE` supply
+genuine distinct versions. The upgrade bundle defaults to the ordinary bundle.
+Reuse is valid only when all actual build inputs are unchanged,
 including packaged data/tests, dependency/toolchain/profile/recipe and
 generated metadata. Record the original build commit and artifact digest
 separately from the new test commit. Otherwise rebuild; do not create an

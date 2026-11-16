@@ -276,11 +276,14 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_TARGET: ${{ matrix.target }}
         run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          export BYO_INSTALLED_BUNDLE="$GITHUB_WORKSPACE/release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64"
+          mkdir -p release/build/analysis-evidence
+          python release/scripts/acquire_arm_test_toolchain.py --expected-target "$EXPECTED_TARGET" --output "$RUNNER_TEMP/byo-arm-core" > release/build/analysis-evidence/arm-core.json
+          export BYO_INSTALLED_BUNDLE="$GITHUB_WORKSPACE/release/dist/byo-$VERSION-$EXPECTED_TARGET"
           export BYO_TEST_WORKSPACE_SOURCE="$GITHUB_WORKSPACE/AgentWorkspace"
-          export BYO_TEST_ARM_GNU_ROOT="$RUNNER_TEMP/byo-arm-core"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/analysis-evidence/installed.xml
+          BYO_TEST_ARM_GNU_ROOT=$(python -c 'import json; print(json.load(open("release/build/analysis-evidence/arm-core.json"))["root"])')
+          export BYO_TEST_ARM_GNU_ROOT
+          export BYO_TEST_FAILURES="$GITHUB_WORKSPACE/release/build/analysis-evidence/failed-inputs"
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/analysis-evidence/installed.xml
 
       - name: Run retained source features
         id: source-suite
@@ -292,7 +295,7 @@ jobs:
           BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/fixture-inputs
         run: |
           uv run --no-sync --project "Firmware MCP New" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
-          uv run --no-sync --project "Firmware MCP New" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -c "Firmware MCP New/pytest.ini" -o addopts= --strict-markers -m 'not live' "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
       - name: Verify frozen inputs after native work
         if: ${{ always() && steps.firmware-checkout.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
@@ -578,12 +581,14 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          bundle="release/dist/byo-$VERSION-linux-x86_64"
-          "$BYO_BUILD_PYTHON" -B bc01-ci/build_capture.py --name installed-analysis -- uv run --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/run_installed_analysis_ci.py \
-            --expected-target linux-x86_64-glibc-2.28 --bundle "$bundle" --archive "$bundle.tar.gz" \
-            --workspace-source AgentWorkspace --arm-input-dir "$RUNNER_TEMP/byo-arm-core" \
-            --evidence release/build/analysis-evidence/installed-core \
-            --artifact-label "candidate-$GITHUB_SHA"
+          mkdir -p release/build/analysis-evidence
+          "$BYO_BUILD_PYTHON" release/scripts/acquire_arm_test_toolchain.py --expected-target linux-x86_64 --output "$RUNNER_TEMP/byo-arm-core" > release/build/analysis-evidence/arm-core.json
+          export BYO_INSTALLED_BUNDLE="$GITHUB_WORKSPACE/release/dist/byo-$VERSION-linux-x86_64"
+          export BYO_TEST_WORKSPACE_SOURCE="$GITHUB_WORKSPACE/AgentWorkspace"
+          BYO_TEST_ARM_GNU_ROOT=$("$BYO_BUILD_PYTHON" -c 'import json; print(json.load(open("release/build/analysis-evidence/arm-core.json"))["root"])')
+          export BYO_TEST_ARM_GNU_ROOT
+          export BYO_TEST_FAILURES="$GITHUB_WORKSPACE/release/build/analysis-evidence/failed-inputs"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/analysis-evidence/installed.xml
 
       - name: Run retained Linux source features
         id: source-suite
@@ -595,7 +600,7 @@ jobs:
           BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/final-acceptance/fixture-inputs
         run: |
           uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -c "import os; from pathlib import Path; assert Path(os.environ['BYO_MCP_TEST_CLANGD_EXECUTABLE']).is_file(), 'native clangd prerequisite missing'"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -c "Firmware MCP New/pytest.ini" "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -c "Firmware MCP New/pytest.ini" -o addopts= --strict-markers -m 'not live' "Firmware MCP New/tests" --junitxml=release/build/final-acceptance/firmware-source.xml
 
       - name: Verify frozen inputs after native work
         if: ${{ always() && steps.firmware-checkout.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
@@ -730,21 +735,26 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.analysis.outcome == 'success' }}
         run: uv run --no-sync --project "Firmware MCP New" python release/scripts/build_installed_profile_fixture.py --analysis-input-dir "$RUNNER_TEMP/retained-analysis-inputs" --evidence release/build/retained-profile-fixture
       - name: Execute original retained installed and compiled contracts
-        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.arm.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.arm.outcome == 'success' && steps.profile.outcome == 'success' && steps.personal.outcome == 'success' }}
         run: |
           python - <<'PY'
-          import json, os
+          import json, os, subprocess
           from pathlib import Path
           profile = json.load(open("release/build/retained-profile-fixture/PROFILE-FIXTURE.json"))
           base = list(Path("release/build/retained-base-payload").rglob("release-manifest.json"))
           assert len(base) == 1, base
           arm = json.load(open("release/build/retained-arm.json"))["root"]
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
-              for key, value in {"BYO_INSTALLED_BUNDLE": base[0].parent.resolve(), "BYO_INSTALLED_OLD_BUNDLE": base[0].parent.resolve(), "BYO_INSTALLED_PROFESSIONAL_BUNDLE": profile["bundle"], "BYO_TEST_ARM_GNU_ROOT": arm, "BYO_TEST_WORKSPACE_SOURCE": Path("AgentWorkspace").resolve()}.items():
-                  out.write(f"{key}={value}\n")
+          environment = os.environ | {key: str(value) for key, value in {
+              "BYO_INSTALLED_BUNDLE": base[0].parent.resolve(),
+              "BYO_INSTALLED_OLD_BUNDLE": base[0].parent.resolve(),
+              "BYO_INSTALLED_UPGRADE_BUNDLE": profile["bundle"],
+              "BYO_INSTALLED_PROFESSIONAL_BUNDLE": profile["bundle"],
+              "BYO_TEST_ARM_GNU_ROOT": arm,
+              "BYO_TEST_WORKSPACE_SOURCE": Path("AgentWorkspace").resolve(),
+              "BYO_TEST_FAILURES": Path("release/build/retained-profiles/failed-inputs").resolve(),
+          }.items()}
+          subprocess.run(["uv", "run", "--no-sync", "--project", "Firmware MCP New", "python", "-m", "pytest", "-v", "release/scripts/test_installed_analysis.py", "--junitxml=release/build/retained-profiles/results.xml"], env=environment, check=True)
           PY
-          BYO_INSTALLED_BUNDLE=$(python -c 'import json; print(json.load(open("release/build/retained-profile-fixture/PROFILE-FIXTURE.json"))["bundle"])') \
-          uv run --no-sync --project "Firmware MCP New" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/retained-profiles/results.xml
 
       - name: Verify canonical source after all independent fixture work
         if: always()

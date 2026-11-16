@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fixture-minimal-20261116-05",
-  "source_parent": "b127226f559510a6ea2f42959cf0df741b19bbb3",
-  "predecessor_input_sha256": "76e344b856a10135c79accecc2cdc084312c162798faec20410da2d80ffebfb2",
+  "candidate": "fixture-minimal-20261116-06",
+  "source_parent": "a47cc8fc74e2cc5a213a47f861e86c1cefad8824",
+  "predecessor_input_sha256": "b5325cf16666d568d568b65352dfede0d03a79779c9116dfc6849d80a45e44de",
   "firmware_export": {
-    "commit": "3162c99abb8a932e608e14a38b6174afd686bed1",
+    "commit": "f2e41e1ace3305c207d4a56d51d86f35c5793707",
     "tree": "c10a84bc6e8a8d326d402100d6c5b99251a4f3fd"
   },
   "installer_source": {
-    "base_commit": "5542e326f3aab9e6c576322a5458cedd93336cfe",
+    "base_commit": "09f286715176a6df478427bba3a824d812bd072d",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture minimization; source fixtures only; no product build, FR/FT, installed/client/model/hardware acceptance",
@@ -26,12 +26,12 @@
       "sha256": "1702595719c882acbe0afc166fad5fe5227434055a8063df56844decdf0db66c"
     },
     ".github/workflows/README-triggers.md": {
-      "bytes": 7682,
-      "sha256": "ee8de424909f5d881f0481275fb6fe3bbf64705ea5b564c573a73f8b832c50c6"
+      "bytes": 7941,
+      "sha256": "a4d5a10881226ec06856ed1d2884e4c9a466b486ad3d4a23864b199901f702a6"
     },
     ".github/workflows/build-matrix.yml": {
-      "bytes": 57625,
-      "sha256": "2ab7c41a6764120cabb2779d16e31dc8846ce0979050e29feff530fff9e5ca63"
+      "bytes": 58538,
+      "sha256": "69835c8e6de6fbff30aaa24ab9075d72d5a6ac61f6244800b659b12c50fea9bc"
     },
     ".github/workflows/channel-expiry.yml": {
       "bytes": 1416,
@@ -2342,8 +2342,8 @@
       "sha256": "fe583b56493bee26fd975105911885ee455b977b0d10c00cf2823691f9c65657"
     },
     "release/scripts/test_installed_analysis.py": {
-      "bytes": 34086,
-      "sha256": "226796cb59c27a6c21b4e30328e1fa5258b0287d0396cabcbf0697a313ad4cac"
+      "bytes": 34254,
+      "sha256": "68774ce568e5b215f165f6d1070b73afe89a879682704e7e907c9baaf7140269"
     },
     "release/scripts/test_installed_e2e.py": {
       "bytes": 44826,
@@ -2363,7 +2363,7 @@
     },
     "release/source-lock.json": {
       "bytes": 362,
-      "sha256": "2a0fd0515b7bb87f2d77df08b9e6516526fa2b04b05753e5dfa15856c4419c33"
+      "sha256": "da6b49cf94d25504e8c1490442e2086092912fa6c6401abbce40fc7f84a829d7"
     },
     "rust-toolchain.toml": {
       "bytes": 90,
