@@ -71,7 +71,6 @@ class ArmInputContracts(unittest.TestCase):
             receipt = arm.acquire(target, output)
         return receipt, calls
 
-
     def test_verified_archives_bind_actual_compiler_bytes_on_all_four_targets(self):
         for target in arm.TARGETS:
             with self.subTest(target=target):

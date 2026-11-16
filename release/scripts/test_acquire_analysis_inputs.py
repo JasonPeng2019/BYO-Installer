@@ -65,6 +65,15 @@ class Response:
     def __exit__(self, *exc: object) -> None:
         self.stream.close()
 
+    def geturl(self) -> str:
+        return self.final_url
+
+    def read(self, size: int = -1) -> bytes:
+        if self.on_read is not None:
+            callback, self.on_read = self.on_read, None
+            callback()
+        return self.stream.read(size)
+
 
 def serve(payloads: dict[str, bytes], redirects: dict[str, str] | None = None):
     """Return a urlopen replacement serving bytes by request URL."""
@@ -172,7 +181,6 @@ class AcquisitionTests(unittest.TestCase):
             before,
         )
 
-
     def test_hash_mismatch_cannot_publish_and_cleans_temporary_file(self) -> None:
         payloads = self.urls()
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
@@ -196,7 +204,6 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), foreign)
         self.assertEqual(partials(self.output), [])
 
-
     def test_input_appearing_during_download_is_never_overwritten(self) -> None:
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
         racer = b"written by a concurrent invocation"
@@ -216,7 +223,6 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), racer)
         self.assertEqual(partials(self.output), [])
 
-
     def test_https_redirect_to_plain_http_is_refused(self) -> None:
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
         urlopen, _ = serve(
@@ -226,7 +232,6 @@ class AcquisitionTests(unittest.TestCase):
             self.acquire(urlopen)
         self.assertFalse((self.output / "clangd-windows.zip").exists())
         self.assertEqual(partials(self.output), [])
-
 
     def test_symlinked_archive_slot_is_refused_and_left_untouched(self) -> None:
         self.output.mkdir()
@@ -253,7 +258,6 @@ class CommandLineTests(unittest.TestCase):
             except SystemExit as exit_:
                 status = exit_.code
         return status, stdout.getvalue(), stderr.getvalue()
-
 
     def test_cli_success_prints_receipt_and_routes_expected_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -418,7 +422,6 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
                 for name in GCC_LIBRARY_NAMES
             ],
         )
-
 
     def test_compiler_query_failures_propagate_without_output(self) -> None:
         failures = {

@@ -368,7 +368,6 @@ class LockRejectionTests(unittest.TestCase):
                 tools.load_lock(path, target=target)["platform"], TARGETS[target][0]
             )
 
-
     def test_row_identity_must_match_its_key(self) -> None:
         for target in TARGETS:
             with self.subTest(target):
@@ -381,7 +380,6 @@ class LockRejectionTests(unittest.TestCase):
                     "windows-x86_64" if target != "windows-x86_64" else "linux-x86_64"
                 )
                 self.assert_rejected(document, "target record mismatch", other)
-
 
     def test_selected_paths_are_safe_owned_and_case_unique(self) -> None:
         cases = {
@@ -414,7 +412,6 @@ class LockRejectionTests(unittest.TestCase):
 
 
 class TargetAndNamespaceTests(unittest.TestCase):
-
     def test_runtime_mapping_is_per_target(self) -> None:
         for target in TARGETS:
             with self.subTest(target):
@@ -619,7 +616,6 @@ class LinuxClosureTests(unittest.TestCase):
         }
         self.validate(cppcheck_only, linux_closure_lock(()))
 
-
     def test_search_paths_must_select_the_private_lib_directory(self) -> None:
         cases = {
             "absolute runpath": ("/usr/lib", "Nonportable native search path"),
@@ -682,7 +678,6 @@ class MacOSClosureTests(unittest.TestCase):
             exe={"loads": ("@loader_path/../lib/libfoo.dylib",), "rpaths": ()}
         )
         self.validate(loader)
-
 
     def test_rpaths_and_install_names_stay_private(self) -> None:
         for rpath, pattern in (
@@ -1040,7 +1035,6 @@ class LinuxGccRuntimeInputTests(unittest.TestCase):
             )
             self.assertEqual(path.stat().st_mode & 0o7777, expected, path)
 
-
     def test_tampered_or_unrecorded_selected_library_hash_is_refused(self) -> None:
         for name in GCC_LIBRARIES:
             with self.subTest(name):
@@ -1063,6 +1057,7 @@ class LinuxGccRuntimeInputTests(unittest.TestCase):
             RuntimeError, "unrecorded GCC static runtime input"
         ):
             self.stage()
+
 
 APPLE_LIPO_FLAGS = frozenset(
     {
@@ -1585,7 +1580,6 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     receipt,
                 )
 
-
     WHEEL_DYLIB = (
         "sidecar/cmsis_pack_manager/cmsis_pack_manager/libcmsis_pack_manager.dylib"
     )
@@ -1711,7 +1705,6 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     json.loads((self.evidence / "cppcheck-build.json").read_text()),
                     receipt,
                 )
-
 
     def test_both_targets_stage_past_lipo_identity_and_thin_with_it(self) -> None:
         identity = {"path": str(self.lipo), "sha256": sha256(self.lipo.read_bytes())}
@@ -2300,7 +2293,6 @@ class LinuxSidecarZlibStagingTests(unittest.TestCase):
         self.assertIn(
             {"ref": reference, "dependsOn": [notice_ref]}, sbom["dependencies"]
         )
-
 
     def test_existing_destinations_and_linked_license_ancestors_are_rejected(
         self,

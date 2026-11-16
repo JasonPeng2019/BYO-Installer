@@ -870,6 +870,11 @@ jobs:
               for key in ("BYO_MCP_TEST_CLANGD_EXECUTABLE", "BYO_TEST_CLANGD"):
                   env.write(f"{key}={executable}\n")
           PY
+      - name: Acquire optional ARM prerequisite (absence remains UNRUN)
+        id: arm-fixture
+        continue-on-error: true
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: |
           uv run --no-sync --project "Firmware MCP New" python release/scripts/acquire_arm_test_toolchain.py --expected-target "$EXPECTED_TARGET" --output "$RUNNER_TEMP/fixture-arm" > release/build/fixture-cleanup/arm-input.json
           python - <<'PY'
           import json, os
@@ -900,8 +905,28 @@ jobs:
       - name: Run retained companion workflow fixtures
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
+          if ! command -v rg; then
+            case "$RUNNER_OS" in
+              macOS) brew install ripgrep ;;
+              Windows) choco install ripgrep -y --no-progress ;;
+              Linux) sudo apt-get update && sudo apt-get install --yes ripgrep ;;
+            esac
+          fi
           uv sync --project CodexClaudeWorkflow --locked --group dev
-          uv run --no-sync --project CodexClaudeWorkflow python -m pytest -o addopts= -v CodexClaudeWorkflow/tests --junitxml=release/build/fixture-cleanup/companion.xml
+          uv run --no-sync --project CodexClaudeWorkflow python -m pytest -o addopts= -v CodexClaudeWorkflow/tests --basetemp="$GITHUB_WORKSPACE/release/build/fixture-cleanup/companion-temp" --junitxml=release/build/fixture-cleanup/companion.xml
+      - name: Check retained companion fixture style
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.dependencies.outcome == 'success' }}
+        run: |
+          cd CodexClaudeWorkflow
+          uv run --no-sync python -m ruff check --diff tests > ../release/build/fixture-cleanup/companion-lint.patch || true
+          uv run --no-sync python -m ruff format --diff tests > ../release/build/fixture-cleanup/companion-format.patch || true
+          uv run --no-sync python -m ruff check tests
+          uv run --no-sync python -m ruff format --check tests
+      - name: Check Rust fixture syntax and formatting without compilation
+        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          cargo +1.97.1 fmt --manifest-path launcher/Cargo.toml --check > release/build/fixture-cleanup/rust-format.log 2>&1
       - name: Verify unchanged cleanup inputs after execution
         if: always()
         run: python -B bc01-ci/verify_frozen_sources.py --phase after-cleanup

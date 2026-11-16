@@ -1,4 +1,5 @@
 """Shared installed command/MCP transport; assertions live in the scenarios."""
+
 from __future__ import annotations
 
 import contextlib
@@ -14,9 +15,10 @@ import zipfile
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, TextIO
+
 
 class AcceptanceFailure(RuntimeError):
     pass
@@ -223,9 +225,15 @@ class OwnedChild:
             from ctypes import wintypes
 
             self.api = ctypes.WinDLL("kernel32", use_last_error=True)
-            self.api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            self.api.OpenProcess.argtypes = [
+                wintypes.DWORD,
+                wintypes.BOOL,
+                wintypes.DWORD,
+            ]
             self.api.OpenProcess.restype = wintypes.HANDLE
-            self.api.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            self.api.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+                ctypes.POINTER(wintypes.FILETIME)
+            ] * 4
             self.api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
             self.api.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             self.api.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -233,13 +241,17 @@ class OwnedChild:
             if not self.handle:
                 raise AcceptanceFailure(f"Cannot retain owned child handle: {self.pid}")
             times = [wintypes.FILETIME() for _ in range(4)]
-            if not self.api.GetProcessTimes(self.handle, *(ctypes.byref(t) for t in times)):
+            if not self.api.GetProcessTimes(
+                self.handle, *(ctypes.byref(t) for t in times)
+            ):
                 self.close()
                 raise AcceptanceFailure(f"Cannot observe owned child birth: {self.pid}")
             self.native_birth = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
             if not process.is_running() or process.create_time() != self.birth:
                 self.close()
-                raise AcceptanceFailure(f"Owned child changed during observation: {self.pid}")
+                raise AcceptanceFailure(
+                    f"Owned child changed during observation: {self.pid}"
+                )
 
     def alive(self):
         if self.handle is not None:
@@ -249,7 +261,9 @@ class OwnedChild:
             return result == 258
         import psutil
 
-        return self.process.is_running() and self.process.status() != psutil.STATUS_ZOMBIE
+        return (
+            self.process.is_running() and self.process.status() != psutil.STATUS_ZOMBIE
+        )
 
     def retire(self):
         # Called only after a failed natural-EOF assertion. A retained handle
@@ -273,15 +287,21 @@ class Mcp:
     def __init__(self, byo, project, env, version, *, logs):
         logs.mkdir(parents=True, exist_ok=True)
         self.path = logs / "protocol.jsonl"
-        self.server = start_initialized_mcp(byo, project, env, version,
-                                          diagnostics_path=logs / "stderr.log")
+        self.server = start_initialized_mcp(
+            byo, project, env, version, diagnostics_path=logs / "stderr.log"
+        )
         self.next_id = 1
         self.children = {}
         self.closed = False
 
     def request(self, method, params):
         self.next_id += 1
-        request = {"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params}
+        request = {
+            "jsonrpc": "2.0",
+            "id": self.next_id,
+            "method": method,
+            "params": params,
+        }
         process = self.server.process
         assert process.stdin is not None and process.stdout is not None
         with self.path.open("a", encoding="utf-8") as transcript:
@@ -301,7 +321,11 @@ class Mcp:
         result = self.request("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
             raise AcceptanceFailure(f"{name}: {result}")
-        text = "\n".join(item["text"] for item in result.get("content", []) if item.get("type") == "text")
+        text = "\n".join(
+            item["text"]
+            for item in result.get("content", [])
+            if item.get("type") == "text"
+        )
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -322,13 +346,20 @@ class Mcp:
         self.closed = True
         try:
             self.observe_children()
-            stop_mcp(self.server)  # Exits naturally, or raises before cleanup can mask it.
+            stop_mcp(
+                self.server
+            )  # Exits naturally, or raises before cleanup can mask it.
             deadline = time.monotonic() + 5
-            while any(child.alive() for child in self.children.values()) and time.monotonic() < deadline:
+            while (
+                any(child.alive() for child in self.children.values())
+                and time.monotonic() < deadline
+            ):
                 time.sleep(0.05)
             remaining = [child.pid for child in self.children.values() if child.alive()]
             if remaining:
-                raise AcceptanceFailure(f"Owned children survived natural MCP EOF: {remaining}")
+                raise AcceptanceFailure(
+                    f"Owned children survived natural MCP EOF: {remaining}"
+                )
         finally:
             cleanup_errors = []
             for child in self.children.values():
@@ -366,30 +397,72 @@ def installed_lab(bundle_variable="BYO_INSTALLED_BUNDLE"):
     if not supplied:
         pytest.skip(f"UNRUN installed prerequisite: supply {bundle_variable}")
     if os.name == "nt" and os.environ.get("GITHUB_ACTIONS") != "true":
-        pytest.skip("UNRUN Windows lab prerequisite: a disposable hosted account with native KnownFolders")
+        pytest.skip(
+            "UNRUN Windows lab prerequisite: a disposable hosted account with native KnownFolders"
+        )
     bundle = Path(supplied).resolve(strict=True)
-    manifest = json.loads((bundle / "release-manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (bundle / "release-manifest.json").read_text(encoding="utf-8")
+    )
     with installed_directory(prefix="byo-installed-") as root:
-        home, profile, temporary = (root / part for part in ("product", "profile", "temp"))
-        profile.mkdir(); temporary.mkdir()
-        allowed = ("PATH", "SystemRoot", "WINDIR", "COMSPEC", "PATHEXT", "LANG", "LC_ALL")
+        home, profile, temporary = (
+            root / part for part in ("product", "profile", "temp")
+        )
+        profile.mkdir()
+        temporary.mkdir()
+        allowed = (
+            "PATH",
+            "SystemRoot",
+            "WINDIR",
+            "COMSPEC",
+            "PATHEXT",
+            "LANG",
+            "LC_ALL",
+        )
         env = {key: os.environ[key] for key in allowed if key in os.environ}
-        env.update({"BYO_HOME": str(home), "HOME": str(profile), "USERPROFILE": str(profile),
-                    "APPDATA": str(profile / "roaming"), "LOCALAPPDATA": str(profile / "local"),
-                    "TMPDIR": str(temporary), "TEMP": str(temporary), "TMP": str(temporary),
-                    "PYTHONUTF8": "1"})
+        env.update(
+            {
+                "BYO_HOME": str(home),
+                "HOME": str(profile),
+                "USERPROFILE": str(profile),
+                "APPDATA": str(profile / "roaming"),
+                "LOCALAPPDATA": str(profile / "local"),
+                "TMPDIR": str(temporary),
+                "TEMP": str(temporary),
+                "TMP": str(temporary),
+                "PYTHONUTF8": "1",
+            }
+        )
         suffix = ".exe" if os.name == "nt" else ""
-        invoke([str(bundle / ("byo" + suffix)), "install-runtime", "--bundle", str(bundle)],
-               env=env, cwd=root, timeout=300)
+        invoke(
+            [
+                str(bundle / ("byo" + suffix)),
+                "install-runtime",
+                "--bundle",
+                str(bundle),
+            ],
+            env=env,
+            cwd=root,
+            timeout=300,
+        )
         byo = home / "bin" / ("byo" + suffix)
         current = json.loads((home / "data/current.json").read_text(encoding="utf-8"))
         runtime = home / "data" / current["relative_runtime"]
         assert byo.is_file() and runtime.is_dir(), current
         assert current["version"] == manifest["version"], current
-        assert (runtime / "release-manifest.json").read_bytes() == (bundle / "release-manifest.json").read_bytes()
-        yield SimpleNamespace(root=root, home=home, env=env, byo=byo, runtime=runtime,
-                              bundle=bundle, version=manifest["version"], manifest=manifest)
-
+        assert (runtime / "release-manifest.json").read_bytes() == (
+            bundle / "release-manifest.json"
+        ).read_bytes()
+        yield SimpleNamespace(
+            root=root,
+            home=home,
+            env=env,
+            byo=byo,
+            runtime=runtime,
+            bundle=bundle,
+            version=manifest["version"],
+            manifest=manifest,
+        )
 
 
 def sha256(path: Path) -> str:

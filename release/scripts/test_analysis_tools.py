@@ -199,7 +199,6 @@ class WindowsAnalysisTests(unittest.TestCase):
                 tools.mapping(lock),
             )
 
-
     def test_windows_native_missing_modified_or_unowned_dependencies_block(self):
         lock, data, files, sbom = fixture()
         with mock.patch.object(tools, "load_lock", return_value=lock):
@@ -224,7 +223,6 @@ class WindowsAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ownership mismatch"):
                 tools.validate_windows_native(files, data.__getitem__, unowned, True)
 
-
     def test_sbom_relationship_and_hash_required(self):
         for change in ("relationship", "hash"):
             lock, data, files, sbom = fixture()
@@ -234,7 +232,6 @@ class WindowsAnalysisTests(unittest.TestCase):
                 sbom["components"][1]["hashes"][0]["content"] = "0" * 64
             with self.assertRaisesRegex(RuntimeError, "SBOM"):
                 tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
 
     def test_pe_ordinary_and_delay_imports(self):
         parsed = tools.pe_imports(pe("KERNEL32.dll", "api-ms-win-core-file-l1-1-0.dll"))
@@ -251,7 +248,6 @@ class WindowsAnalysisTests(unittest.TestCase):
                 tools.pe_imports(bytes(data))
         with self.assertRaises(RuntimeError):
             tools.pe_imports(b"MZ")
-
 
     def test_adjacent_dependency_and_explicit_os_receipt(self):
         data = {

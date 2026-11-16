@@ -7,17 +7,17 @@ import argparse
 import hashlib
 import json
 import os
-import queue
 import shutil
-import subprocess
-import tempfile
-import threading
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TextIO
 
-from installed_support import AcceptanceFailure, InitializedMcp, invoke, read_line, start_initialized_mcp, stop_mcp, installed_directory
+from installed_support import (
+    AcceptanceFailure,
+    invoke,
+    start_initialized_mcp,
+    stop_mcp,
+    installed_directory,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS_LOCK = ROOT / "release/analysis-tools.lock.json"
@@ -28,8 +28,6 @@ LOCK_TARGETS = {
     ("macos", "x86_64"): ("macos-x86_64",),
     ("linux", "x86_64"): ("linux-x86_64", "linux-x86_64-glibc-2.28"),
 }
-
-
 
 
 def check_project_preservation(
@@ -312,16 +310,6 @@ def unexpected_development_files(
         ):
             unexpected.append(relative)
     return unexpected
-
-
-
-
-
-
-
-
-
-
 
 
 def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:

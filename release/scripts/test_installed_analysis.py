@@ -4,10 +4,10 @@ Uses supplied genuine bundles, a real vendor ARM compiler and the pinned source
 companion. Missing inputs are UNRUN prerequisites, never substituted by fakes.
 Product compilation, real models and physical boards are not launched here.
 """
+
 from __future__ import annotations
 
 import base64
-import contextlib
 import hashlib
 import json
 import os
@@ -35,25 +35,41 @@ def write_json(path, value):
 
 
 def snapshot(root):
-    return {p.relative_to(root).as_posix(): digest(p) for p in root.rglob("*") if p.is_file()}
+    return {
+        p.relative_to(root).as_posix(): digest(p)
+        for p in root.rglob("*")
+        if p.is_file()
+    }
 
 
 def protected_project(root):
-    return {path: sha for path, sha in snapshot(root).items()
-            if not path.startswith((".firm/code-analysis/", "build/.cache/clangd/index/"))}
-
+    return {
+        path: sha
+        for path, sha in snapshot(root).items()
+        if not path.startswith((".firm/code-analysis/", "build/.cache/clangd/index/"))
+    }
 
 
 def arm_compilers():
     supplied = os.environ.get("BYO_TEST_ARM_GNU_ROOT")
     if not supplied:
-        pytest.skip("UNRUN native input: supply the acquired GNU Arm 14.3.1 BYO_TEST_ARM_GNU_ROOT")
+        pytest.skip(
+            "UNRUN native input: supply the acquired GNU Arm 14.3.1 BYO_TEST_ARM_GNU_ROOT"
+        )
     suffix = ".exe" if os.name == "nt" else ""
     root = Path(supplied).resolve(strict=True)
-    compilers = {name: root / "bin" / ("arm-none-eabi-" + tool + suffix)
-                 for name, tool in (("gcc", "gcc"), ("gxx", "g++"))}
-    version = subprocess.run([str(compilers["gxx"]), "--version"], capture_output=True,
-                             text=True, encoding="utf-8", timeout=30, check=True)
+    compilers = {
+        name: root / "bin" / ("arm-none-eabi-" + tool + suffix)
+        for name, tool in (("gcc", "gcc"), ("gxx", "g++"))
+    }
+    version = subprocess.run(
+        [str(compilers["gxx"]), "--version"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        check=True,
+    )
     assert "14.3.1" in version.stdout, version
     return compilers
 
@@ -65,24 +81,61 @@ def project(lab, name, files, compilers, *, semantic=False):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text.replace("\n", "\r\n").encode("utf-8"))
     invoke([str(lab.byo), "init", "--project", str(root)], env=lab.env)
-    units = [(r, "gxx", ["-std=c++17"]) for r in files if r.endswith(".cpp")] if semantic else ARM_UNITS
-    include_query = invoke([str(compilers["gxx"]), "-mcpu=cortex-m4", "-mthumb", "-E", "-v", "-x", "c++", "-"],
-                           env=lab.env, cwd=root, stdin="")
+    units = (
+        [(r, "gxx", ["-std=c++17"]) for r in files if r.endswith(".cpp")]
+        if semantic
+        else ARM_UNITS
+    )
+    include_query = invoke(
+        [
+            str(compilers["gxx"]),
+            "-mcpu=cortex-m4",
+            "-mthumb",
+            "-E",
+            "-v",
+            "-x",
+            "c++",
+            "-",
+        ],
+        env=lab.env,
+        cwd=root,
+        stdin="",
+    )
     includes = parse_include_search(include_query.stderr)
     assert includes, include_query.stderr
     commands, database = [], []
     for relative, compiler, extra in units:
         output = root / "build" / (Path(relative).stem + ".o")
-        argv = [str(compilers[compiler]), *ARM_FLAGS, *extra, "-I", str(root / "include"),
-                "-I", str(root / "build/generated"), "-c", str(root / relative), "-o", str(output)]
+        argv = [
+            str(compilers[compiler]),
+            *ARM_FLAGS,
+            *extra,
+            "-I",
+            str(root / "include"),
+            "-I",
+            str(root / "build/generated"),
+            "-c",
+            str(root / relative),
+            "-o",
+            str(output),
+        ]
         for include in includes:
             argv += ["-I", include]
         commands.append(argv)
-        database.append({"directory": str(root), "file": str(root / relative),
-                         "arguments": argv, "output": str(output)})
+        database.append(
+            {
+                "directory": str(root),
+                "file": str(root / relative),
+                "arguments": argv,
+                "output": str(output),
+            }
+        )
     write_json(root / "build/compile_commands.json", database)
-    config = {"schema_version": 1, "compilation_database": "build/compile_commands.json",
-              "clangd": {"query_driver_paths": list(map(str, compilers.values()))}}
+    config = {
+        "schema_version": 1,
+        "compilation_database": "build/compile_commands.json",
+        "clangd": {"query_driver_paths": list(map(str, compilers.values()))},
+    }
     if not semantic:
         config["cppcheck"] = {"platform_file": "config/arm32.xml"}
     write_json(root / "byo-analysis.json", config)
@@ -95,14 +148,31 @@ def build_override(lab, root, commands):
     if os.name == "nt":
         compiler = shutil.which("rustc")
         if not compiler:
-            pytest.skip("UNRUN Windows input: rustc is needed for the native test build override")
+            pytest.skip(
+                "UNRUN Windows input: rustc is needed for the native test build override"
+            )
         source = lab.root / "build-override.rs"
         source.write_text(WINDOWS_OVERRIDE_RS, encoding="utf-8")
         built = lab.root / "build-override.exe"
-        invoke([compiler, "--edition=2021", "-C", "linker=rust-lld", "-C", "linker-flavor=lld-link",
-                str(source), "-o", str(built)], env={**os.environ, "VSCMD_SKIP_SENDTELEMETRY": "1"}, timeout=180)
+        invoke(
+            [
+                compiler,
+                "--edition=2021",
+                "-C",
+                "linker=rust-lld",
+                "-C",
+                "linker-flavor=lld-link",
+                str(source),
+                "-o",
+                str(built),
+            ],
+            env={**os.environ, "VSCMD_SKIP_SENDTELEMETRY": "1"},
+            timeout=180,
+        )
         shutil.copyfile(built, target)
-        (root / "build/override-commands.txt").write_text(windows_override_commands(commands), encoding="utf-8")
+        (root / "build/override-commands.txt").write_text(
+            windows_override_commands(commands), encoding="utf-8"
+        )
     else:
         target.write_text(posix_override_script(commands), encoding="utf-8")
         target.chmod(0o755)
@@ -111,15 +181,34 @@ def build_override(lab, root, commands):
 def verify(lab, root, target=".", *, owner="rust", expected=0):
     before = set((root / ".firm/code-analysis/reports").glob("*/result.json"))
     if owner == "rust":
-        argv = [str(lab.byo), "workflow", "tool", "verify", "--project", str(root), target]
+        argv = [
+            str(lab.byo),
+            "workflow",
+            "tool",
+            "verify",
+            "--project",
+            str(root),
+            target,
+        ]
     else:
         workspace = os.environ.get("BYO_TEST_WORKSPACE_SOURCE")
         if not workspace:
-            pytest.skip("UNRUN companion input: supply pinned BYO_TEST_WORKSPACE_SOURCE")
+            pytest.skip(
+                "UNRUN companion input: supply pinned BYO_TEST_WORKSPACE_SOURCE"
+            )
         driver = lab.root / "companion.py"
         driver.write_text(COMPANION_DRIVER, encoding="utf-8")
-        argv = [getattr(sys, "_base_executable", None) or sys.executable, "-I", "-B", str(driver),
-                str(Path(workspace).resolve()), str(lab.runtime), digest(lab.runtime / "release-manifest.json"), str(root), target]
+        argv = [
+            getattr(sys, "_base_executable", None) or sys.executable,
+            "-I",
+            "-B",
+            str(driver),
+            str(Path(workspace).resolve()),
+            str(lab.runtime),
+            digest(lab.runtime / "release-manifest.json"),
+            str(root),
+            target,
+        ]
     completed = invoke(argv, cwd=root, env=lab.env, expected=expected, timeout=180)
     created = set((root / ".firm/code-analysis/reports").glob("*/result.json")) - before
     assert len(created) == 1, (created, completed.stdout, completed.stderr)
@@ -127,7 +216,9 @@ def verify(lab, root, target=".", *, owner="rust", expected=0):
     assert result["executable_origin"] == "managed_runtime", result
     assert result["executable_sha256"] == digest(Path(result["executable"])), result
     if owner == "rust":
-        assert ("VERIFY: PASS" in completed.stdout + completed.stderr) == (expected == 0), completed
+        assert ("VERIFY: PASS" in completed.stdout + completed.stderr) == (
+            expected == 0
+        ), completed
     else:
         returned = json.loads(completed.stdout.splitlines()[-1])["result"]
         assert returned["status"] == result["status"], returned
@@ -136,28 +227,43 @@ def verify(lab, root, target=".", *, owner="rust", expected=0):
 
 def position(root, relative, line, token):
     text = (root / relative).read_text(encoding="utf-8").splitlines()[line - 1]
-    return {"file_path": relative, "line": line, "column": text.index(token) + 1, "timeout_seconds": 60}
+    return {
+        "file_path": relative,
+        "line": line,
+        "column": text.index(token) + 1,
+        "timeout_seconds": 60,
+    }
 
 
 def checked(value, root, source=None):
     assert value["status"] == "ok" and value["backend"] == "clangd", value
     assert Path(value["project_root"]).samefile(root), value
-    assert value["compilation_database_sha256"] == digest(root / "build/compile_commands.json"), value
+    assert value["compilation_database_sha256"] == digest(
+        root / "build/compile_commands.json"
+    ), value
     if source:
         assert value["source"]["sha256"] == digest(root / source), value
     return value
 
 
 def locations(value):
-    return {(Path(p["path"]).name, p["range"]["start"]["line"]) for p in value["data"]["locations"]}
+    return {
+        (Path(p["path"]).name, p["range"]["start"]["line"])
+        for p in value["data"]["locations"]
+    }
 
 
 def live_clangd(server, lab):
-    children = [child for child in server.observe_children()
-                if Path(child.image).name in ("clangd", "clangd.exe") and child.alive()]
+    children = [
+        child
+        for child in server.observe_children()
+        if Path(child.image).name in ("clangd", "clangd.exe") and child.alive()
+    ]
     assert len(children) == 1, [(c.pid, c.image, c.argv) for c in children]
     relative = lab.manifest["platform"] == "windows"
-    assert Path(children[0].image).samefile(lab.runtime / "analysis/clangd/bin" / ("clangd.exe" if relative else "clangd"))
+    assert Path(children[0].image).samefile(
+        lab.runtime / "analysis/clangd/bin" / ("clangd.exe" if relative else "clangd")
+    )
     return children[0]
 
 
@@ -168,24 +274,53 @@ def test_managed_semantics_saved_changes_database_transition_and_natural_eof():
         for command in commands:
             invoke(command, env=lab.env, cwd=root)
         source = root / "src/main.cpp"
-        source.write_bytes(source.read_bytes() + b"\n#ifdef BYO_CONTEXT_CHANGED\n#error actual_database_change\n#endif\n")
+        source.write_bytes(
+            source.read_bytes()
+            + b"\n#ifdef BYO_CONTEXT_CHANGED\n#error actual_database_change\n#endif\n"
+        )
         config = json.loads((root / "byo-analysis.json").read_text(encoding="utf-8"))
-        write_json(root / "byo-analysis.json", {**config, "clangd": {"query_driver_paths": []}})
+        write_json(
+            root / "byo-analysis.json", {**config, "clangd": {"query_driver_paths": []}}
+        )
         with Mcp(lab.byo, root, lab.env, lab.version, logs=lab.root / "mcp") as server:
             status = checked(server.tool("get_code_analysis_status", {}), root)
             assert status["data"]["executable_origin"] == "managed_runtime", status
-            control = server.tool("get_code_diagnostics", {"file_path": "src/main.cpp", "timeout_seconds": 60})
-            assert control["status"] == "incomplete" and control["code"] == "analysis/compile-context-missing", control
+            control = server.tool(
+                "get_code_diagnostics",
+                {"file_path": "src/main.cpp", "timeout_seconds": 60},
+            )
+            assert (
+                control["status"] == "incomplete"
+                and control["code"] == "analysis/compile-context-missing"
+            ), control
             write_json(root / "byo-analysis.json", config)
             query = position(root, "src/main.cpp", 2, "choose")
-            definition = checked(server.tool("find_code_definition", query), root, "src/main.cpp")
-            assert locations(definition) & {("symbols.hpp", 2), ("symbols.cpp", 2)}, definition
-            template = checked(server.tool("find_code_definition", position(root, "src/main.cpp", 2, "twice")), root)
+            definition = checked(
+                server.tool("find_code_definition", query), root, "src/main.cpp"
+            )
+            assert locations(definition) & {("symbols.hpp", 2), ("symbols.cpp", 2)}, (
+                definition
+            )
+            template = checked(
+                server.tool(
+                    "find_code_definition", position(root, "src/main.cpp", 2, "twice")
+                ),
+                root,
+            )
             assert ("symbols.hpp", 4) in locations(template), template
             hover = checked(server.tool("get_code_hover", query), root)
             assert "choose" in json.dumps(hover["data"]), hover
-            checked(server.tool("get_code_hover", position(root, "src/other.cpp", 2, "shared")), root)
-            refs_args = {**position(root, "src/main.cpp", 2, "shared"), "include_declaration": True, "max_results": 100}
+            checked(
+                server.tool(
+                    "get_code_hover", position(root, "src/other.cpp", 2, "shared")
+                ),
+                root,
+            )
+            refs_args = {
+                **position(root, "src/main.cpp", 2, "shared"),
+                "include_declaration": True,
+                "max_results": 100,
+            }
             deadline = time.monotonic() + 45
             while True:
                 refs = checked(server.tool("find_code_references", refs_args), root)
@@ -194,50 +329,88 @@ def test_managed_semantics_saved_changes_database_transition_and_natural_eof():
                 assert time.monotonic() < deadline, refs
                 time.sleep(0.3)
             assert refs["index_completeness"] == "unverified", refs
-            assert any(Path(p["path"]).name == "main.cpp" and p["range"]["start"] == {
-                "line": 2, "column": refs_args["column"]} for p in refs["data"]["locations"]), refs
+            assert any(
+                Path(p["path"]).name == "main.cpp"
+                and p["range"]["start"] == {"line": 2, "column": refs_args["column"]}
+                for p in refs["data"]["locations"]
+            ), refs
 
             def diagnose():
-                value = checked(server.tool("get_code_diagnostics", {"file_path": "src/main.cpp", "timeout_seconds": 60}), root, "src/main.cpp")
-                assert value["data"]["returned_count"] == len(value["data"]["diagnostics"]), value
+                value = checked(
+                    server.tool(
+                        "get_code_diagnostics",
+                        {"file_path": "src/main.cpp", "timeout_seconds": 60},
+                    ),
+                    root,
+                    "src/main.cpp",
+                )
+                assert value["data"]["returned_count"] == len(
+                    value["data"]["diagnostics"]
+                ), value
                 assert value["data"]["truncated"] is False, value
                 return value
 
             clean = diagnose()
             assert clean["data"]["diagnostics"] == [], clean
             first = live_clangd(server, lab)
-            assert any(a.startswith("--query-driver=") and str(compilers["gxx"]) in a for a in first.argv), first.argv
+            assert any(
+                a.startswith("--query-driver=") and str(compilers["gxx"]) in a
+                for a in first.argv
+            ), first.argv
             original = source.read_bytes()
             try:
-                source.write_bytes(original.replace(b"choose(2)", b"unknown_saved_symbol(2)"))
+                source.write_bytes(
+                    original.replace(b"choose(2)", b"unknown_saved_symbol(2)")
+                )
                 bad = diagnose()
-                assert any("unknown_saved_symbol" in d["message"] for d in bad["data"]["diagnostics"]), bad
+                assert any(
+                    "unknown_saved_symbol" in d["message"]
+                    for d in bad["data"]["diagnostics"]
+                ), bad
             finally:
                 source.write_bytes(original)
             restored = diagnose()
             assert restored["data"]["diagnostics"] == [], restored
-            assert clean["source"]["document_version"] < bad["source"]["document_version"] < restored["source"]["document_version"]
-            database = json.loads((root / "build/compile_commands.json").read_text(encoding="utf-8"))
+            assert (
+                clean["source"]["document_version"]
+                < bad["source"]["document_version"]
+                < restored["source"]["document_version"]
+            )
+            database = json.loads(
+                (root / "build/compile_commands.json").read_text(encoding="utf-8")
+            )
             database[0]["arguments"].append("-DBYO_CONTEXT_CHANGED=1")
             invoke(database[0]["arguments"], env=lab.env, cwd=root, expected=1)
             write_json(root / "build/compile_commands.json", database)
             changed = diagnose()
-            assert any("actual_database_change" in d["message"] for d in changed["data"]["diagnostics"]), changed
+            assert any(
+                "actual_database_change" in d["message"]
+                for d in changed["data"]["diagnostics"]
+            ), changed
             second = live_clangd(server, lab)
             assert (second.pid, second.birth) != (first.pid, first.birth)
             assert not first.alive() and second.alive()
-            peer = subprocess.Popen([second.image], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, env=lab.env, cwd=lab.root)
+            peer = subprocess.Popen(
+                [second.image],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=lab.env,
+                cwd=lab.root,
+            )
             try:
                 server.close()
-                assert peer.poll() is None, "natural server EOF affected the unrelated peer"
+                assert peer.poll() is None, (
+                    "natural server EOF affected the unrelated peer"
+                )
             finally:
                 assert peer.stdin is not None
                 peer.stdin.close()
                 try:
                     peer.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    peer.kill(); peer.wait(timeout=5)
+                    peer.kill()
+                    peer.wait(timeout=5)
 
 
 @pytest.mark.parametrize("owner", ["rust", "companion"])
@@ -250,16 +423,23 @@ def test_real_arm_build_clean_defect_restore_and_selected_scope(owner):
         original = source.read_bytes()
         before_database = digest(root / "build/compile_commands.json")
         try:
-            for data, status, expected in ((original, "pass", 0),
-                                           (original + DEFECT, "findings_failed", 13 if owner == "rust" else 1),
-                                           (original, "pass", 0)):
+            for data, status, expected in (
+                (original, "pass", 0),
+                (original + DEFECT, "findings_failed", 13 if owner == "rust" else 1),
+                (original, "pass", 0),
+            ):
                 source.write_bytes(data)
                 result = verify(lab, root, owner=owner, expected=expected)
                 assert result["status"] == status, result
                 if owner == "rust":
                     for relative, _, _ in ARM_UNITS:
-                        obj = (root / "build" / (Path(relative).stem + ".o")).read_bytes()
-                        assert obj[:6] == b"\x7fELF\x01\x01" and int.from_bytes(obj[18:20], "little") == 40
+                        obj = (
+                            root / "build" / (Path(relative).stem + ".o")
+                        ).read_bytes()
+                        assert (
+                            obj[:6] == b"\x7fELF\x01\x01"
+                            and int.from_bytes(obj[18:20], "little") == 40
+                        )
             # Source selection excludes the erroneous unselected unit; full
             # scope still detects it. Both independent verifiers own this rule.
             other = root / "src/heartbeat.cpp"
@@ -268,7 +448,9 @@ def test_real_arm_build_clean_defect_restore_and_selected_scope(owner):
                 other.write_bytes(saved + DEFECT)
                 result = verify(lab, root, "src/main.c", owner=owner)
                 assert result["status"] == "pass", result
-                result = verify(lab, root, owner=owner, expected=13 if owner == "rust" else 1)
+                result = verify(
+                    lab, root, owner=owner, expected=13 if owner == "rust" else 1
+                )
                 assert result["status"] == "findings_failed", result
             finally:
                 other.write_bytes(saved)
@@ -284,23 +466,39 @@ def test_failed_build_override_cannot_report_pass_with_clean_analysis():
         build_override(lab, root, commands)
         (root / "build/force-failure").touch()
         result = verify(lab, root, expected=13)
-        assert result["status"] == "pass", "the clean analyzer control isolates the failed build"
-        assert len((root / "build/override-invocations.log").read_text().splitlines()) == 1
+        assert result["status"] == "pass", (
+            "the clean analyzer control isolates the failed build"
+        )
+        assert (
+            len((root / "build/override-invocations.log").read_text().splitlines()) == 1
+        )
 
 
-@pytest.mark.parametrize("profile,bundle_variable", [
-    ("personal", "BYO_INSTALLED_BUNDLE"),
-    ("professional", "BYO_INSTALLED_PROFESSIONAL_BUNDLE"),
-])
-def test_compiled_profile_forwarding_passivity_and_private_records(profile, bundle_variable):
+@pytest.mark.parametrize(
+    "profile,bundle_variable",
+    [
+        ("personal", "BYO_INSTALLED_BUNDLE"),
+        ("professional", "BYO_INSTALLED_PROFESSIONAL_BUNDLE"),
+    ],
+)
+def test_compiled_profile_forwarding_passivity_and_private_records(
+    profile, bundle_variable
+):
     compilers = arm_compilers()
     with installed_lab(bundle_variable) as lab:
-        root, _ = project(lab, "private-installed-path", SEMANTIC, compilers, semantic=True)
-        lab.env.update({"BYO_TEST_NOT_FORWARDED": "private-test-value",
-                        "PYTHONPATH": str(lab.root / "poison"),
-                        "LD_LIBRARY_PATH": str(lab.root / "poison")})
+        root, _ = project(
+            lab, "private-installed-path", SEMANTIC, compilers, semantic=True
+        )
+        lab.env.update(
+            {
+                "BYO_TEST_NOT_FORWARDED": "private-test-value",
+                "PYTHONPATH": str(lab.root / "poison"),
+                "LD_LIBRARY_PATH": str(lab.root / "poison"),
+            }
+        )
         if os.name == "nt":
             from platformdirs import user_data_dir
+
             monitor = Path(user_data_dir("BYO", appauthor=False, roaming=False))
         elif sys.platform == "darwin":
             monitor = Path(lab.env["HOME"]) / "Library/Application Support/BYO"
@@ -308,26 +506,60 @@ def test_compiled_profile_forwarding_passivity_and_private_records(profile, bund
             monitor = Path(lab.env["HOME"]) / ".local/share/BYO"
         before_monitor = snapshot(monitor)
         before_project = protected_project(root)
-        with Mcp(lab.byo, root, lab.env, lab.version, logs=lab.root / "profile-mcp") as server:
+        with Mcp(
+            lab.byo, root, lab.env, lab.version, logs=lab.root / "profile-mcp"
+        ) as server:
             health = server.tool("server_health_check", {})
-            assert health["narrative_logging"] == ("enabled" if profile == "personal" else "not_built"), health
+            assert health["narrative_logging"] == (
+                "enabled" if profile == "personal" else "not_built"
+            ), health
             names = {tool["name"] for tool in server.request("tools/list", {})["tools"]}
             assert ("submit_routine_checkin" in names) == (profile == "personal"), names
             server.tool("initialization_handshake", {"workspace_path": str(root)})
-            checked(server.tool("get_code_hover", position(root, "src/main.cpp", 2, "choose")), root)
-            payloads = [entry["path"] for entry in lab.manifest["files"]
-                        if Path(entry["path"]).name in ("byo-mcp-sidecar", "byo-mcp-sidecar.exe")]
+            checked(
+                server.tool(
+                    "get_code_hover", position(root, "src/main.cpp", 2, "choose")
+                ),
+                root,
+            )
+            payloads = [
+                entry["path"]
+                for entry in lab.manifest["files"]
+                if Path(entry["path"]).name
+                in ("byo-mcp-sidecar", "byo-mcp-sidecar.exe")
+            ]
             assert len(payloads) == 1, payloads
-            sidecars = [child for child in server.observe_children()
-                        if Path(child.image).samefile(lab.runtime / payloads[0])]
+            sidecars = [
+                child
+                for child in server.observe_children()
+                if Path(child.image).samefile(lab.runtime / payloads[0])
+            ]
             assert len(sidecars) == 1, [(c.pid, c.image) for c in sidecars]
             # This is our credential-free test child, never a client/provider.
             forwarded = sidecars[0].process.environ()
-            for key in ("HOME", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
-                assert forwarded.get(key) == lab.env[key], (key, forwarded.get(key), lab.env[key])
-            assert not {"BYO_TEST_NOT_FORWARDED", "PYTHONPATH", "LD_LIBRARY_PATH"} & forwarded.keys()
-        assert protected_project(root) == before_project, "read-only installed MCP calls changed the project"
-        changed = [p for p, sha in snapshot(monitor).items() if before_monitor.get(p) != sha]
+            for key in (
+                "HOME",
+                "TEMP",
+                "TMP",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+            ):
+                assert forwarded.get(key) == lab.env[key], (
+                    key,
+                    forwarded.get(key),
+                    lab.env[key],
+                )
+            assert (
+                not {"BYO_TEST_NOT_FORWARDED", "PYTHONPATH", "LD_LIBRARY_PATH"}
+                & forwarded.keys()
+            )
+        assert protected_project(root) == before_project, (
+            "read-only installed MCP calls changed the project"
+        )
+        changed = [
+            p for p, sha in snapshot(monitor).items() if before_monitor.get(p) != sha
+        ]
         if profile == "personal":
             assert changed, "personal compiled monitor produced no persisted records"
         else:
@@ -341,55 +573,107 @@ def test_compiled_profile_forwarding_passivity_and_private_records(profile, bund
 
 def test_analysis_remains_available_in_canonical_no_setup_lite_and_full_inputs():
     compilers = arm_compilers()
-    inputs = json.loads((ROOT / "release/scripts/fixtures/code-analysis-installed/availability/manifest.json").read_text(encoding="utf-8"))
+    inputs = json.loads(
+        (
+            ROOT
+            / "release/scripts/fixtures/code-analysis-installed/availability/manifest.json"
+        ).read_text(encoding="utf-8")
+    )
     with installed_lab() as lab:
-        cases = [case for case in inputs["cases"] if case["profile"] == "personal"
-                 and case["state"] in ("no_setup", "setup_lite", "setup_full")]
-        assert {case["state"] for case in cases} == {"no_setup", "setup_lite", "setup_full"}
+        cases = [
+            case
+            for case in inputs["cases"]
+            if case["profile"] == "personal"
+            and case["state"] in ("no_setup", "setup_lite", "setup_full")
+        ]
+        assert {case["state"] for case in cases} == {
+            "no_setup",
+            "setup_lite",
+            "setup_full",
+        }
         for case in cases:
             root, _ = project(lab, case["state"], SEMANTIC, compilers, semantic=True)
             for relative, item in inputs["fixtures"][case["fixture"]].items():
                 path = (root / relative).resolve()
-                assert path.is_relative_to(root.resolve()) and relative.startswith(".firm/")
+                assert path.is_relative_to(root.resolve()) and relative.startswith(
+                    ".firm/"
+                )
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(base64.b64decode(item["base64"], validate=True))
             protected = snapshot(root / ".firm")
-            with Mcp(lab.byo, root, lab.env, lab.version, logs=lab.root / ("tier-" + case["state"])) as server:
-                capability = server.tool("get_capabilities", {"board_id": case["board_id"]})
+            with Mcp(
+                lab.byo,
+                root,
+                lab.env,
+                lab.version,
+                logs=lab.root / ("tier-" + case["state"]),
+            ) as server:
+                capability = server.tool(
+                    "get_capabilities", {"board_id": case["board_id"]}
+                )
                 assert capability["tier"] == case["state"].replace("_", "-"), capability
                 assert capability["board_id"] == case["board_id"], capability
-                checked(server.tool("get_code_hover", position(root, "src/main.cpp", 2, "choose")), root)
-            assert all((root / ".firm" / path).is_file() and digest(root / ".firm" / path) == sha for path, sha in protected.items()), "analysis mutated the passive board policy"
+                checked(
+                    server.tool(
+                        "get_code_hover", position(root, "src/main.cpp", 2, "choose")
+                    ),
+                    root,
+                )
+            assert all(
+                (root / ".firm" / path).is_file()
+                and digest(root / ".firm" / path) == sha
+                for path, sha in protected.items()
+            ), "analysis mutated the passive board policy"
 
 
 def test_genuine_distinct_version_activation_and_rollback_preserve_authored_state():
     supplied = os.environ.get("BYO_INSTALLED_OLD_BUNDLE")
     if not supplied:
-        pytest.skip("UNRUN upgrade prerequisite: supply a genuine distinct-version BYO_INSTALLED_OLD_BUNDLE")
+        pytest.skip(
+            "UNRUN upgrade prerequisite: supply a genuine distinct-version BYO_INSTALLED_OLD_BUNDLE"
+        )
     old = Path(supplied).resolve(strict=True)
-    old_version = json.loads((old / "release-manifest.json").read_text(encoding="utf-8"))["version"]
+    old_version = json.loads(
+        (old / "release-manifest.json").read_text(encoding="utf-8")
+    )["version"]
     with installed_lab() as lab:
         assert old_version != lab.version, "same-version reinstall is not upgrade proof"
-        invoke([str(lab.byo), "install-runtime", "--bundle", str(old)], env=lab.env, timeout=300)
+        invoke(
+            [str(lab.byo), "install-runtime", "--bundle", str(old)],
+            env=lab.env,
+            timeout=300,
+        )
         root = lab.root / "upgrade project"
         root.mkdir()
         invoke([str(lab.byo), "init", "--project", str(root)], env=lab.env)
-        authored = {".agent-workspace/PLAN.md": b"authored plan\n",
-                    ".agent-workspace/HANDOFF.md": b"authored handoff\n",
-                    ".firm/customer-state": b"preserve firmware state\n"}
+        authored = {
+            ".agent-workspace/PLAN.md": b"authored plan\n",
+            ".agent-workspace/HANDOFF.md": b"authored handoff\n",
+            ".firm/customer-state": b"preserve firmware state\n",
+        }
         for relative, data in authored.items():
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        for argv, version in ((["install-runtime", "--bundle", str(lab.bundle)], lab.version),
-                              (["rollback", "--version", old_version], old_version)):
+        for argv, version in (
+            (["install-runtime", "--bundle", str(lab.bundle)], lab.version),
+            (["rollback", "--version", old_version], old_version),
+        ):
             invoke([str(lab.byo), *argv], env=lab.env, timeout=300)
-            invoke([str(lab.byo), "workspace", "update", "--project", str(root)], env=lab.env)
-            current = json.loads((lab.home / "data/current.json").read_text(encoding="utf-8"))
+            invoke(
+                [str(lab.byo), "workspace", "update", "--project", str(root)],
+                env=lab.env,
+            )
+            current = json.loads(
+                (lab.home / "data/current.json").read_text(encoding="utf-8")
+            )
             assert current["version"] == version, current
-            invoke([str(lab.byo), "doctor", "--project", str(root), "--json"], env=lab.env)
+            invoke(
+                [str(lab.byo), "doctor", "--project", str(root), "--json"], env=lab.env
+            )
             for relative, data in authored.items():
                 assert (root / relative).read_bytes() == data, relative
+
 
 COMPANION_DRIVER = """import json, sys
 from pathlib import Path
@@ -501,8 +785,11 @@ def posix_override_script(commands: list[list[str]]) -> str:
         "set -eu",
         'printf "%s\\n" "${1:-}" >> build/override-invocations.log',
     ]
-    lines += ["test ! -f build/force-failure || exit 17", "mkdir -p build/generated",
-              "printf '%s\\n' '#define HEARTBEAT_STEP 3u' > build/generated/build_config.h"]
+    lines += [
+        "test ! -f build/force-failure || exit 17",
+        "mkdir -p build/generated",
+        "printf '%s\\n' '#define HEARTBEAT_STEP 3u' > build/generated/build_config.h",
+    ]
     lines += [" ".join(shlex.quote(a) for a in argv) for argv in commands]
     return "\n".join(lines) + "\n"
 
@@ -515,17 +802,24 @@ def windows_override_commands(commands: list[list[str]]) -> str:
     return "".join("\x1f".join(argv) + "\n" for argv in commands)
 
 
-
 def test_signed_clean_candidate():
     """The signed-release VM owns signature, exact archive and installed lifecycle proof."""
-    from installed_support import extract_exact, sha256, verify_platform, installed_directory
+    from installed_support import (
+        extract_exact,
+        sha256,
+        verify_platform,
+        installed_directory,
+    )
 
     supplied = os.environ.get("BYO_SIGNED_CANDIDATE")
     if not supplied:
         pytest.skip("UNRUN signed-release prerequisite: supply BYO_SIGNED_CANDIDATE")
     candidate = Path(supplied).resolve(strict=True)
-    archives = [p for p in candidate.rglob("byo-*")
-                if p.is_file() and (p.suffix == ".zip" or p.name.endswith(".tar.gz"))]
+    archives = [
+        p
+        for p in candidate.rglob("byo-*")
+        if p.is_file() and (p.suffix == ".zip" or p.name.endswith(".tar.gz"))
+    ]
     assert len(archives) == 1, archives
     archive = archives[0]
     stem = archive.name.removesuffix(".zip").removesuffix(".tar.gz")
@@ -537,5 +831,13 @@ def test_signed_clean_candidate():
         key = os.environ.get("BYO_RELEASE_PUBLIC_KEY")
         evidence = verify_platform(bundle, archive, Path(key) if key else None)
         (root / "signature.txt").write_text("\n".join(evidence), encoding="utf-8")
-        invoke([sys.executable, str(ROOT / "release/scripts/test_installed_e2e.py"),
-                "--bundle", str(bundle)], env=dict(os.environ), timeout=900)
+        invoke(
+            [
+                sys.executable,
+                str(ROOT / "release/scripts/test_installed_e2e.py"),
+                "--bundle",
+                str(bundle),
+            ],
+            env=dict(os.environ),
+            timeout=900,
+        )
