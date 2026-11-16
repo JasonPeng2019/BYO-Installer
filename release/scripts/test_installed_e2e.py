@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
+from installed_support import AcceptanceFailure, InitializedMcp, invoke, read_line, start_initialized_mcp, stop_mcp, installed_directory
+
 ROOT = Path(__file__).resolve().parents[2]
 ANALYSIS_LOCK = ROOT / "release/analysis-tools.lock.json"
 # Release manifest (platform, architecture) -> analysis build-lock target IDs.
@@ -28,8 +30,6 @@ LOCK_TARGETS = {
 }
 
 
-class AcceptanceFailure(RuntimeError):
-    pass
 
 
 def check_project_preservation(
@@ -314,169 +314,14 @@ def unexpected_development_files(
     return unexpected
 
 
-@dataclass
-class InitializedMcp:
-    """A running MCP server and its file-backed diagnostic capture."""
-
-    process: subprocess.Popen[str]
-    diagnostics: TextIO
-    initialization_raw: str = ""
 
 
-def invoke(
-    argv: list[str],
-    *,
-    env: dict[str, str],
-    cwd: Path | None = None,
-    stdin: str | None = None,
-    expected: int = 0,
-) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        argv,
-        cwd=cwd,
-        env=env,
-        input=stdin,
-        text=True,
-        # The launcher emits UTF-8 on every platform. Without an explicit
-        # encoding, text mode decodes with the locale codepage (cp1252 on the
-        # hosted Windows runner), which mojibakes non-ASCII receipt paths such
-        # as a Unicode project directory and breaks path-identity assertions.
-        encoding="utf-8",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=60,
-        check=False,
-    )
-    if completed.returncode != expected:
-        raise AcceptanceFailure(
-            f"{' '.join(argv)} returned {completed.returncode}, expected {expected}\n"
-            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
-        )
-    return completed
 
 
-def read_line(stream: Any, timeout: float = 30.0) -> str:
-    result: queue.Queue[object] = queue.Queue(maxsize=1)
-
-    def reader() -> None:
-        try:
-            result.put(stream.readline())
-        except BaseException as exc:
-            result.put(exc)
-
-    threading.Thread(target=reader, daemon=True).start()
-    try:
-        item = result.get(timeout=timeout)
-    except queue.Empty as exc:
-        raise AcceptanceFailure("MCP initialization response timed out") from exc
-    if isinstance(item, BaseException):
-        raise AcceptanceFailure(f"MCP response read failed: {item}") from item
-    if not item:
-        raise AcceptanceFailure("MCP server closed stdout before initialization")
-    return str(item)
 
 
-def start_initialized_mcp(
-    byo: Path,
-    project: Path,
-    env: dict[str, str],
-    expected_version: str,
-    *,
-    cwd: Path | None = None,
-    diagnostics_path: Path | None = None,
-) -> InitializedMcp:
-    # RegistryFastMCP redirects every non-protocol write to stderr so stdout
-    # remains valid JSON-RPC. A PIPE would therefore deadlock startup once the
-    # server fills the OS pipe before this harness gets around to reading it.
-    # Keep diagnostics for a useful failure report, but let the operating system
-    # write them directly to a temporary file instead of applying backpressure.
-    diagnostics = (
-        diagnostics_path.open("w+t", encoding="utf-8")
-        if diagnostics_path is not None
-        else tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
-    )
-    process = subprocess.Popen(
-        [str(byo), "mcp", "serve", "--project", str(project)],
-        env=env,
-        cwd=cwd or project,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=diagnostics,
-        text=True,
-        # Decode the sidecar's UTF-8 JSON-RPC stream explicitly; see invoke().
-        encoding="utf-8",
-        bufsize=1,
-    )
-    assert process.stdin is not None
-    assert process.stdout is not None
-    try:
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "byo-acceptance", "version": "1"},
-            },
-        }
-        process.stdin.write(json.dumps(request, separators=(",", ":")) + "\n")
-        process.stdin.flush()
-        initialization_raw = read_line(process.stdout)
-        response = json.loads(initialization_raw)
-        if response.get("id") != 1 or not isinstance(response.get("result"), dict):
-            raise AcceptanceFailure(
-                f"invalid MCP initialization response: {response!r}"
-            )
-        server_info = response["result"].get("serverInfo", {})
-        if server_info.get("version") != expected_version:
-            raise AcceptanceFailure(
-                f"MCP server version was not bound to the release: {server_info!r}"
-            )
-        process.stdin.write(
-            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n'
-        )
-        process.stdin.flush()
-    except Exception as exc:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=5)
-        diagnostics.seek(0)
-        diagnostic_text = diagnostics.read()
-        diagnostics.close()
-        raise AcceptanceFailure(
-            f"MCP initialization failed: {exc}\nstderr:\n{diagnostic_text}"
-        ) from exc
-    return InitializedMcp(
-        process=process, diagnostics=diagnostics, initialization_raw=initialization_raw
-    )
 
 
-def stop_mcp(server: InitializedMcp) -> None:
-    process = server.process
-    if process.stdin is not None:
-        process.stdin.close()
-    try:
-        try:
-            process.wait(timeout=20)
-        except subprocess.TimeoutExpired as exc:
-            process.kill()
-            process.wait(timeout=5)
-            raise AcceptanceFailure(
-                "MCP server did not stop after protocol EOF"
-            ) from exc
-        if process.returncode != 0:
-            server.diagnostics.seek(0)
-            diagnostics = server.diagnostics.read()
-            raise AcceptanceFailure(
-                f"MCP server returned {process.returncode} after EOF:\n{diagnostics}"
-            )
-    finally:
-        server.diagnostics.close()
 
 
 def wait_until_absent(path: Path, *, timeout: float = 10.0) -> None:
@@ -581,7 +426,7 @@ def main() -> int:
                 f"bundle leaked source or development files: {unexpected}"
             )
 
-    with tempfile.TemporaryDirectory(prefix="byo-installed-e2e-") as raw_root:
+    with installed_directory(prefix="byo-installed-e2e-") as raw_root:
         root = Path(raw_root)
         bootstrap_archive = root / "downloaded BYO bundle"
         shutil.copyfile(archive, bootstrap_archive)

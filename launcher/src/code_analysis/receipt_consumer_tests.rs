@@ -13,7 +13,17 @@ const FAKE: &str = r#"
 fn main() {
     let name = std::env::args().next().unwrap_or_default();
     let cppcheck = std::path::Path::new(&name).file_name().is_some_and(|n| n == "cppcheck");
-    if FAIL {
+    if MODE == 5 {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+    if MODE == 2 { println!("Cppcheck 2.21.0"); return; }
+    if MODE == 3 { println!("unrecognized version"); return; }
+    if MODE == 4 {
+        println!("Cppcheck 2.22.0");
+        eprintln!("unexpected version diagnostic");
+        return;
+    }
+    if MODE == 1 {
         println!("fixture output");
         eprintln!("fixture failure");
         std::process::exit(if cppcheck { 3 } else { 4 });
@@ -43,8 +53,12 @@ fn rustc() -> PathBuf {
 
 /// Compile each native fake once per test binary.
 fn fake(fail: bool) -> &'static Path {
-    static FAKES: [OnceLock<PathBuf>; 2] = [OnceLock::new(), OnceLock::new()];
-    FAKES[usize::from(fail)].get_or_init(|| {
+    fake_mode(usize::from(fail))
+}
+
+fn fake_mode(mode: usize) -> &'static Path {
+    static FAKES: [OnceLock<PathBuf>; 6] = [const { OnceLock::new() }; 6];
+    FAKES[mode].get_or_init(|| {
         let directory = std::env::temp_dir().join(format!(
             "byo-receipt-fake-{}-{:016x}",
             std::process::id(),
@@ -52,7 +66,7 @@ fn fake(fail: bool) -> &'static Path {
         ));
         fs::create_dir(&directory).unwrap();
         let source = directory.join("fake.rs");
-        fs::write(&source, format!("const FAIL: bool = {fail};\n{FAKE}")).unwrap();
+        fs::write(&source, format!("const MODE: usize = {mode};\n{FAKE}")).unwrap();
         let target = directory.join("fake");
         let output = std::process::Command::new(rustc())
             .args(["--edition", "2021", "-o"])
@@ -456,6 +470,34 @@ fn cppcheck_probe_failure_retains_its_receipt() {
     let retained = receipts(&error.details["owned_processes"]);
     assert_history(retained, &fixture, &[("version", 3)]);
     assert_unavailable(&fixture, &error, &[("version", 3)]);
+}
+
+#[test]
+fn version_errors_mismatch_and_deadline_cannot_admit_analysis() {
+    let fixture = fixture(false, false);
+    let mut program = runtime::resolve(&fixture.root, &fixture.release, &Budget::new()).unwrap();
+    let directory = fixture.root.join("version-control");
+    fs::create_dir(&directory).unwrap();
+    assert_eq!(probe(&program, &fixture.root, &Budget::new(), &directory, &mut Vec::new()).unwrap(), "2.22.0");
+    for (mode, expected) in [(1, "analysis/version-failed"), (2, "analysis/executable-unavailable"),
+                             (3, "analysis/version-failed"), (4, "analysis/version-failed"),
+                             (5, "analysis/timeout")] {
+        program.executable = fake_mode(mode).to_path_buf();
+        let mut budget = Budget::new();
+        budget.configure(if mode == 5 { 0.3 } else { 10.0 }).unwrap();
+        let directory = fixture.root.join(format!("version-{mode}"));
+        fs::create_dir(&directory).unwrap();
+        let started = Instant::now();
+        let mut events = Vec::new();
+        let error = probe(&program, &fixture.root, &budget, &directory, &mut events).unwrap_err();
+        assert_eq!(error.code, expected, "mode {mode}: {error:?}");
+        assert!(!events.is_empty(), "the actual owned probe must run");
+        if mode == 5 { assert!(started.elapsed() < Duration::from_secs(5)); }
+    }
+    program.executable = fake_mode(2).to_path_buf();
+    program.version = "2.21.0".into();
+    let error = probe(&program, &fixture.root, &Budget::new(), &directory, &mut Vec::new()).unwrap_err();
+    assert_eq!(error.code, "analysis/version-unsupported");
 }
 
 #[test]

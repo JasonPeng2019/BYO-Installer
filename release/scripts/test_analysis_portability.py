@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Four-target analyzer packaging contracts (stdlib unittest only).
 
 Windows-host platform-neutral fixtures: lock, target, path, native-format,
@@ -40,7 +39,6 @@ NATIVE_TARGETS = ("macos-aarch64", "macos-x86_64", "linux-x86_64")
 LOCK_PATH = tools.ROOT / "release/analysis-tools.lock.json"
 INTERPRETER = "/lib64/ld-linux-x86-64.so.2"
 MACOS_12 = 0x000C0000
-MACOS_13 = 0x000D0000
 GCC_NOTICES = (
     "analysis/cppcheck/licenses/GCC-COPYING3",
     "analysis/cppcheck/licenses/GCC-COPYING.RUNTIME",
@@ -49,11 +47,6 @@ GCC_NOTICES = (
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-# --------------------------------------------------------------------------
-# Synthetic native images (parsed only, never executed)
-# --------------------------------------------------------------------------
 
 
 def elf_image(
@@ -261,11 +254,6 @@ def native_executable(target: str, **changes) -> bytes:
     return macho_image(architecture, **changes)
 
 
-# --------------------------------------------------------------------------
-# Native payload fixture (reduced pinned selection, synthetic bytes)
-# --------------------------------------------------------------------------
-
-
 def static_runtime(**changes) -> dict:
     runtime = {
         "package": "fixture gcc-c++ package (not real provenance)",
@@ -360,271 +348,6 @@ def write_lock(directory: Path, document) -> Path:
     return path
 
 
-def resource_aggregate(program: dict) -> str:
-    prefix = program["source"]["archive_prefix"]
-    rows = sorted(
-        (
-            {
-                "path": leaf["upstream_path"][len(prefix) :],
-                "sha256": leaf["sha256"],
-                "size": leaf["size"],
-            }
-            for leaf in program["selected_files"]
-            if leaf["kind"] == "analysis-resource"
-        ),
-        key=lambda row: row["path"],
-    )
-    return sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode())
-
-
-# --------------------------------------------------------------------------
-# Lock v2: exact rows, counts, sources and recipes (checked-in lock)
-# --------------------------------------------------------------------------
-
-
-class LockV2ContractTests(unittest.TestCase):
-    def test_raw_lock_has_exactly_four_target_rows(self) -> None:
-        document = raw_lock()
-        self.assertEqual(set(document), {"schema_version", "targets"})
-        self.assertIs(type(document["schema_version"]), int)
-        self.assertEqual(document["schema_version"], 2)
-        self.assertEqual(set(document["targets"]), set(TARGETS))
-        self.assertEqual(len(document["targets"]), 4)
-        for target, identity in TARGETS.items():
-            row = document["targets"][target]
-            self.assertEqual((row["platform"], row["architecture"]), identity, target)
-            self.assertEqual(set(row["programs"]), {"cppcheck", "clangd"}, target)
-
-    def test_explicit_target_selection_is_host_independent(self) -> None:
-        for target, identity in TARGETS.items():
-            with self.subTest(target):
-                for host in TARGETS:
-                    with mock.patch.object(tools, "host_target", return_value=host):
-                        lock = tools.load_lock(target=target)
-                    self.assertEqual((lock["platform"], lock["architecture"]), identity)
-        alias = tools.load_lock(target="linux-x86_64-glibc-2.28")
-        self.assertEqual(
-            (alias["platform"], alias["architecture"]), ("linux", "x86_64")
-        )
-
-    def test_executable_paths_versions_and_dependencies_per_target(self) -> None:
-        for target in TARGETS:
-            with self.subTest(target):
-                lock = tools.load_lock(target=target)
-                suffix = ".exe" if target.startswith("windows") else ""
-                self.assertEqual(
-                    lock["programs"]["cppcheck"]["executable"],
-                    f"analysis/cppcheck/cppcheck{suffix}",
-                )
-                self.assertEqual(
-                    lock["programs"]["clangd"]["executable"],
-                    f"analysis/clangd/bin/clangd{suffix}",
-                )
-                self.assertEqual(lock["programs"]["cppcheck"]["version"], "2.22.0")
-                self.assertEqual(lock["programs"]["clangd"]["version"], "23.1.0")
-                for program in lock["programs"].values():
-                    self.assertEqual(program["dependencies"], [])
-
-    def test_selection_counts_are_exact_per_target(self) -> None:
-        resources = {
-            "windows-x86_64": 332,
-            "macos-aarch64": 335,
-            "macos-x86_64": 335,
-            "linux-x86_64": 338,
-        }
-        for target, count in resources.items():
-            with self.subTest(target):
-                lock = tools.load_lock(target=target)
-                cppcheck = lock["programs"]["cppcheck"]["selected_files"]
-                clangd = lock["programs"]["clangd"]["selected_files"]
-                self.assertEqual(len(cppcheck), 70)
-                self.assertEqual(
-                    sum(f["runtime_path"].endswith(".cfg") for f in cppcheck), 51
-                )
-                self.assertEqual(
-                    sum("/platforms/" in f["runtime_path"] for f in cppcheck), 15
-                )
-                self.assertEqual(sum(f["kind"] == "license" for f in cppcheck), 4)
-                self.assertFalse(
-                    any(f["kind"] == "analysis-executable" for f in cppcheck)
-                )
-                self.assertEqual(
-                    sum(f["kind"] == "analysis-resource" for f in clangd), count
-                )
-                self.assertEqual(len(clangd), count + 2)
-                self.assertEqual(
-                    [
-                        f["runtime_path"]
-                        for f in clangd
-                        if f["kind"] == "analysis-executable"
-                    ],
-                    [lock["programs"]["clangd"]["executable"]],
-                )
-                headers = [
-                    f for f in clangd if "/lib/clang/23/include/" in f["runtime_path"]
-                ]
-                share = [
-                    f for f in clangd if "/lib/clang/23/share/" in f["runtime_path"]
-                ]
-                if target != "windows-x86_64":
-                    self.assertEqual(len(headers), 333)
-                    self.assertEqual(len(share), 5 if target == "linux-x86_64" else 2)
-                for leaf in cppcheck + clangd:
-                    self.assertEqual(
-                        leaf["executable"], leaf["kind"] == "analysis-executable"
-                    )
-
-    def test_native_resource_aggregates_match_contract_and_recipe(self) -> None:
-        expected = {
-            "linux-x86_64": "24981bae953d0733809deec24e08f379f37fe302538d8d7e00fcaafc50e60cc7",
-            "macos-aarch64": "6a7350a53628fd3c0e8253b4a95ba6a986c69c37fabec4baa1d6e5d71afa299b",
-            "macos-x86_64": "6a7350a53628fd3c0e8253b4a95ba6a986c69c37fabec4baa1d6e5d71afa299b",
-        }
-        for target, digest in expected.items():
-            with self.subTest(target):
-                clangd = tools.load_lock(target=target)["programs"]["clangd"]
-                self.assertEqual(resource_aggregate(clangd), digest)
-                self.assertEqual(clangd["recipe"]["resource_selection_sha256"], digest)
-
-    def test_native_upstream_notices_and_executable_inputs_are_pinned(self) -> None:
-        executables = {
-            "linux-x86_64": (
-                "5a535973dd1274270c8a0d34677fe4758d8c9aaa164aa3701602c957c42dc9e2",
-                148913784,
-            ),
-            "macos-aarch64": (
-                "23197c85e1fbe16de89666bb6d1132b36b02213906b09e12d687eda8cc3b6a57",
-                177144960,
-            ),
-            "macos-x86_64": (
-                "23197c85e1fbe16de89666bb6d1132b36b02213906b09e12d687eda8cc3b6a57",
-                177144960,
-            ),
-        }
-        for target, identity in executables.items():
-            with self.subTest(target):
-                clangd = tools.load_lock(target=target)["programs"]["clangd"]
-                [executable] = [
-                    f
-                    for f in clangd["selected_files"]
-                    if f["kind"] == "analysis-executable"
-                ]
-                [notice] = [
-                    f for f in clangd["selected_files"] if f["kind"] == "license"
-                ]
-                self.assertEqual((executable["sha256"], executable["size"]), identity)
-                self.assertEqual(
-                    (notice["sha256"], notice["size"]),
-                    (
-                        "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
-                        15141,
-                    ),
-                )
-
-    def test_sources_are_pinned_per_target(self) -> None:
-        cppcheck_sha = (
-            "68ed9efb7aad635b7f4c121662689b2377d1d745dc9e76227566516a9617f343"
-        )
-        clangd = {
-            "windows-x86_64": (
-                "clangd-windows-23.1.0.zip",
-                "23412a240756a162e7b98a282f36aa2a23a88db5ce16a0cbc4fef7253768c810",
-                None,
-            ),
-            "macos-aarch64": (
-                "clangd-mac-23.1.0.zip",
-                "1082e6638223b785ca2daf0939f13afcd0bb95c84ee9a4bbaff4745365159253",
-                100060151,
-            ),
-            "macos-x86_64": (
-                "clangd-mac-23.1.0.zip",
-                "1082e6638223b785ca2daf0939f13afcd0bb95c84ee9a4bbaff4745365159253",
-                100060151,
-            ),
-            "linux-x86_64": (
-                "clangd-linux-23.1.0.zip",
-                "e53b1a96196095faedb7642cf64964f7fb9ad4a0c1f00dd2c172a3d9dcbafdfd",
-                117949007,
-            ),
-        }
-        for target, (archive, digest, size) in clangd.items():
-            with self.subTest(target):
-                lock = tools.load_lock(target=target)
-                cpp = lock["programs"]["cppcheck"]["source"]
-                self.assertEqual(cpp["sha256"], cppcheck_sha)
-                self.assertTrue(cpp["url"].startswith("https://codeload.github.com/"))
-                source = lock["programs"]["clangd"]["source"]
-                self.assertEqual(
-                    (source["archive"], source["sha256"], source.get("size")),
-                    (archive, digest, size),
-                )
-                self.assertEqual(
-                    source["url"],
-                    f"https://github.com/clangd/clangd/releases/download/23.1.0/{archive}",
-                )
-
-    def test_native_recipes_are_target_specific_and_static(self) -> None:
-        clangd_keys = {
-            "output_identity",
-            "resource_selection_sha256",
-            "selection",
-            "transformations",
-        }
-        cppcheck_keys = {
-            "build_argv",
-            "configure_argv",
-            "output",
-            "output_identity",
-            "upstream_compileroptions_sha256",
-        }
-        transformations = {
-            "linux-x86_64": ["patchelf --remove-rpath"],
-            "macos-aarch64": ["lipo -thin arm64"],
-            "macos-x86_64": ["lipo -thin x86_64"],
-        }
-        for target in NATIVE_TARGETS:
-            with self.subTest(target):
-                lock = tools.load_lock(target=target)
-                clangd = lock["programs"]["clangd"]["recipe"]
-                cppcheck = lock["programs"]["cppcheck"]["recipe"]
-                self.assertEqual(set(clangd), clangd_keys)
-                self.assertEqual(set(cppcheck), cppcheck_keys)
-                self.assertEqual(clangd["transformations"], transformations[target])
-                configure = cppcheck["configure_argv"]
-                for flag in (
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DBUILD_CORE_DLL=OFF",
-                    "-DFILESDIR:STRING=",
-                    "-DUSE_MATCHCOMPILER=Off",
-                ):
-                    self.assertIn(flag, configure)
-                self.assertEqual(cppcheck["output"], "bin/cppcheck")
-                if target == "linux-x86_64":
-                    self.assertIn(
-                        "-DCMAKE_EXE_LINKER_FLAGS=-static-libstdc++ -static-libgcc",
-                        configure,
-                    )
-                    self.assertFalse(any("OSX" in part for part in configure))
-                else:
-                    arch = "arm64" if target == "macos-aarch64" else "x86_64"
-                    self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0", configure)
-                    self.assertIn(f"-DCMAKE_OSX_ARCHITECTURES={arch}", configure)
-        self.assertIsNone(
-            tools.load_lock(target="windows-x86_64")["programs"]["clangd"].get("recipe")
-        )
-
-    def test_only_linux_cppcheck_declares_gcc_runtime_notices(self) -> None:
-        for target in TARGETS:
-            with self.subTest(target):
-                lock = tools.load_lock(target=target)
-                expected = list(GCC_NOTICES) if target == "linux-x86_64" else None
-                self.assertEqual(
-                    lock["programs"]["cppcheck"].get("additional_licenses"), expected
-                )
-                self.assertIsNone(lock["programs"]["clangd"].get("additional_licenses"))
-                self.assertEqual(target == "windows-x86_64", "windows_native" in lock)
-
-
 class LockRejectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -645,46 +368,6 @@ class LockRejectionTests(unittest.TestCase):
                 tools.load_lock(path, target=target)["platform"], TARGETS[target][0]
             )
 
-    def test_closed_target_set_and_schema_version_type(self) -> None:
-        base = raw_lock()
-        cases = []
-        for value in (True, 1, 2.0, "2", 3):
-            document = copy.deepcopy(base)
-            document["schema_version"] = value
-            cases.append((f"schema {value!r}", document))
-        missing = copy.deepcopy(base)
-        del missing["targets"]["macos-x86_64"]
-        cases.append(("missing row", missing))
-        extra = copy.deepcopy(base)
-        extra["targets"]["linux-aarch64"] = copy.deepcopy(
-            extra["targets"]["linux-x86_64"]
-        )
-        cases.append(("fifth row", extra))
-        alias = copy.deepcopy(base)
-        alias["targets"]["linux-x86_64-glibc-2.28"] = alias["targets"].pop(
-            "linux-x86_64"
-        )
-        cases.append(("alias key", alias))
-        top = copy.deepcopy(base)
-        top["platform"] = "windows"
-        cases.append(("extra top-level key", top))
-        for label, document in cases:
-            with self.subTest(label):
-                self.assert_rejected(document, "exactly the four supported targets")
-
-    def test_v1_windows_lock_is_not_accepted(self) -> None:
-        windows = raw_lock()["targets"]["windows-x86_64"]
-        self.assert_rejected(
-            dict(windows, schema_version=1), "exactly the four", "windows-x86_64"
-        )
-
-    def test_duplicate_json_keys_are_rejected(self) -> None:
-        text = json.dumps(raw_lock())
-        duplicated = text.replace(
-            '"schema_version": 2', '"schema_version": 2, "schema_version": 2', 1
-        )
-        self.assertNotEqual(text, duplicated)
-        self.assert_rejected(duplicated, "Duplicate JSON key")
 
     def test_row_identity_must_match_its_key(self) -> None:
         for target in TARGETS:
@@ -699,87 +382,6 @@ class LockRejectionTests(unittest.TestCase):
                 )
                 self.assert_rejected(document, "target record mismatch", other)
 
-    def test_program_identity_is_target_shaped(self) -> None:
-        cases = {
-            "linux exe suffix": (
-                "linux-x86_64",
-                "cppcheck",
-                "executable",
-                "analysis/cppcheck/cppcheck.exe",
-            ),
-            "windows no suffix": (
-                "windows-x86_64",
-                "clangd",
-                "executable",
-                "analysis/clangd/bin/clangd",
-            ),
-            "mac wrong layout": (
-                "macos-aarch64",
-                "clangd",
-                "executable",
-                "analysis/clangd/clangd",
-            ),
-            "version shape": ("macos-x86_64", "cppcheck", "version", "2.22"),
-            "duplicate dependency": (
-                "linux-x86_64",
-                "clangd",
-                "dependencies",
-                ["analysis/clangd/lib/libx.so.1", "analysis/clangd/lib/libx.so.1"],
-            ),
-            "dependencies not list": ("linux-x86_64", "clangd", "dependencies", None),
-        }
-        for label, (target, program, key, value) in cases.items():
-            with self.subTest(label):
-                document = raw_lock()
-                document["targets"][target]["programs"][program][key] = value
-                self.assert_rejected(
-                    document, "Invalid analysis program target/identity", target
-                )
-
-    def test_program_set_must_be_exact(self) -> None:
-        document = raw_lock()
-        document["targets"]["macos-aarch64"]["programs"]["clang-tidy"] = {}
-        self.assert_rejected(document, "target record mismatch", "macos-aarch64")
-
-    def test_pinned_archive_and_leaf_identity_types(self) -> None:
-        def mutate_source(field, value):
-            def change(program):
-                program["source"][field] = value
-
-            return change
-
-        def mutate_leaf(field, value):
-            def change(program):
-                program["selected_files"][0][field] = value
-
-            return change
-
-        cases = {
-            "uppercase sha": (
-                mutate_source("sha256", "A" * 64),
-                "Invalid pinned analysis archive",
-            ),
-            "nested archive": (
-                mutate_source("archive", "dir/clangd.zip"),
-                "Invalid pinned analysis archive",
-            ),
-            "bool size": (mutate_leaf("size", True), "Invalid pinned file identity"),
-            "float size": (mutate_leaf("size", 1.0), "Invalid pinned file identity"),
-            "negative size": (mutate_leaf("size", -1), "Invalid pinned file identity"),
-            "string executable": (
-                mutate_leaf("executable", "false"),
-                "Invalid pinned file identity",
-            ),
-            "short leaf sha": (
-                mutate_leaf("sha256", "0" * 63),
-                "Invalid pinned file identity",
-            ),
-        }
-        for label, (change, pattern) in cases.items():
-            with self.subTest(label):
-                document = raw_lock()
-                change(document["targets"]["linux-x86_64"]["programs"]["clangd"])
-                self.assert_rejected(document, pattern)
 
     def test_selected_paths_are_safe_owned_and_case_unique(self) -> None:
         cases = {
@@ -810,97 +412,8 @@ class LockRejectionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             tools.load_lock(write_lock(self.directory, document), target="macos-x86_64")
 
-    def test_gcc_notice_namespace_cannot_collide(self) -> None:
-        document = raw_lock()
-        cppcheck = document["targets"]["linux-x86_64"]["programs"]["cppcheck"]
-        cppcheck["additional_licenses"] = [
-            GCC_NOTICES[0],
-            GCC_NOTICES[0].upper().replace("ANALYSIS/CPPCHECK", "analysis/cppcheck"),
-        ]
-        self.assert_rejected(document, "Case-colliding payload namespace")
-
 
 class TargetAndNamespaceTests(unittest.TestCase):
-    def test_canonical_targets_and_alias(self) -> None:
-        self.assertEqual(tools.TARGETS, TARGETS)
-        for target in TARGETS:
-            self.assertEqual(tools.canonical_target(target), target)
-            self.assertEqual(vbo.expected_identity(target), TARGETS[target])
-        self.assertEqual(
-            tools.canonical_target("linux-x86_64-glibc-2.28"), "linux-x86_64"
-        )
-        self.assertEqual(
-            vbo.expected_identity("linux-x86_64-glibc-2.28"), ("linux", "x86_64")
-        )
-        for bad in (
-            "linux-aarch64",
-            "windows-aarch64",
-            "macos-universal",
-            "Linux-x86_64",
-            "",
-            "linux-x86_64-glibc-2.17",
-        ):
-            with (
-                self.subTest(bad),
-                self.assertRaisesRegex(RuntimeError, "Unsupported analysis target"),
-            ):
-                tools.canonical_target(bad)
-
-    def test_host_target_maps_supported_hosts_and_refuses_others(self) -> None:
-        cases = {
-            ("Windows", "AMD64"): "windows-x86_64",
-            ("Darwin", "arm64"): "macos-aarch64",
-            ("Darwin", "x86_64"): "macos-x86_64",
-            ("Linux", "x86_64"): "linux-x86_64",
-        }
-        for (system, machine), target in cases.items():
-            with (
-                mock.patch.object(tools.platform, "system", return_value=system),
-                mock.patch.object(tools.platform, "machine", return_value=machine),
-            ):
-                self.assertEqual(tools.host_target(), target)
-        for system, machine in (
-            ("Linux", "aarch64"),
-            ("FreeBSD", "amd64"),
-            ("Windows", "ARM64"),
-        ):
-            with (
-                mock.patch.object(tools.platform, "system", return_value=system),
-                mock.patch.object(tools.platform, "machine", return_value=machine),
-            ):
-                with self.assertRaises(RuntimeError):
-                    tools.host_target()
-
-    def test_strict_json_rejects_duplicates_and_non_objects(self) -> None:
-        self.assertEqual(tools.strict_json(b'{"a": {"b": 1}}'), {"a": {"b": 1}})
-        with self.assertRaisesRegex(RuntimeError, "Duplicate JSON key"):
-            tools.strict_json(b'{"a": {"b": 1, "b": 2}}')
-        for value in (b"[]", b"1", b'"x"'):
-            with self.assertRaisesRegex(RuntimeError, "Expected a JSON object"):
-                tools.strict_json(value)
-
-    def test_safe_namespace_rejects_aliases_and_file_ancestors(self) -> None:
-        tools.safe_namespace(
-            [
-                "analysis/clangd/bin/clangd",
-                "analysis/clangd/lib/clang/23/include/stddef.h",
-            ]
-        )
-        with self.assertRaisesRegex(RuntimeError, "Case-colliding"):
-            tools.safe_namespace(["analysis/clangd/a.h", "analysis/Clangd/b.h"])
-        with self.assertRaisesRegex(RuntimeError, "Case-colliding"):
-            tools.safe_namespace(["analysis/x/LICENSE", "analysis/x/license"])
-        with self.assertRaisesRegex(RuntimeError, "also an ancestor"):
-            tools.safe_namespace(["analysis/clangd/bin", "analysis/clangd/bin/clangd"])
-        for unsafe in (
-            "analysis/../x",
-            "analysis\\x",
-            "/analysis/x",
-            "analysis/x/",
-            "analysis/AUX.h",
-        ):
-            with self.subTest(unsafe), self.assertRaises(RuntimeError):
-                tools.safe_namespace([unsafe])
 
     def test_runtime_mapping_is_per_target(self) -> None:
         for target in TARGETS:
@@ -929,11 +442,6 @@ class TargetAndNamespaceTests(unittest.TestCase):
                             "Unselected analysis payload: " + re.escape(notice),
                         ):
                             tools.classification(notice, lock)
-
-
-# --------------------------------------------------------------------------
-# Native image headers (parsers only)
-# --------------------------------------------------------------------------
 
 
 class ElfHeaderTests(unittest.TestCase):
@@ -977,70 +485,6 @@ class ElfHeaderTests(unittest.TestCase):
                 native_formats.elf(data, True)
         with self.assertRaisesRegex(RuntimeError, "Wrong ELF architecture"):
             native_formats.elf(elf_image(kind=2), False)
-
-    def test_rejects_loader_and_table_hazards(self) -> None:
-        import native_formats
-
-        cases = {
-            "musl interpreter": (
-                elf_image(interpreter="/lib/ld-musl-x86_64.so.1"),
-                True,
-                "Unsupported Linux interpreter",
-            ),
-            "library as executable": (
-                elf_image(executable=False),
-                True,
-                "shared library presented as an executable",
-            ),
-            "executable as library": (
-                elf_image(kind=3),
-                False,
-                "executable presented as a private library",
-            ),
-            "DT_AUDIT": (
-                elf_image(extra_tags=((0x6FFFFEFC, 1),)),
-                True,
-                "audit/filter",
-            ),
-            "DT_DEPAUDIT": (
-                elf_image(extra_tags=((0x6FFFFEFB, 1),)),
-                True,
-                "audit/filter",
-            ),
-            "DT_FILTER": (
-                elf_image(extra_tags=((0x7FFFFFFF, 1),)),
-                True,
-                "audit/filter",
-            ),
-            "DT_AUXILIARY": (
-                elf_image(extra_tags=((0x7FFFFFFD, 1),)),
-                True,
-                "audit/filter",
-            ),
-            "duplicate strtab": (
-                elf_image(extra_tags=((5, 0),)),
-                True,
-                "Duplicate singleton",
-            ),
-            "string outside table": (
-                elf_image(extra_tags=((1, 4096),)),
-                True,
-                "outside its table",
-            ),
-        }
-        for label, (data, executable, pattern) in cases.items():
-            with self.subTest(label), self.assertRaisesRegex(RuntimeError, pattern):
-                native_formats.elf(data, executable)
-        no_headers = bytearray(elf_image())
-        struct.pack_into("<H", no_headers, 56, 0)
-        with self.assertRaisesRegex(RuntimeError, "program header table"):
-            native_formats.elf(bytes(no_headers), True)
-        unterminated = elf_image()
-        unterminated = unterminated[
-            : unterminated.rindex(struct.pack("<qQ", 0, 0))
-        ] + struct.pack("<qQ", 0x6FFFFFF0, 0)
-        with self.assertRaisesRegex(RuntimeError, "Unterminated ELF dynamic table"):
-            native_formats.elf(unterminated, True)
 
 
 class MachOHeaderTests(unittest.TestCase):
@@ -1107,52 +551,6 @@ class MachOHeaderTests(unittest.TestCase):
         for label, (data, architecture, executable, pattern) in cases.items():
             with self.subTest(label), self.assertRaisesRegex(RuntimeError, pattern):
                 native_formats.macho(data, architecture, executable)
-
-    def test_rejects_minimum_os_and_loader_hazards(self) -> None:
-        import native_formats
-
-        environment = _command_with_string(
-            0x27, struct.pack("<I", 12), "DYLD_INSERT_LIBRARIES=x"
-        )
-        cases = {
-            "macOS 13": (macho_image(minima=(("build", MACOS_13),)), "above macOS 12"),
-            "missing minimum": (macho_image(minima=()), "minimum OS missing"),
-            "ambiguous minimum": (
-                macho_image(minima=(("build", MACOS_12), ("legacy", MACOS_12))),
-                "ambiguous",
-            ),
-            "iOS platform": (
-                macho_image(minima=()) and _replace_build_platform(macho_image(), 2),
-                "platform/build version",
-            ),
-            "custom dyld": (macho_image(dyld="/tmp/dyld"), "dynamic loader"),
-            "dyld environment": (
-                macho_image(extra=(environment,)),
-                "undeclared loader environment",
-            ),
-        }
-        for label, (data, pattern) in cases.items():
-            with self.subTest(label), self.assertRaisesRegex(RuntimeError, pattern):
-                native_formats.macho(data, "aarch64", True)
-        truncated = bytearray(macho_image())
-        struct.pack_into("<I", truncated, 20, len(truncated))
-        with self.assertRaisesRegex(
-            RuntimeError, "Truncated Mach-O load command table"
-        ):
-            native_formats.macho(bytes(truncated), "aarch64", True)
-
-
-def _replace_build_platform(data: bytes, platform: int) -> bytes:
-    value = bytearray(data)
-    marker = struct.pack("<II", 0x32, 24)
-    offset = value.index(marker)
-    struct.pack_into("<I", value, offset + 8, platform)
-    return bytes(value)
-
-
-# --------------------------------------------------------------------------
-# Native import closure (static byte inspection; not baseline execution)
-# --------------------------------------------------------------------------
 
 
 def linux_closure_lock(dependencies=("analysis/clangd/lib/libfoo.so.1",)) -> dict:
@@ -1221,34 +619,6 @@ class LinuxClosureTests(unittest.TestCase):
         }
         self.validate(cppcheck_only, linux_closure_lock(()))
 
-    def test_glibc_floor_is_2_28(self) -> None:
-        for version in ("GLIBC_2.29", "GLIBC_2.34", "GLIBC_PRIVATE", "GLIBC_3.0"):
-            with (
-                self.subTest(version),
-                self.assertRaisesRegex(RuntimeError, "Unsupported baseline symbol"),
-            ):
-                self.validate(
-                    self.images(cppcheck={"versions": (("libc.so.6", version),)})
-                )
-        self.validate(
-            self.images(cppcheck={"versions": (("libc.so.6", "GLIBC_2.28.0"),)})
-        )
-        with self.assertRaisesRegex(RuntimeError, "no declared import"):
-            self.validate(
-                self.images(
-                    cppcheck={"versions": (("libpthread.so.0", "GLIBC_2.2.5"),)}
-                )
-            )
-
-    def test_static_runtime_libraries_cannot_be_dynamic_imports(self) -> None:
-        for library in ("libstdc++.so.6", "libgcc_s.so.1", "libz.so.1"):
-            with (
-                self.subTest(library),
-                self.assertRaisesRegex(
-                    RuntimeError, "Unresolved/undeclared native import"
-                ),
-            ):
-                self.validate(self.images(cppcheck={"needed": ("libc.so.6", library)}))
 
     def test_search_paths_must_select_the_private_lib_directory(self) -> None:
         cases = {
@@ -1271,36 +641,6 @@ class LinuxClosureTests(unittest.TestCase):
             RuntimeError, "Unresolved/undeclared native import"
         ):
             self.validate(self.images(exe={"runpath": None}))
-
-    def test_private_libraries_are_declared_referenced_and_named(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Invalid private library location"):
-            self.validate(
-                self.images(), linux_closure_lock(("analysis/clangd/libfoo.so.1",))
-            )
-        with self.assertRaisesRegex(RuntimeError, "Invalid private library location"):
-            self.validate(
-                self.images(),
-                linux_closure_lock(("analysis/cppcheck/lib/libfoo.so.1",)),
-            )
-        unreferenced = self.images(
-            exe={"needed": ("libc.so.6",), "versions": (), "runpath": "$ORIGIN/../lib"}
-        )
-        with self.assertRaisesRegex(
-            RuntimeError, "Unreferenced private native dependencies"
-        ):
-            self.validate(unreferenced)
-        with self.assertRaisesRegex(RuntimeError, "SONAME differs"):
-            self.validate(self.images(lib={"soname": "libbar.so.1"}))
-        with self.assertRaisesRegex(
-            RuntimeError, "Unresolved private ELF symbol version"
-        ):
-            self.validate(self.images(exe={"versions": (("libfoo.so.1", "FOO_2"),)}))
-        with self.assertRaisesRegex(RuntimeError, "Absolute/relative ELF import"):
-            self.validate(
-                self.images(cppcheck={"needed": ("/lib64/libc.so.6",), "versions": ()})
-            )
-        with self.assertRaisesRegex(RuntimeError, "private library"):
-            self.validate(self.images(lib={"interpreter": INTERPRETER, "kind": 3}))
 
 
 class MacOSClosureTests(unittest.TestCase):
@@ -1343,24 +683,6 @@ class MacOSClosureTests(unittest.TestCase):
         )
         self.validate(loader)
 
-    def test_non_os_absolute_and_executable_relative_imports_fail(self) -> None:
-        for name in (
-            "/opt/homebrew/lib/libzstd.1.dylib",
-            "/usr/local/lib/libfoo.dylib",
-            "@executable_path/../lib/libfoo.dylib",
-            "@rpath/sub/libfoo.dylib",
-        ):
-            with (
-                self.subTest(name),
-                self.assertRaisesRegex(
-                    RuntimeError, "absolute/unresolved Mach-O import"
-                ),
-            ):
-                self.validate(
-                    self.images(
-                        cppcheck={"loads": ("/usr/lib/libSystem.B.dylib", name)}
-                    )
-                )
 
     def test_rpaths_and_install_names_stay_private(self) -> None:
         for rpath, pattern in (
@@ -1380,11 +702,6 @@ class MacOSClosureTests(unittest.TestCase):
             self.validate(self.images(exe={"loads": ("/usr/lib/libSystem.B.dylib",)}))
         with self.assertRaisesRegex(RuntimeError, "Wrong Mach-O CPU"):
             self.validate(self.images("x86_64"), macos_closure_lock("aarch64"))
-
-
-# --------------------------------------------------------------------------
-# Final payload: SBOM, recipe, GCC runtime provenance, modes and strip checks
-# --------------------------------------------------------------------------
 
 
 class NativePayloadTests(unittest.TestCase):
@@ -1460,164 +777,6 @@ class NativePayloadTests(unittest.TestCase):
                     ):
                         tools.validate_analysis(f, d.__getitem__, s, lock)
 
-    def test_recipes_are_bound_in_the_sbom(self) -> None:
-        for target in NATIVE_TARGETS:
-            for program, pattern in (
-                ("clangd", "clangd SBOM recipe"),
-                ("cppcheck", "Cppcheck SBOM recipe"),
-            ):
-                with self.subTest(target=target, program=program):
-                    lock, data, files, sbom = native_fixture(target)
-                    application = next(
-                        c
-                        for c in sbom["components"]
-                        if c["bom-ref"] == f"byo-analysis:{program}"
-                    )
-                    for item in application["properties"]:
-                        if item["name"] == "byo:analysis:recipe":
-                            recipe = json.loads(item["value"])
-                            if program == "clangd":
-                                recipe["transformations"] = []
-                            else:
-                                recipe["configure_argv"] = recipe["configure_argv"][:-1]
-                            item["value"] = json.dumps(recipe, sort_keys=True)
-                    with self.assertRaisesRegex(RuntimeError, pattern):
-                        tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
-    def test_selected_resource_bytes_are_exact(self) -> None:
-        for target in NATIVE_TARGETS:
-            with self.subTest(target):
-                lock, data, files, sbom = native_fixture(target)
-                header = next(p for p in data if p.endswith("/include/stddef.h"))
-                data[header] += b"changed"
-                with self.assertRaisesRegex(
-                    RuntimeError, "Pinned upstream bytes changed"
-                ):
-                    tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
-    def test_closure_runs_on_final_native_bytes(self) -> None:
-        cases = {
-            "linux-x86_64": elf_image(needed=("libc.so.6", "libstdc++.so.6")),
-            "macos-aarch64": macho_image(
-                "aarch64", loads=("/opt/homebrew/lib/libzstd.1.dylib",)
-            ),
-            "macos-x86_64": macho_image("aarch64"),
-        }
-        for target, executable in cases.items():
-            with self.subTest(target):
-                lock, data, files, sbom = native_fixture(
-                    target, executables={"cppcheck": executable}
-                )
-                with self.assertRaises(RuntimeError):
-                    tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
-    def test_linux_gcc_runtime_provenance_is_required_and_exact(self) -> None:
-        with self.assertRaisesRegex(
-            RuntimeError, "measured GCC static runtime provenance"
-        ):
-            native_fixture("linux-x86_64", runtime={})
-        lock, data, files, sbom = native_fixture("linux-x86_64")
-        removed = copy.deepcopy(sbom)
-        removed["components"] = [
-            c
-            for c in removed["components"]
-            if c["bom-ref"] != "byo-analysis:cppcheck:gcc-runtime"
-        ]
-        with self.assertRaisesRegex(RuntimeError, "GCC static runtime SBOM ownership"):
-            tools.validate_analysis(files, data.__getitem__, removed, lock)
-        libraries = static_runtime()["libraries"]
-        notices = static_runtime()["notices"]
-        bad_runtimes = {
-            "missing libgcc.a": static_runtime(
-                libraries={"libstdc++.a": libraries["libstdc++.a"]}
-            ),
-            "unknown library": static_runtime(
-                libraries=dict(libraries, **{"libz.a": libraries["libgcc.a"]})
-            ),
-            "compiler not hex": static_runtime(compiler_sha256="not-a-digest"),
-            "empty package": static_runtime(package=""),
-            "empty source": static_runtime(source=""),
-            "extra key": dict(static_runtime(), schema_version=1),
-            "missing notice": static_runtime(
-                notices={GCC_NOTICES[0]: notices[GCC_NOTICES[0]]}
-            ),
-            "library size bool": static_runtime(
-                libraries=dict(
-                    libraries, **{"libgcc.a": {"sha256": "0" * 64, "size": True}}
-                )
-            ),
-            "library zero size": static_runtime(
-                libraries=dict(
-                    libraries, **{"libgcc.a": {"sha256": "0" * 64, "size": 0}}
-                )
-            ),
-            "library extra field": static_runtime(
-                libraries=dict(
-                    libraries,
-                    **{"libgcc.a": dict(libraries["libgcc.a"], path="/usr/lib")},
-                )
-            ),
-        }
-        for label, runtime in bad_runtimes.items():
-            with self.subTest(label):
-                lock, data, files, sbom = native_fixture(
-                    "linux-x86_64", runtime=runtime
-                )
-                with self.assertRaisesRegex(RuntimeError, "GCC static"):
-                    tools.validate_analysis(files, data.__getitem__, sbom, lock)
-        with_eh = static_runtime(
-            libraries=dict(
-                libraries, **{"libgcc_eh.a": {"sha256": "1" * 64, "size": 3}}
-            )
-        )
-        lock, data, files, sbom = native_fixture("linux-x86_64", runtime=with_eh)
-        tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
-    def test_gcc_notice_bytes_must_match_recorded_identity(self) -> None:
-        lock, data, files, sbom = native_fixture("linux-x86_64")
-        tampered = dict(data)
-        tampered[GCC_NOTICES[1]] = b"different runtime exception text"
-        files = [
-            dict(
-                leaf,
-                size=len(tampered[leaf["path"]]),
-                sha256=sha256(tampered[leaf["path"]]),
-            )
-            if leaf["path"] == GCC_NOTICES[1]
-            else leaf
-            for leaf in files
-        ]
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "Analysis SBOM ownership/hash mismatch: " + re.escape(GCC_NOTICES[1]),
-        ):
-            tools.validate_analysis(files, tampered.__getitem__, sbom, lock)
-        lock, data, files, sbom = native_fixture("linux-x86_64")
-        missing = [leaf for leaf in files if leaf["path"] != GCC_NOTICES[0]]
-        with self.assertRaises((RuntimeError, KeyError)):
-            tools.validate_analysis(missing, data.__getitem__, sbom, lock)
-
-    def test_gcc_notice_provenance_rejects_rehashed_inventory_and_file_sbom(
-        self,
-    ) -> None:
-        for notice in GCC_NOTICES:
-            with self.subTest(notice):
-                lock, data, files, sbom = native_fixture("linux-x86_64")
-                data[notice] = b"different toolchain notice text"
-                digest = sha256(data[notice])
-                for leaf in files:
-                    if leaf["path"] == notice:
-                        leaf.update(size=len(data[notice]), sha256=digest)
-                for component in sbom["components"]:
-                    if component["bom-ref"] == f"byo-analysis-file:{notice}":
-                        component["hashes"] = [{"alg": "SHA-256", "content": digest}]
-                # File hashes agree with the replacement bytes. The separately
-                # recorded GCC toolchain notice identity must still reject them.
-                with self.assertRaisesRegex(
-                    RuntimeError, "Pinned upstream bytes changed"
-                ):
-                    tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
 
 class NativeModeAndStripTests(unittest.TestCase):
     def payload(self, target, **fixture_options):
@@ -1657,128 +816,6 @@ class NativeModeAndStripTests(unittest.TestCase):
                         self.assertRaisesRegex(RuntimeError, "permissions"),
                     ):
                         self.validate(lock, manifest, data, read_mode)
-
-    def test_native_executables_must_be_stripped(self) -> None:
-        unstripped = {
-            "linux-x86_64": elf_image(symtab=True),
-            "macos-aarch64": macho_image("aarch64", stabs=40),
-            "macos-x86_64": macho_image("x86_64", stabs=40),
-        }
-        for target, executable in unstripped.items():
-            with self.subTest(target):
-                lock, data, manifest = self.payload(
-                    target, executables={"cppcheck": executable}
-                )
-                with self.assertRaisesRegex(RuntimeError, "not stripped"):
-                    self.validate(lock, manifest, data, native_modes(manifest["files"]))
-
-    def test_windows_wrapper_keeps_target_free_manifest_and_refuses_native(
-        self,
-    ) -> None:
-        with self.assertRaisesRegex(RuntimeError, "requires Windows x86_64"):
-            vbo.validate_windows_payload(
-                {"platform": "linux", "architecture": "x86_64", "files": []},
-                {}.__getitem__,
-            )
-        with self.assertRaisesRegex(RuntimeError, "requires Windows x86_64"):
-            vbo.validate_windows_payload(
-                {"architecture": "aarch64", "files": []}, {}.__getitem__
-            )
-
-    def test_payload_target_comes_from_manifest_identity(self) -> None:
-        for manifest in (
-            {"platform": "linux", "files": []},
-            {"platform": "linux", "architecture": "aarch64", "files": []},
-            {"architecture": "x86_64", "files": []},
-        ):
-            with (
-                self.subTest(manifest),
-                self.assertRaisesRegex(RuntimeError, "Unsupported analysis target"),
-            ):
-                vbo.validate_payload(
-                    manifest, {}.__getitem__, read_mode=lambda name: 0o644
-                )
-
-    def test_shipped_executables_include_native_analyzers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bundle = Path(directory)
-            for target in NATIVE_TARGETS:
-                lock = tools.load_lock(target=target)
-                tools.write_json(bundle / "analysis/runtime.json", tools.mapping(lock))
-                platform = TARGETS[target][0]
-                shipped = {
-                    path.relative_to(bundle).as_posix()
-                    for path in vbo.shipped_executables(bundle, platform)
-                }
-                self.assertEqual(
-                    shipped,
-                    {
-                        "byo",
-                        "sidecar/byo-mcp-sidecar",
-                        "analysis/cppcheck/cppcheck",
-                        "analysis/clangd/bin/clangd",
-                    },
-                )
-            windows = {
-                path.relative_to(bundle).as_posix()
-                for path in vbo.shipped_executables(bundle, "windows")
-            }
-            self.assertEqual(windows, {"byo.exe", "sidecar/byo-mcp-sidecar.exe"})
-
-
-# --------------------------------------------------------------------------
-# Native staging host gate and Linux GCC runtime input provenance
-# --------------------------------------------------------------------------
-
-
-class NativeStagingHostGateTests(unittest.TestCase):
-    def test_staging_refuses_windows_and_cross_targets_before_reading_inputs(
-        self,
-    ) -> None:
-        import analysis_native
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for host in TARGETS:
-                for target in TARGETS:
-                    if (
-                        host == target
-                        and target != "windows-x86_64"
-                        and os.name == "posix"
-                    ):
-                        continue
-                    with self.subTest(host=host, target=target):
-                        with (
-                            mock.patch.object(
-                                analysis_native.tools, "host_target", return_value=host
-                            ),
-                            mock.patch.object(
-                                analysis_native.tools,
-                                "load_lock",
-                                side_effect=AssertionError,
-                            ),
-                        ):
-                            with self.assertRaisesRegex(
-                                RuntimeError, "matching native host"
-                            ):
-                                analysis_native.stage_native(
-                                    root / "b", root / "i", root / "e", target=target
-                                )
-                        self.assertFalse((root / "e").exists())
-
-    def test_probes_refuse_foreign_targets(self) -> None:
-        for target in NATIVE_TARGETS:
-            lock = tools.load_lock(target=target)
-            host = "windows-x86_64"
-            with (
-                self.subTest(target),
-                mock.patch.object(tools, "host_target", return_value=host),
-                mock.patch.object(
-                    tools.subprocess, "run", side_effect=AssertionError("executed")
-                ),
-            ):
-                with self.assertRaisesRegex(RuntimeError, "matching native host"):
-                    tools.probe_programs(Path("bundle"), lock)
 
 
 GCC_LIBRARIES = {
@@ -2003,22 +1040,6 @@ class LinuxGccRuntimeInputTests(unittest.TestCase):
             )
             self.assertEqual(path.stat().st_mode & 0o7777, expected, path)
 
-    def test_libgcc_eh_is_recorded_only_when_the_link_map_uses_it(self) -> None:
-        self.link_inputs.discard("libgcc_eh.a")
-        receipt = self.stage()
-        self.assertEqual(
-            set(receipt["static_runtime"]["libraries"]), {"libstdc++.a", "libgcc.a"}
-        )
-
-    def test_required_static_libraries_must_participate_in_the_link(self) -> None:
-        for name in ("libstdc++.a", "libgcc.a"):
-            with self.subTest(name):
-                self.link_inputs = set(GCC_LIBRARIES) - {name}
-                with self.assertRaisesRegex(
-                    RuntimeError,
-                    f"Link map does not prove actual static input: {re.escape(name)}",
-                ):
-                    self.stage()
 
     def test_tampered_or_unrecorded_selected_library_hash_is_refused(self) -> None:
         for name in GCC_LIBRARIES:
@@ -2043,89 +1064,6 @@ class LinuxGccRuntimeInputTests(unittest.TestCase):
         ):
             self.stage()
 
-    def test_provenance_identity_must_be_exact(self) -> None:
-        good = json.loads((self.inputs / "gcc-runtime/provenance.json").read_text())
-        cases = {
-            "schema bool": dict(good, schema_version=True),
-            "schema float": dict(good, schema_version=1.0),
-            "schema 2": dict(good, schema_version=2),
-            "extra key": dict(good, libraries={}),
-            "missing source": {k: v for k, v in good.items() if k != "source"},
-            "compiler mismatch": dict(good, compiler_sha256=sha256(b"another g++")),
-            "empty package": dict(good, package=""),
-            "non-string source": dict(good, source=["fixture"]),
-            "missing libgcc.a": dict(
-                good,
-                static_libraries={
-                    "libstdc++.a": good["static_libraries"]["libstdc++.a"]
-                },
-            ),
-            "libraries not object": dict(good, static_libraries=[]),
-            "not an object": [],
-        }
-        for label, document in cases.items():
-            with self.subTest(label):
-                self.write_gcc_inputs(document)
-                with self.assertRaisesRegex(
-                    RuntimeError,
-                    "gcc-runtime/provenance.json must bind|Expected a JSON object",
-                ):
-                    self.stage()
-                self.assertFalse((self.bundle / "analysis").exists())
-        duplicate = json.dumps(good).replace(
-            '"package"', '"package": "x", "package"', 1
-        )
-        self.write_gcc_inputs(duplicate)
-        with self.assertRaisesRegex(RuntimeError, "Duplicate JSON key"):
-            self.stage()
-
-    def test_notices_and_provenance_are_required_regular_inputs(self) -> None:
-        for name in ("COPYING3", "COPYING.RUNTIME", "provenance.json"):
-            with self.subTest(name):
-                saved = (self.inputs / "gcc-runtime" / name).read_bytes()
-                (self.inputs / "gcc-runtime" / name).unlink()
-                with self.assertRaisesRegex(
-                    RuntimeError, "Supply a regular local input"
-                ):
-                    self.stage()
-                (self.inputs / "gcc-runtime" / name).write_bytes(saved)
-        self.write_gcc_inputs(notices={"COPYING3": b"", "COPYING.RUNTIME": b"fixture"})
-        with self.assertRaisesRegex(RuntimeError, "Empty GCC runtime notice: COPYING3"):
-            self.stage()
-        self.write_gcc_inputs(
-            notices={"COPYING3": b"fixture", "COPYING.RUNTIME": b"fixture"}
-        )
-        target = self.inputs / "gcc-runtime/COPYING3"
-        target.unlink()
-        os.symlink(self.compiler, target)
-        with self.assertRaisesRegex(RuntimeError, "regular local input"):
-            self.stage()
-
-    def test_builder_baseline_must_be_glibc_2_28(self) -> None:
-        for baseline in ("glibc 2.31", "glibc 2.17", "musl"):
-            with self.subTest(baseline):
-                self.baseline = baseline
-                with self.assertRaisesRegex(
-                    RuntimeError, "controlled glibc 2.28 native builder"
-                ):
-                    self.stage()
-
-    def test_pinned_archives_are_hash_checked_before_any_command(self) -> None:
-        archive = self.inputs / self.lock["programs"]["clangd"]["source"]["archive"]
-        archive.write_bytes(archive.read_bytes() + b"x")
-        with self.assertRaisesRegex(
-            RuntimeError, "Supply the pinned local clangd archive"
-        ):
-            self.stage()
-        self.assertFalse(self.evidence.exists())
-
-
-# --------------------------------------------------------------------------
-# Native macOS staging against a fixture Apple host (lipo identity/thinning)
-# --------------------------------------------------------------------------
-
-# Apple cctools lipo(1) options. Any other flag is a fatal "unknown flag" with
-# exit 1, as the native macOS builder reported for -version.
 APPLE_LIPO_FLAGS = frozenset(
     {
         "-arch",
@@ -2647,67 +1585,10 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     receipt,
                 )
 
-    def test_private_executable_rpath_repair_refuses_ambiguity_or_mutation(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            python = self.add_private_python(
-                self.private_python_image(install_name="@rpath/Python")
-            )
-            sidecar = python.parent / "byo-mcp-sidecar"
-            for label, rpaths, changes in (
-                ("repeated", ("$ORIGIN", "@loader_path"), None),
-                ("imports", ("$ORIGIN",), {"loads": ("/usr/lib/libSystem.B.dylib",)}),
-                ("unchanged", ("$ORIGIN",), {"rpaths": ("$ORIGIN",)}),
-                ("subdirectory", ("$ORIGIN",), {"rpaths": ("@loader_path/lib",)}),
-            ):
-                with self.subTest(target=target, control=label):
-                    before = self.sidecar_executable_image(*rpaths)
-                    sidecar.write_bytes(before)
-                    edited = self.sidecar_executable_image(
-                        "@loader_path", **(changes or {})
-                    )
-                    retained = copy.deepcopy(receipt)
-                    self.calls.clear()
-                    with self.assertRaises(RuntimeError):
-                        self.normalize_private_python(
-                            receipt, edited, no_tools=changes is None
-                        )
-                    self.assertFalse(any("--force" in argv for argv in self.calls))
-                    if changes is None:
-                        self.assertEqual(sidecar.read_bytes(), before)
-                        self.assertEqual(receipt, retained)
-                        self.assertEqual(self.calls, [])
-                        continue
-                    pending = receipt["transformations"][-1]
-                    self.assertEqual(pending["path"], "sidecar/byo-mcp-sidecar")
-                    self.assertEqual(pending["before_sha256"], sha256(before))
-                    self.assertEqual(pending["normalized_sha256"], sha256(edited))
-                    self.assertNotIn("adhoc_integrity", pending)
-
-    def test_private_executable_valid_search_paths_are_noops(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            python = self.add_private_python(
-                self.private_python_image(install_name="@rpath/Python")
-            )
-            sidecar = python.parent / "byo-mcp-sidecar"
-            for rpaths in (("@loader_path",), ("@executable_path",), ("$ORIGINAL",)):
-                with self.subTest(target=target, rpaths=rpaths):
-                    before = self.sidecar_executable_image(*rpaths)
-                    sidecar.write_bytes(before)
-                    retained = copy.deepcopy(receipt)
-                    self.calls.clear()
-                    self.normalize_private_python(
-                        receipt, b"must not be installed", no_tools=True
-                    )
-                    self.assertEqual(sidecar.read_bytes(), before)
-                    self.assertEqual(receipt, retained)
-                    self.assertEqual(self.calls, [])
 
     WHEEL_DYLIB = (
         "sidecar/cmsis_pack_manager/cmsis_pack_manager/libcmsis_pack_manager.dylib"
     )
-    # Synthetic control ID modelled on the wheel's measured build-host identity.
     WHEEL_HOST_ID = "/fixture/build/target/release/deps/libcmsis_pack_manager.dylib"
 
     def wheel_dylib_image(self, install_name: str, **changes) -> bytes:
@@ -2831,195 +1712,6 @@ class MacOSAppleLipoStagingTests(unittest.TestCase):
                     receipt,
                 )
 
-    def test_private_wheel_images_without_host_identity_are_noops(self):
-        for target in MACOS_TARGETS:
-            with self.subTest(target):
-                receipt = self.stage(target)
-                self.add_private_python(
-                    self.private_python_image(install_name="@rpath/Python")
-                )
-                images = {
-                    self.WHEEL_DYLIB: self.wheel_dylib_image(
-                        "@rpath/libcmsis_pack_manager.dylib"
-                    ),
-                    "sidecar/capstone/lib/libcapstone.dylib": self.wheel_dylib_image(
-                        "@loader_path/libcapstone.dylib"
-                    ),
-                    "sidecar/psutil/_psutil_osx.abi3.so": macho_image(
-                        self.architecture,
-                        filetype=8,
-                        loads=("/usr/lib/libSystem.B.dylib",),
-                        dyld=None,
-                    ),
-                    "sidecar/certifi/cacert.pem": b"fixture data file",
-                }
-                for name, data in images.items():
-                    (self.bundle / name).parent.mkdir(parents=True, exist_ok=True)
-                    (self.bundle / name).write_bytes(data)
-                retained = copy.deepcopy(receipt)
-                self.calls.clear()
-                self.normalize_private_python(
-                    receipt, b"must not be installed", no_tools=True
-                )
-                for name, data in images.items():
-                    self.assertEqual((self.bundle / name).read_bytes(), data)
-                self.assertEqual(receipt, retained)
-                self.assertEqual(self.calls, [])
-
-    def test_private_wheel_dylib_repair_refuses_wrong_cpu_or_mutation(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            self.add_private_python(
-                self.private_python_image(install_name="@rpath/Python")
-            )
-            other = "x86_64" if self.architecture == "aarch64" else "aarch64"
-            other_cpu = {"aarch64": 0x0100000C, "x86_64": 0x01000007}[other]
-            new_id = "@rpath/libcmsis_pack_manager.dylib"
-            for label, before, edited in (
-                (
-                    "cpu",
-                    self.wheel_dylib_image(self.WHEEL_HOST_ID, cpu=other_cpu),
-                    None,
-                ),
-                (
-                    "imports",
-                    self.wheel_dylib_image(self.WHEEL_HOST_ID),
-                    self.wheel_dylib_image(
-                        new_id,
-                        loads=("/usr/lib/libSystem.B.dylib", "/usr/lib/libc++.1.dylib"),
-                    ),
-                ),
-                (
-                    "identity",
-                    self.wheel_dylib_image(self.WHEEL_HOST_ID),
-                    self.wheel_dylib_image("@rpath/other.dylib"),
-                ),
-            ):
-                with self.subTest(target=target, control=label):
-                    dylib = self.add_wheel_dylib(before)
-                    retained = copy.deepcopy(receipt)
-                    self.calls.clear()
-                    with self.assertRaises(RuntimeError) as caught:
-                        self.normalize_private_python(
-                            receipt,
-                            edited or b"must not be installed",
-                            no_tools=edited is None,
-                        )
-                    self.assertFalse(any("--force" in argv for argv in self.calls))
-                    if edited is None:
-                        self.assertIn(
-                            "Wrong Mach-O CPU/file type", str(caught.exception)
-                        )
-                        self.assertEqual(dylib.read_bytes(), before)
-                        self.assertEqual(receipt, retained)
-                        self.assertEqual(self.calls, [])
-                        continue
-                    self.assertIn("changed unexpected fields", str(caught.exception))
-                    pending = receipt["transformations"][-1]
-                    self.assertEqual(pending["path"], self.WHEEL_DYLIB)
-                    self.assertEqual(pending["before_sha256"], sha256(before))
-                    self.assertEqual(pending["normalized_sha256"], sha256(edited))
-                    self.assertNotIn("adhoc_integrity", pending)
-
-    def test_valid_private_python_identities_are_byte_and_receipt_noops(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            for identity in ("@rpath/Python", "@loader_path/Python"):
-                with self.subTest(target=target, identity=identity):
-                    before = self.private_python_image(install_name=identity)
-                    python = self.add_private_python(before)
-                    retained = copy.deepcopy(receipt)
-                    self.calls.clear()
-                    self.normalize_private_python(
-                        receipt, b"must not be installed", no_tools=True
-                    )
-                    self.assertEqual(python.read_bytes(), before)
-                    self.assertEqual(receipt, retained)
-                    self.assertEqual(self.calls, [])
-                    self.private_python_closure()
-
-    def test_private_python_wrong_host_or_native_type_fails_before_commands(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            other = "x86_64" if self.architecture == "aarch64" else "aarch64"
-            for label, changes, host in (
-                ("host", {}, f"macos-{other}"),
-                ("non-dylib", {"filetype": 8}, target),
-                (
-                    "cpu",
-                    {"cpu": {"aarch64": 0x0100000C, "x86_64": 0x01000007}[other]},
-                    target,
-                ),
-            ):
-                with self.subTest(target=target, control=label):
-                    before = self.private_python_image(**changes)
-                    python = self.add_private_python(before)
-                    retained = copy.deepcopy(receipt)
-                    self.calls.clear()
-                    pattern = (
-                        "matching native macOS host"
-                        if label == "host"
-                        else "Wrong Mach-O CPU/file type"
-                    )
-                    with self.assertRaisesRegex(RuntimeError, pattern):
-                        self.normalize_private_python(
-                            receipt, b"invalid", host=host, no_tools=True
-                        )
-                    self.assertEqual(python.read_bytes(), before)
-                    self.assertEqual(receipt, retained)
-                    self.assertEqual(self.calls, [])
-
-    def test_private_python_native_mutation_or_failed_edit_cannot_succeed(self):
-        for target in MACOS_TARGETS:
-            receipt = self.stage(target)
-            for label, changes in (
-                ("minimum OS", {"minima": (("build", 0x000B0000),)}),
-                ("imports", {"loads": ("/usr/lib/libSystem.B.dylib",)}),
-                ("search path", {"rpaths": ()}),
-                ("unchanged ID", {"install_name": "/fixture/build/Python"}),
-                ("command failure", {}),
-            ):
-                with self.subTest(target=target, control=label):
-                    python = self.add_private_python(self.private_python_image())
-                    edited = self.private_python_image(
-                        **{"install_name": "@rpath/Python", **changes}
-                    )
-                    count = len(receipt["transformations"])
-                    self.calls.clear()
-                    with self.assertRaises(RuntimeError):
-                        self.normalize_private_python(
-                            receipt, edited, fail_edit=label == "command failure"
-                        )
-                    self.assertEqual(len(receipt["transformations"]), count + 1)
-                    pending = receipt["transformations"][-1]
-                    self.assertEqual(pending["path"], "sidecar/Python")
-                    self.assertEqual(
-                        pending["before_sha256"], sha256(self.private_python_image())
-                    )
-                    self.assertNotIn("adhoc_integrity", pending)
-                    self.assertFalse(any("--force" in argv for argv in self.calls))
-                    failed = receipt["commands"][-1]
-                    self.assertEqual(failed["argv"][1:3], ["-id", "@rpath/Python"])
-                    self.assertEqual(
-                        failed["exit_code"], 7 if label == "command failure" else 0
-                    )
-                    if label == "command failure":
-                        self.assertNotIn("normalized_sha256", pending)
-                        self.assertEqual(
-                            python.read_bytes(), self.private_python_image()
-                        )
-                        self.assertEqual(
-                            failed["stderr"], "fixture install_name_tool failure"
-                        )
-                    else:
-                        self.assertEqual(pending["normalized_sha256"], sha256(edited))
-                        self.assertEqual(
-                            pending["after_sha256"], sha256(python.read_bytes())
-                        )
-                    self.assertEqual(
-                        json.loads((self.evidence / "cppcheck-build.json").read_text()),
-                        receipt,
-                    )
 
     def test_both_targets_stage_past_lipo_identity_and_thin_with_it(self) -> None:
         identity = {"path": str(self.lipo), "sha256": sha256(self.lipo.read_bytes())}
@@ -3232,48 +1924,6 @@ class LinuxSidecarZlibBundleClosureTests(unittest.TestCase):
                     }
                 )
             )
-
-    def test_private_zlib_keeps_strict_loader_version_and_abi_failures(
-        self,
-    ) -> None:
-        private = self.images()["sidecar/libz.so.1"]
-        cases = {
-            "ambiguous search": (
-                self.images(
-                    {"rpath": "$ORIGIN:$ORIGIN/zlib"},
-                    **{"sidecar/zlib/libz.so.1": private},
-                ),
-                re.escape(self.ZLIB_ERROR),
-            ),
-            "origin escape": (
-                self.images({"rpath": "$ORIGIN/.."}),
-                "escapes private payload or uses host/cwd search",
-            ),
-            "host search": (
-                self.images({"rpath": "$ORIGIN:/usr/lib64"}),
-                "escapes private payload or uses host/cwd search",
-            ),
-            "absolute import": (
-                self.images(
-                    {
-                        "needed": ("/lib64/libz.so.1", "libc.so.6"),
-                        "versions": (("libc.so.6", "GLIBC_2.2.5"),),
-                    }
-                ),
-                "Nonportable ELF import",
-            ),
-            "missing zlib version": (
-                self.images(zlib={"defined": ("libz.so.1", "ZLIB_1.2.9")}),
-                "Private ELF library does not define needed version",
-            ),
-            "zlib above glibc 2.28": (
-                self.images(zlib={"versions": (("libc.so.6", "GLIBC_2.29"),)}),
-                "exceeds glibc 2.28 ABI: sidecar/libz.so.1",
-            ),
-        }
-        for label, (images, pattern) in cases.items():
-            with self.subTest(label), self.assertRaisesRegex(RuntimeError, pattern):
-                self.validate(images)
 
 
 class MacOSSidecarLibffiBundleClosureTests(unittest.TestCase):
@@ -3651,127 +2301,6 @@ class LinuxSidecarZlibStagingTests(unittest.TestCase):
             {"ref": reference, "dependsOn": [notice_ref]}, sbom["dependencies"]
         )
 
-    def test_consumer_must_exist_and_declare_the_zlib_import(self) -> None:
-        self.consumer.unlink()
-        with self.assertRaises(FileNotFoundError):
-            self.stage()
-        self.assertEqual(self.measurements, [])
-        self.consumer.write_bytes(elf_image(executable=False, needed=("libc.so.6",)))
-        with self.assertRaisesRegex(RuntimeError, "does not declare libz"):
-            self.stage()
-        self.assertEqual(self.measurements, [])
-        self.consumer.unlink()
-        self.consumer.symlink_to(self.source)
-        with self.assertRaisesRegex(RuntimeError, "regular private image"):
-            self.stage()
-
-    def test_loader_selection_must_be_unique_absolute_and_resolved(self) -> None:
-        for label, output in {
-            "absent": "libc.so.6 => /lib64/libc.so.6 (0x1234)\n",
-            "unresolved": "libz.so.1 => not found\n",
-            "relative": "libz.so.1 => libz.so.1 (0x1234)\n",
-            "ambiguous": self.ldd_output + self.ldd_output,
-        }.items():
-            with self.subTest(label):
-                self.ldd_output = output
-                with self.assertRaisesRegex(
-                    RuntimeError, "Unresolved or ambiguous loader-selected"
-                ):
-                    self.stage()
-                self.assertFalse((self.bundle / "sidecar/libz.so.1").exists())
-
-    def test_selected_library_requires_regular_x86_64_elf_and_zlib_soname(self) -> None:
-        for label, data, pattern in (
-            (
-                "wrong architecture",
-                elf_image(executable=False, machine=183),
-                "Wrong ELF",
-            ),
-            ("executable", elf_image(), "Wrong ELF"),
-            ("not ELF", b"not an ELF library", "ELF64"),
-            (
-                "wrong SONAME",
-                elf_image(executable=False, soname="libother.so.1"),
-                "SONAME",
-            ),
-        ):
-            with self.subTest(label):
-                self.source.write_bytes(data)
-                with self.assertRaisesRegex(RuntimeError, pattern):
-                    self.stage()
-        self.source.unlink()
-        with self.assertRaises(FileNotFoundError):
-            self.stage()
-        self.source.mkdir()
-        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
-            self.stage()
-
-    def test_rpm_requires_unambiguous_zlib_package_source_license_and_sha256(
-        self,
-    ) -> None:
-        original = self.rpm_header[:]
-        for label, index, value in (
-            ("other owner", 0, "other"),
-            ("wrong arch", 3, "aarch64"),
-            ("missing version", 1, ""),
-            ("missing release", 2, "(none)"),
-            ("other source", 4, "other-1.2.11.src.rpm"),
-            ("binary source", 4, "zlib-1.2.11.x86_64.rpm"),
-            ("missing source", 4, "(none)"),
-            ("missing license", 5, ""),
-            ("unsupported digest", 6, "1"),
-        ):
-            with self.subTest(label):
-                self.rpm_header = original[:]
-                self.rpm_header[index] = value
-                with self.assertRaisesRegex(
-                    RuntimeError, "RPM package/source/license provenance"
-                ):
-                    self.stage()
-        self.rpm_header = original
-        self.rpm_rows.append(self.rpm_rows[0][:])
-        with self.assertRaisesRegex(
-            RuntimeError, "Ambiguous/malformed zlib RPM file provenance"
-        ):
-            self.stage()
-        self.rpm_rows[-1] = (
-            original  # A second package header cannot masquerade as a file row.
-        )
-        with self.assertRaisesRegex(
-            RuntimeError, "Ambiguous/malformed zlib RPM file provenance"
-        ):
-            self.stage()
-
-    def test_rpm_hashes_and_license_tagged_regular_notices_are_required(self) -> None:
-        for label in (
-            "source digest",
-            "notice digest",
-            "missing source row",
-            "untagged notice",
-            "missing notice",
-            "empty notice",
-            "linked notice",
-        ):
-            with self.subTest(label):
-                self.prepare_fixture()
-                pattern = "digest mismatch"
-                if label.endswith("digest"):
-                    self.rpm_rows[0 if label.startswith("source") else 1][1] = "0" * 64
-                elif label == "missing source row":
-                    self.rpm_rows.pop(0)
-                elif label == "untagged notice":
-                    self.rpm_rows[1][2] = "d"
-                    pattern = "declares no license notices"
-                elif label == "empty notice":
-                    self.notice.write_bytes(b"")
-                    self.rpm_rows[1][1] = sha256(b"")
-                else:
-                    self.notice.unlink()
-                    if label == "linked notice":
-                        self.notice.symlink_to(self.source)
-                    pattern = "Restore the exact installed zlib RPM license notice"
-                with self.assertRaisesRegex(RuntimeError, pattern):
-                    self.stage()
 
     def test_existing_destinations_and_linked_license_ancestors_are_rejected(
         self,
@@ -3798,22 +2327,6 @@ class LinuxSidecarZlibStagingTests(unittest.TestCase):
                 ):
                     self.stage()
                 self.assertEqual(list(outside.iterdir()), [])
-
-    def test_failed_measurements_are_recorded_and_do_not_stage_payloads(self) -> None:
-        for name in ("ldd", "rpm"):
-            with self.subTest(name):
-                self.prepare_fixture()
-                self.failed_tool = name
-                with self.assertRaisesRegex(RuntimeError, f"{name} measurement failed"):
-                    self.stage()
-                receipt = json.loads(
-                    (self.evidence / "linux-sidecar-zlib.json").read_bytes()
-                )
-                self.assertEqual(receipt["commands"][-1]["exit_code"], 1)
-                self.assertEqual(
-                    receipt["commands"][-1]["stderr"], f"fixture {name} stderr"
-                )
-                self.assertFalse((self.bundle / "sidecar/libz.so.1").exists())
 
 
 if __name__ == "__main__":

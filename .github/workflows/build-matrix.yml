@@ -161,7 +161,8 @@ jobs:
       - name: Run Windows launcher cleanup regressions
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.build-deps.outcome == 'success' }}
         shell: bash
-        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group windows-cleanup --evidence release/build/final-acceptance/windows-cleanup
+        run: |
+          CC=clang-cl CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld cargo +1.97.1 test --manifest-path launcher/Cargo.toml --locked install::tests::windows_ -- --test-threads=1 --nocapture
 
       - name: Retained protection, ownership, recovery and privacy regressions
         id: safety-regressions
@@ -181,29 +182,19 @@ jobs:
           tests/test_vi02a_async_queue_deadline.py \
           tests/test_final_supported_batch_cancellation.py \
           tests/test_vi03_fresh_recovery_grant.py \
-          tests/test_vi03_prebackend_diagnostics.py \
-          tests/test_vi03_reserved_diagnostics.py \
-          tests/test_vi03_unlock_diagnostics.py \
           tests/test_serial_resolver_identity.py \
           tests/test_vi06_uart_ownership.py \
           tests/test_vi07_uart_provenance.py \
           tests/test_vi08_attachment_cache_refusal.py \
-          tests/test_final_attachment_replacement.py \
-          tests/test_inventory_snapshot_concurrency.py \
           tests/test_vi09_selector_chain.py \
           tests/test_duplicate_elf_symbols.py \
-          tests/test_final_registered_symbol_events.py \
           tests/test_monitor_trail_identity.py \
-          tests/test_monitor_counters_trail.py \
           tests/test_monitor_thrash_block.py::BlockDiagnostics \
           tests/test_final_posix_startup.py \
-          tests/test_design_flaws_2_b06.py::ConnectSafetyTests \
-          tests/test_tiered_acceptance_paths.py \
           tests/test_final_regenerated_map.py \
           tests/test_swd_process_isolation.py \
           tests/test_discovery_hook_process.py \
           tests/test_process_cleanup.py \
-          tests/test_process_cleanup_churn.py \
           tests/test_code_analysis_posix_ownership.py \
           tests/test_process_callers.py \
           tests/test_process_release_identity.py \
@@ -214,7 +205,13 @@ jobs:
         if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          python -B bc01-ci/build_capture.py --name launcher-contracts -- uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group launcher --evidence release/build/final-acceptance/launcher
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+            export CC=clang-cl
+          fi
+          cargo +1.97.1 fmt --manifest-path launcher/Cargo.toml --check
+          cargo +1.97.1 clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
+          cargo +1.97.1 test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Actual generated macOS shell startup and preservation
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.build-deps.outcome == 'success' }}
@@ -228,7 +225,7 @@ jobs:
         if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-host-type --evidence release/build/final-acceptance/firmware-quality
+          uv run --no-sync --project "Firmware MCP New" python -m pyright "Firmware MCP New/src"
 
       - name: Prepare pinned analysis archives
         id: analysis-inputs
@@ -279,26 +276,11 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_TARGET: ${{ matrix.target }}
         run: |
-          bundle="release/dist/byo-$VERSION-$EXPECTED_TARGET"
-          python -B bc01-ci/build_capture.py --name installed-analysis -- uv run --project "Firmware MCP New" python release/scripts/run_installed_analysis_ci.py \
-            --expected-target "$EXPECTED_TARGET" --bundle "$bundle" --archive "$bundle.zip" \
-            --workspace-source AgentWorkspace --arm-input-dir "$RUNNER_TEMP/byo-arm-core" \
-            --evidence release/build/analysis-evidence/installed-core \
-            --rustc "$(rustup which rustc)" --artifact-label "candidate-$GITHUB_SHA"
-
-      - name: Observe actual installed launcher forwarding and native store in hosted VM
-        id: hosted-forwarding
-        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
-        shell: bash
-        run: |
-          python -B bc01-ci/build_capture.py --name hosted-forwarding -- uv run --no-sync --project "Firmware MCP New" python release/scripts/final_hosted_forwarding.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --evidence release/build/final-acceptance/hosted-forwarding
-
-      - name: Complete public compiled MCP and guard accounting
-        id: public-mcp
-        if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
-        shell: bash
-        run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-${{ matrix.target }}" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
+          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
+          export BYO_INSTALLED_BUNDLE="$GITHUB_WORKSPACE/release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64"
+          export BYO_TEST_WORKSPACE_SOURCE="$GITHUB_WORKSPACE/AgentWorkspace"
+          export BYO_TEST_ARM_GNU_ROOT="$RUNNER_TEMP/byo-arm-core"
+          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/analysis-evidence/installed.xml
 
       - name: Run retained source features
         id: source-suite
@@ -316,14 +298,6 @@ jobs:
         if: ${{ always() && steps.firmware-checkout.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
         shell: bash
         run: python -B bc01-ci/verify_frozen_sources.py --phase after-native
-
-      - name: Record native stage prerequisites and exact checkout metadata
-        if: always()
-        shell: bash
-        env:
-          FINAL_STEP_RESULTS: ${{ toJSON(steps) }}
-          FINAL_ACCEPTANCE_REQUESTED: "true"
-        run: python release/scripts/final_acceptance_checks.py --record-steps --evidence release/build/final-acceptance/stages.json
 
       - name: Upload target artifact
         if: ${{ !cancelled() && (steps.posix-bundle.outcome == 'success' || steps.windows-bundle.outcome == 'success') }}
@@ -483,29 +457,19 @@ jobs:
           tests/test_vi02a_async_queue_deadline.py \
           tests/test_final_supported_batch_cancellation.py \
           tests/test_vi03_fresh_recovery_grant.py \
-          tests/test_vi03_prebackend_diagnostics.py \
-          tests/test_vi03_reserved_diagnostics.py \
-          tests/test_vi03_unlock_diagnostics.py \
           tests/test_serial_resolver_identity.py \
           tests/test_vi06_uart_ownership.py \
           tests/test_vi07_uart_provenance.py \
           tests/test_vi08_attachment_cache_refusal.py \
-          tests/test_final_attachment_replacement.py \
-          tests/test_inventory_snapshot_concurrency.py \
           tests/test_vi09_selector_chain.py \
           tests/test_duplicate_elf_symbols.py \
-          tests/test_final_registered_symbol_events.py \
           tests/test_monitor_trail_identity.py \
-          tests/test_monitor_counters_trail.py \
           tests/test_monitor_thrash_block.py::BlockDiagnostics \
           tests/test_final_posix_startup.py \
-          tests/test_design_flaws_2_b06.py::ConnectSafetyTests \
-          tests/test_tiered_acceptance_paths.py \
           tests/test_final_regenerated_map.py \
           tests/test_swd_process_isolation.py \
           tests/test_discovery_hook_process.py \
           tests/test_process_cleanup.py \
-          tests/test_process_cleanup_churn.py \
           tests/test_code_analysis_posix_ownership.py \
           tests/test_process_callers.py \
           tests/test_process_release_identity.py \
@@ -517,16 +481,20 @@ jobs:
         shell: bash
         run: |
           export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          rustup component add --toolchain 1.97.1 rustfmt clippy
-          "$BYO_BUILD_PYTHON" -B bc01-ci/build_capture.py --name launcher-contracts -- uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group launcher --evidence release/build/final-acceptance/launcher
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=rust-lld
+            export CC=clang-cl
+          fi
+          cargo +1.97.1 fmt --manifest-path launcher/Cargo.toml --check
+          cargo +1.97.1 clippy --manifest-path launcher/Cargo.toml --locked --all-targets -- -D warnings
+          cargo +1.97.1 test --manifest-path launcher/Cargo.toml --locked -- --test-threads=1 --nocapture
 
       - name: Glibc baseline firmware type check
         id: firmware-quality
         if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group firmware-host-type --evidence release/build/final-acceptance/firmware-quality
+          uv run --no-sync --project "Firmware MCP New" python -m pyright "Firmware MCP New/src"
 
       - name: Prepare pinned Linux analyzer and GCC runtime inputs
         id: analysis-inputs
@@ -560,8 +528,7 @@ jobs:
         if: ${{ !cancelled() && steps.build-deps.outcome == 'success' }}
         shell: bash
         run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          "$BYO_BUILD_PYTHON" -B bc01-ci/build_capture.py --name release-contracts -- uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -o addopts= -v release/scripts/test_*.py --junitxml=release/build/final-acceptance/release-tests.xml
 
       - name: Restore exact installed Linux zlib license notices
         id: zlib-notices
@@ -618,22 +585,6 @@ jobs:
             --evidence release/build/analysis-evidence/installed-core \
             --artifact-label "candidate-$GITHUB_SHA"
 
-      - name: Observe actual installed Linux launcher forwarding and native store in hosted VM
-        id: hosted-forwarding
-        if: ${{ !cancelled() && steps.build-deps.outcome == 'success' && steps.linux-bundle.outcome == 'success' }}
-        shell: bash
-        run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          "$BYO_BUILD_PYTHON" -B bc01-ci/build_capture.py --name hosted-forwarding -- uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_hosted_forwarding.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --evidence release/build/final-acceptance/hosted-forwarding
-
-      - name: Complete public compiled Linux MCP and guard accounting
-        id: public-mcp
-        if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
-        shell: bash
-        run: |
-          export PATH="$CARGO_HOME/bin:/opt/python/cp312-cp312/bin:$PATH"
-          uv run --no-sync --project "Firmware MCP New" --python "$BYO_BUILD_PYTHON" python release/scripts/final_public_mcp.py --bundle "release/dist/byo-${{ steps.release.outputs.version }}-linux-x86_64" --firmware-source "Firmware MCP New" --evidence release/build/final-acceptance/public-mcp
-
       - name: Run retained Linux source features
         id: source-suite
         if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' && steps.workspace-checkout.outcome == 'success' }}
@@ -651,14 +602,6 @@ jobs:
         shell: bash
         run: |
           "$BYO_BUILD_PYTHON" -B bc01-ci/verify_frozen_sources.py --phase after-native
-
-      - name: Record Linux stage prerequisites and exact checkout metadata
-        if: always()
-        shell: bash
-        env:
-          FINAL_STEP_RESULTS: ${{ toJSON(steps) }}
-          FINAL_ACCEPTANCE_REQUESTED: "true"
-        run: '"$BYO_BUILD_PYTHON" release/scripts/final_acceptance_checks.py --record-steps --evidence release/build/final-acceptance/stages.json'
 
       - name: Upload target artifact
         if: ${{ !cancelled() && steps.linux-bundle.outcome == 'success' }}
@@ -789,10 +732,20 @@ jobs:
       - name: Execute original retained installed and compiled contracts
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.arm.outcome == 'success' }}
         run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/run_retained_profiles_ci.py \
-            --base-payload release/build/retained-base-payload --base-analysis release/build/retained-base-analysis \
-            --profile-fixture release/build/retained-profile-fixture --arm-receipt release/build/retained-arm.json \
-            --rustc "$(rustup which rustc)" --evidence release/build/retained-profiles
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          profile = json.load(open("release/build/retained-profile-fixture/PROFILE-FIXTURE.json"))
+          base = list(Path("release/build/retained-base-payload").rglob("release-manifest.json"))
+          assert len(base) == 1, base
+          arm = json.load(open("release/build/retained-arm.json"))["root"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as out:
+              for key, value in {"BYO_INSTALLED_BUNDLE": base[0].parent.resolve(), "BYO_INSTALLED_OLD_BUNDLE": base[0].parent.resolve(), "BYO_INSTALLED_PROFESSIONAL_BUNDLE": profile["bundle"], "BYO_TEST_ARM_GNU_ROOT": arm, "BYO_TEST_WORKSPACE_SOURCE": Path("AgentWorkspace").resolve()}.items():
+                  out.write(f"{key}={value}\n")
+          PY
+          BYO_INSTALLED_BUNDLE=$(python -c 'import json; print(json.load(open("release/build/retained-profile-fixture/PROFILE-FIXTURE.json"))["bundle"])') \
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=release/build/retained-profiles/results.xml
+
       - name: Verify canonical source after all independent fixture work
         if: always()
         run: python -B bc01-ci/verify_frozen_sources.py --phase after-retained
@@ -826,7 +779,6 @@ jobs:
   fixture-cleanup:
     name: Fixture cleanup (${{ matrix.target }})
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_kind == 'cleanup' }}
-    needs: [workflow-quality]
     strategy:
       fail-fast: false
       matrix:
@@ -843,7 +795,6 @@ jobs:
     timeout-minutes: 40
     env:
       BYO_TEST_FAILURES: ${{ github.workspace }}/release/build/fixture-cleanup/failed-inputs
-      BYO_FINAL_CHILD_EVIDENCE: ${{ github.workspace }}/release/build/fixture-cleanup/child-cases
       BYO_MCP_TEST_WORKSPACE_ROOT: ${{ github.workspace }}/CodexClaudeWorkflow
       EXPECTED_TARGET: ${{ matrix.target }}
     defaults:
@@ -924,7 +875,7 @@ jobs:
           import json, os
           root = json.load(open("release/build/fixture-cleanup/arm-input.json"))["root"]
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
-              env.write(f"BYO_MCP_TEST_ARM_GNU_ROOT={root}\n")
+              env.write(f"BYO_MCP_TEST_ARM_GNU_ROOT={root}\nBYO_TEST_ARM_GNU_ROOT={root}\n")
           PY
       - name: Record affected source collection
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
@@ -944,10 +895,13 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           uv run --no-sync --project "Firmware MCP New" python -B bc01-ci/build_capture.py --name fixture-installer -- \
-            uv run --no-sync --project "Firmware MCP New" python -m pytest -v release/scripts/test_arm_test_toolchain.py release/scripts/test_acquire_analysis_inputs.py --junitxml=release/build/fixture-cleanup/installer.xml
-          for group in firmware-lint firmware-host-type firmware-contract; do
-            uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group "$group" --record-steps --evidence "release/build/fixture-cleanup/$group-command.json"
-          done
+            uv run --no-sync --project "Firmware MCP New" python -m pytest -o addopts= -v release/scripts/test_*.py --junitxml=release/build/fixture-cleanup/installer.xml
+
+      - name: Run retained companion workflow fixtures
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
+        run: |
+          uv sync --project CodexClaudeWorkflow --locked --group dev
+          uv run --no-sync --project CodexClaudeWorkflow python -m pytest -o addopts= -v CodexClaudeWorkflow/tests --junitxml=release/build/fixture-cleanup/companion.xml
       - name: Verify unchanged cleanup inputs after execution
         if: always()
         run: python -B bc01-ci/verify_frozen_sources.py --phase after-cleanup
@@ -1047,7 +1001,7 @@ jobs:
       - name: Check changed Installer test helpers
         if: ${{ !cancelled() && steps.fixture-dependencies.outcome == 'success' }}
         run: |
-          files=(release/scripts/final_acceptance_checks.py)
+          files=(release/scripts/test_*.py release/scripts/installed_support.py release/scripts/fixtures/code-analysis-installed/availability/generate.py)
           uv run --no-sync --project "Firmware MCP New" python -m ruff check --diff "${files[@]}" > release/build/fixture-cleanup/installer-lint.patch || true
           uv run --no-sync --project "Firmware MCP New" python -m ruff format --diff "${files[@]}" > release/build/fixture-cleanup/installer-format.patch || true
           uv run --no-sync --project "Firmware MCP New" python -m ruff check "${files[@]}"

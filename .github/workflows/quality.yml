@@ -86,13 +86,15 @@ jobs:
       - name: Validate release Python
         if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
         run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-quality --evidence release/build/final-acceptance/release-quality
+          uv run --no-sync --project "Firmware MCP New" python -m compileall -q release/scripts hil
+          uv run --no-sync --project "Firmware MCP New" python -m ruff check release/scripts hil
+          uv run --no-sync --project "Firmware MCP New" python -m ruff format --check release/scripts hil
+          sh -n install.sh
 
       - name: Release script unit tests
         if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
         run: |
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group release-tests --evidence release/build/final-acceptance/release-tests
-
+          uv run --no-sync --project "Firmware MCP New" python -m pytest -o addopts= -v release/scripts/test_*.py --junitxml=release/build/final-acceptance/release-tests.xml
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
@@ -200,7 +202,7 @@ jobs:
       - name: Prepare disclosed exact workspace contract fixture and locked dependencies
         id: workspace-deps
         run: |
-          python -B release/scripts/build_workspace_contract_fixture.py --source AgentWorkspace --evidence release/build/final-acceptance/workspace-fixture
+          uv sync --project AgentWorkspace --locked --group dev
 
       - name: Install actual locked parser test interpreter
         id: firmware-deps
@@ -209,10 +211,13 @@ jobs:
 
       - name: Run all independent AgentWorkspace contracts
         if: ${{ !cancelled() && steps.workspace-deps.outcome == 'success' && steps.firmware-deps.outcome == 'success' }}
-        run: >-
-          uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py
-          --group workspace --evidence release/build/final-acceptance/workspace
-          --workspace-source release/build/final-acceptance/workspace-fixture/effective-workspace
+        run: |
+          cd AgentWorkspace
+          uv run --no-sync python -m ruff check .
+          uv run --no-sync python -m ruff format --check .
+          uv run --no-sync python -m basedpyright
+          uv run --no-sync python -m pytest --junitxml=../release/build/final-acceptance/workspace.xml
+          uv run --no-sync python bin/render-all-modes --check-idempotent
 
       - name: Bind exact frozen bytes after all independent downstream commands
         if: always()
@@ -287,11 +292,17 @@ jobs:
 
       - name: Check platform-neutral Firmware lint and formatting once
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.firmware-deps.outcome == 'success' }}
-        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-lint --evidence release/build/final-acceptance/firmware-lint
+        run: |
+          cd "Firmware MCP New"
+          uv run --no-sync python -m ruff check .
+          uv run --no-sync python -m ruff format --check src tests
 
       - name: Run independent Firmware MCP contract commands
         if: ${{ !cancelled() && steps.firmware-deps.outcome == 'success' }}
-        run: uv run --no-sync --project "Firmware MCP New" python release/scripts/final_acceptance_checks.py --group firmware-contract --evidence release/build/final-acceptance/firmware-contract
+        run: |
+          cd "Firmware MCP New"
+          uv run --no-sync python -m pyright src
+          uv run --no-sync python -m pytest -o addopts= --strict-markers -m 'not live' -v tests/test_sidecar_runtime.py tests/test_manual_permission_helper_runtime.py --junitxml=../release/build/final-acceptance/firmware-contract.xml
 
       - name: Run Windows SWD isolation contract
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.firmware-deps.outcome == 'success' }}

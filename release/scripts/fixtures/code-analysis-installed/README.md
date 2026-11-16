@@ -1,167 +1,24 @@
-# Independent installed analysis tests
+# Installed analysis inputs
 
-The current Windows Actions route can additionally supply
-`--ci-input-record <record> --ci-input-record-sha256 <SHA256>`. The
-`installed-current-inputs/v1` record binds the current source/analysis locks,
-actual Cppcheck build receipt, pinned ARM acquisition receipt, genuine successful
-compile/link receipt and complete built corpus inventory. This replaces only
-the historical machine-local input manifests for that invocation; the original
-queries, source/preservation checks and all thirteen gate outcomes remain.
-`run_retained_installed_ci.py` prepares these inputs in Actions and preserves the
-original reports. The complete job builds a disclosed detached local Git fixture
-with only the documented narrative constant, matching version metadata and source
-lock changed. The canonical candidate stays unchanged. A second genuine compiled
-version/profile supplies actual professional availability and A-to-B update
-checks; no assets are relabelled or published by that fixture. The coordinator
-joins each of the 13+11 contracts and 12 availability groups to its actual image
-and raw driver report. Missing inputs stay PENDING/BLOCKED. The old flags still
-use their original exact byte pins when the new pair is absent.
+`release/scripts/test_installed_analysis.py` owns the installed clangd, Cppcheck,
+profile, tier, environment, privacy and distinct-version scenarios. It uses one
+shared MCP transport (`installed_support.py`) and standard pytest reports.
 
-Run `python release/scripts/test_code_analysis_installed.py --help` for the full
-input and evidence contract. The script uses stdlib Python on native Windows
-x86_64. No program or dependency is downloaded. Production code, existing tests,
-accepted fixtures, source locks and runtime mappings are not modified.
+Supply `BYO_INSTALLED_BUNDLE`, `BYO_TEST_ARM_GNU_ROOT` (acquired GNU Arm 14.3.1)
+and `BYO_TEST_WORKSPACE_SOURCE` (the pinned companion source). Profile and upgrade
+checks additionally need genuine `BYO_INSTALLED_PROFESSIONAL_BUNDLE` and
+`BYO_INSTALLED_OLD_BUNDLE` inputs. No fixture fabricates a release or upgrades a
+manifest in place. Missing inputs are reported as UNRUN skips; they are not PASS.
+Run automated checks only in GitHub Actions. The fixture-only cleanup route
+never builds a product; it collects installed scenarios and records prerequisites.
 
-The `build_control.rs` fixture validates the frozen genuine ARM ELF/map and the
-requested target. It does **not** rebuild firmware or substitute for an analyzer.
-Cppcheck must match an explicit independent raw candidate digest supplied as
-`--cppcheck-sha256`; clangd retains its accepted upstream digest. The static smoke deliberately mutates only a private source copy, then
-restores it; the expected actual exits are 0/1/0 for the Python runner and
-0/13/0 for the public launcher (its WorkflowPolicy category for a failed verify).
+`availability/manifest.json` retains the three positive canonical personal tier
+states. `availability/generate.py` regenerates them through the actual store API;
+its provenance identifies the original snapshot until explicitly regenerated.
+The scenarios check passive availability and protected state rather than replaying
+a second policy engine or a cartesian matrix of synthetic store corruption.
 
-Use a new evidence directory for every invocation:
-
-```powershell
-python release/scripts/test_code_analysis_installed.py --archive-only `
-  --archive '<actual built pre-packaging ZIP>' --archive-sha256 '<SHA256>' `
-  --cppcheck-sha256 '<independently established candidate executable SHA256>' `
-  --bundle '<matching expanded bundle>' --evidence '<new initial-RED evidence>'
-```
-
-Missing shipped analysis mapping/programs in an **actual** bundle is RED (exit 1).
-Missing artifacts are setup failure (exit 2). Successful archive-only preparation
-returns 3, with all installed gates still pending. A source directory, synthetic
-runtime or fake analyzer cannot establish the initial installed RED or acceptance.
-
-After packaging integration, use the exact final archive/hash/bundle and omit
-`--archive-only`. Add explicit immutable inputs:
-
-```powershell
-python release/scripts/test_code_analysis_installed.py `
-  --archive '<final ZIP>' --archive-sha256 '<SHA256>' --bundle '<expanded bundle>' `
-  --cppcheck-sha256 '<independent raw final-candidate executable SHA256>' `
-  --cppcheck-inputs '<accepted cppcheck-windows-packaging-inputs.json>' `
-  --cppcheck-source '<protected patched Cppcheck source>' `
-  --clangd-inputs '<accepted clangd-windows-packaging-input.json>' `
-  --clangd-root '<protected clangd_23.1.0>' `
-  --arm-fixture '<protected built ARM firmware>' `
-  --python-workspace '<clean exact accepted source checkout>' `
-  --python-commit '<commit matching the final release workspace provenance>' `
-  --rustc '<existing rustc.exe>' --rustc-sha256 '<SHA256>' `
-  --availability-inputs '<passive availability fixture manifest>' `
-  --availability-sha256 '<SHA256>' --update-bundle '<second immutable version>' `
-  --update-manifest-sha256 '<second bundle release-manifest.json SHA256>' `
-  --update-cppcheck-sha256 '<independent raw second-build executable SHA256>' `
-  --evidence '<new final installed evidence>' --keep-lab
-```
-
-MSVC Cppcheck rebuilds can differ in COFF/debug timestamps, PE checksum and
-CodeView GUID bytes. Do not edit a test constant or take the expected digest from
-the candidate manifest/mapping. Supply a raw digest established beforehand by an
-independent reviewed build-byte receipt, or an independent rebuild comparison
-that establishes the exact candidate bytes. Historical normalized SHA256
-`55a26190972aa1ad73e7bde04bb4d57dbbee118546473c5c2a266912d12cd2a5`
-explains previous variation; this script does not implement PE normalization or
-use that historical value to admit new bytes. The explicit candidate oracle binds
-ZIP/expanded bytes, manifest identity, fixed mapping path/version and both runner
-reports. Missing/malformed identity is setup failure (exit 2); wrong executable,
-manifest or mapping is RED (exit 1). Updates require a genuinely built distinct
-version and a separate explicit executable oracle, not the first build's hash.
-
-Run `--validator-contract-checks` with the archive/hash/bundle/Cppcheck arguments
-and a new evidence directory for focused executable contract checks. It validates
-real archive inputs and tests private binary/inventory/mapping mutations and
-public response values. Success returns 3 with installed gates pending; failures
-return 1 or 2. `validator-contract.json` marks this evidence as having no installed
-credit. Synthetic second-oracle plumbing is not genuine version-update evidence.
-
-Availability uses the committed v3 manifest
-`availability/manifest.json` (exact passive `.firm` bytes as base64 plus
-sha256/size, with case claims `{state, variant, profile, board_id, fixture}`).
-`availability/generate.py` produced it offline through the accepted server's
-public persistence classes only; its `generation_receipt` records the generator
-digest, accepted server commit/tree/clean status and every imported module
-digest. `availability/.gitattributes` keeps the bytes free of line-ending
-conversion. Pass it explicitly with `--availability-inputs` and an independently
-recorded `--availability-sha256`.
-
-Labels are claims, not evidence. Before any server launch, the validator checks
-the policy pointer, generation digest, canonical policy digest, tier/snapshot
-consistency and attachment cache with stdlib code, then derives the expected
-public values. `revoked_unvalidated` earns group credit only when both variants
-pass. **revoked:** a valid accepted cache record for the board with
-`confirmed=false`, an absolute `revoked_at` and stable probe/UART identities,
-beside a setup-full, setup-incomplete policy. Public `setup-full`,
-`setup-incomplete`, `not-asserted`, null capability. **unvalidated:** a committed
-setup-full policy, no cache and no live proof. Public `not-asserted`, null.
-`corrupt_policy` requires an undecodable pointer (tier null, `policy_status=corrupt`, null
-digest). The fixture decides the tier. Being setup-incomplete does not imply no-setup.
-The calls are `server_health_check` (`narrative_logging`: `enabled` for personal,
-`not_built` for professional) and `get_capabilities(board_id)`. All five analysis
-tools must answer, and their results are retained per variant. The protected bytes
-and manifest are rechecked after the queries.
-
-`availability_cases` records all twelve state/profile groups (with per-variant
-detail). A personal archive runs the personal cases; professional cases need a
-**separately compiled professional archive** and `--installed-profile
-professional` in a separate invocation. This option cannot change a compiled
-profile. Public capability resolution may initialize derived policy for the
-no-board case in the private project only. `--validator-contract-checks` runs
-the passive-byte, manifest, public-witness, tool-coverage, variant-ledger and
-protected-byte negatives over this manifest; that earns no installed credit.
-
-ROOT confirmed that the cross-runner gate compares the standalone public Python
-`bin/verify` source runner with installed Rust `byo workflow tool verify`. Python
-runs against the **installed** Cppcheck directory on a private PATH, with source
-provenance recorded separately. The capsule contains compiled guidance/modes and
-omits Python scripts by design. Source-runner execution is never proof of a
-shipped Python entrypoint. Use clean accepted Python commit
-`2889c2fdbd77a56f33095ff21f03d78dc1317d03`, matching final release provenance.
-
-Installation uses the native CLI `install-runtime --bundle`, without modifying
-the user's registry PATH. It validates ZIP/runtime bytes independently. Testing
-the PowerShell bootstrap and normal firmware build is a separate gate owned by
-the packaging/release integration lane. Compilation of the build control uses
-the existing MSVC environment. Its exact descendants (including a lingering
-MSVC helper) are recorded and cleaned by PID plus creation time; that setup
-cleanup never earns product process-cleanup credit.
-The native installation deadline defaults to 120 seconds. On a busy build host,
-an explicitly chosen `--install-timeout-seconds 300` permits a longer test budget;
-the invocation records it. A deadline failure remains recorded and earns no pass.
-
-All homes, projects, profiles and cache/temp directories are private children of
-a short native temporary root, with spaces and non-ASCII names. Source paths stay
-below 260 UTF-16 units, reflecting the pinned Cppcheck limitation. Failed labs
-are retained. Successful labs are removed unless `--keep-lab`; logs and reports
-are retained in `--evidence` with a SHA256 manifest. MCP requests/replies and full
-stderr are retained, along with actual executable argv, exits and process
-identities. No cleanup selects processes by image name.
-
-Argv inspection requires a live owned clangd session. Completed version probes
-and sessions replaced after compilation-database changes have no live argv to
-inspect. `clangd-argv-selection.json` records every observed clangd identity and
-its liveness at selection; all identities remain in the final EOF cleanup check.
-No live session, an identity change during inspection, or any surviving child
-still fails the installed gate.
-
-This correction is test preparation at installer base
-`f75032a85b21ceeff9e03018263debdbe19d8547`, tree
-`cbfae9a0d08609f250813dcab88b8aebfb9e6c78`. Old-archive regression uses only the
-preserved `C:/t/byo-final-f75032a-20261009/origin-c7c1a309.zip`, SHA256
-`c7c1a309d48af5dff43aa6166941f8af07c3158566767e53b89df1bda36a469e`.
-That archive's historical raw Cppcheck digest is available in the independent
-run7 evidence. It does not pin a freshly rebuilt final archive. All final
-integrated ZIP acceptance and missing availability/update cases remain pending.
-Validator plumbing checks and the ARM build control earn no installed credit.
-ROOT must run a fresh independent validator against the exact integrated source
-and final archive. Linux/macOS/WSL/Docker/hardware checks were not performed.
+Failures retain command/status/stdout/stderr, standard traceback and JUnit,
+protocol/stderr logs and owned project inputs beneath `BYO_TEST_FAILURES`.
+Natural process EOF is asserted before owned cleanup. Physical/model/client
+acceptance remains a separate qualified local phase.

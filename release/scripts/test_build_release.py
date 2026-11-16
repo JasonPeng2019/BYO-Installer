@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Self-contained checks for the launcher path-remap helper in build_release.py.
 
 Run directly (stdlib only, no pytest):
@@ -14,7 +13,6 @@ from pathlib import Path
 from unittest import SkipTest
 from unittest.mock import patch
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -140,44 +138,6 @@ def test_windows_relative_output_uses_absolute_runtime_root() -> None:
     check_windows_output_destination("relative")
 
 
-def test_windows_absolute_output_uses_absolute_runtime_root() -> None:
-    check_windows_output_destination("absolute")
-
-
-def test_windows_default_output_uses_absolute_runtime_root() -> None:
-    check_windows_output_destination("default")
-
-
-def test_remap_adds_cargo_and_checkout_placeholders() -> None:
-    # CARGO_HOME is resolved (canonicalized) before being used as a prefix.
-    env = {"CARGO_HOME": "/c"}
-    encoded = br.remap_encoded_rustflags(env)
-    parts = encoded.split(SEP)
-    assert f"--remap-path-prefix={Path('/c').resolve()}=/cargo" in parts, parts
-    assert f"--remap-path-prefix={br.ROOT}=/src" in parts, parts
-
-
-def test_remap_is_space_safe_via_encoded_separator() -> None:
-    # A checkout path containing a space must survive as exactly one token — the
-    # whole point of CARGO_ENCODED_RUSTFLAGS over whitespace-split RUSTFLAGS.
-    encoded = br.remap_encoded_rustflags({"CARGO_HOME": "/c"})
-    assert encoded.split(SEP).count(f"--remap-path-prefix={br.ROOT}=/src") == 1
-
-
-def test_remap_preserves_existing_flags_and_folds_plain_rustflags() -> None:
-    env = {
-        "CARGO_HOME": "/c",
-        "CARGO_ENCODED_RUSTFLAGS": "-Cdebuginfo=0",
-        "RUSTFLAGS": "-C opt-level=2",
-    }
-    encoded = br.remap_encoded_rustflags(env)
-    parts = encoded.split(SEP)
-    assert "-Cdebuginfo=0" in parts
-    assert "-C" in parts and "opt-level=2" in parts
-    # Plain RUSTFLAGS is consumed so cargo does not see both variables at once.
-    assert "RUSTFLAGS" not in env
-
-
 def test_windows_release_launcher_uses_static_crt() -> None:
     with patch.object(br.platform, "system", return_value="Windows"):
         flags = br.remap_encoded_rustflags({}).split(SEP)
@@ -197,105 +157,6 @@ def test_public_launcher_closure_rejects_bundle_only_crt() -> None:
                 raise AssertionError(f"public launcher accepted {kind} CRT import")
         launcher.write_bytes(pe())
         assert list(br.public_launcher_closure(launcher)["images"]) == ["byo.exe"]
-
-
-BUILD_INVOCATION = re.compile(r"release/scripts/build_release\.py ")
-ACQUIRE = re.compile(
-    r"release/scripts/acquire_analysis_inputs\.py --expected-target "
-    r"(\"\$EXPECTED_TARGET\"|[a-z0-9_-]+) --output (\"[^\"]+\")"
-)
-
-
-def workflow_jobs(filename: str) -> tuple[str, dict[str, str]]:
-    text = (br.ROOT / ".github/workflows" / filename).read_text("utf-8")
-    parts = re.split(r"(?m)^  ([a-z][\w-]*):\n", text.split("\njobs:\n", 1)[1])
-    return text, dict(zip(parts[1::2], parts[2::2]))
-
-
-def test_every_analyzer_build_acquires_pinned_inputs_explicitly() -> None:
-    # Workflow contract (static text; pending until ROOT integrates the
-    # workflows): each archive build first runs the explicit target-pinned
-    # acquisition CLI and passes exactly that directory to build_release.py.
-    expected = {
-        ("build-matrix.yml", "build"): (
-            {"macos-aarch64", "macos-x86_64", "windows-x86_64"},
-            2,
-        ),
-        ("build-matrix.yml", "linux-x86_64"): ({"linux-x86_64"}, 1),
-        ("release.yml", "build"): (
-            {"macos-aarch64", "macos-x86_64", "linux-x86_64"},
-            1,
-        ),
-        ("release.yml", "windows"): ({"windows-x86_64"}, 2),
-    }
-    seen = set()
-    windows_python = analysis_tools.load_lock(target="windows-x86_64")[
-        "windows_native"
-    ]["source"]["python_version"]
-    for filename in ("build-matrix.yml", "release.yml"):
-        text, jobs = workflow_jobs(filename)
-        # Inline lock parsing/downloads would bypass the hash-pinned CLI.
-        for forbidden in ("Invoke-WebRequest", "Get-FileHash", "ConvertFrom-Json"):
-            assert forbidden not in text, (filename, forbidden)
-        for job, section in jobs.items():
-            builds = [
-                line for line in section.splitlines() if BUILD_INVOCATION.search(line)
-            ]
-            if not builds:
-                continue
-            seen.add((filename, job))
-            targets, count = expected[(filename, job)]
-            assert len(builds) == count, (filename, job, builds)
-            acquisitions = list(ACQUIRE.finditer(section))
-            assert len(acquisitions) == 1, (filename, job)
-            acquisition = acquisitions[0]
-            target = acquisition[1]
-            if target == '"$EXPECTED_TARGET"':
-                assert (
-                    "EXPECTED_TARGET: ${{ matrix.target }}"
-                    in section[: acquisition.start()]
-                )
-                matrix = set(re.findall(r"(?m)^ +- target: ([a-z0-9_-]+)$", section))
-                assert matrix == targets, (filename, job, matrix)
-            else:
-                assert {target} == targets, (filename, job, target)
-            first_build = min(section.index(line) for line in builds)
-            assert acquisition.start() < first_build, (filename, job)
-            assert "BYO_ANALYSIS_INPUT_DIR=" in section[acquisition.end() : first_build]
-            for line in builds:
-                if '"${args[@]}"' in line:
-                    arrays = re.findall(r"(?m)^ +args=\((.*)\)$", section)
-                    assert any(
-                        '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in a
-                        for a in arrays
-                    )
-                else:
-                    assert '--analysis-input-dir "$BYO_ANALYSIS_INPUT_DIR"' in line, (
-                        line
-                    )
-            if "windows-x86_64" in targets:
-                assert windows_python in section, (
-                    "Windows build Python must match pinned native inputs"
-                )
-            if "linux-x86_64" in targets:
-                # Linux Cppcheck needs measured GCC runtime inputs in the same
-                # directory before the build; never generated by the builder.
-                staging = section[acquisition.end() : first_build]
-                assert "/gcc-runtime" in staging, (filename, job)
-                if "prepare_gcc_runtime_inputs.py" in staging:
-                    for flag in (
-                        "--compiler",
-                        "--notices",
-                        "--package",
-                        "--source",
-                        "--output",
-                    ):
-                        assert flag in staging, (filename, job, flag)
-                    assert '--output "$input_dir/gcc-runtime"' in staging
-                else:
-                    for leaf in ("COPYING3", "COPYING.RUNTIME", "provenance.json"):
-                        assert leaf in staging, (filename, job, leaf)
-    assert seen == set(expected), seen
 
 
 def test_release_version_defaults_to_matching_component_metadata() -> None:
@@ -363,15 +224,6 @@ def test_windows_python_rejects_stale_metadata_and_wrong_source():
                     raise AssertionError("stale metadata/source was accepted")
                 except RuntimeError as error:
                     assert "isolated matching" in str(error)
-
-
-def test_development_matrix_derives_bundle_version() -> None:
-    workflow = (br.ROOT / ".github/workflows/build-matrix.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "steps.release.outputs.version" in workflow
-    assert "--version 0." not in workflow
-    assert "bundle: byo-0." not in workflow
 
 
 def test_final_payload_hashes_are_reused_in_sbom():

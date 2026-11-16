@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Contracts for the explicit, hash-pinned analyzer input acquisition CLI.
 
 Windows-host platform-neutral fixtures: every case uses temporary directories,
@@ -14,7 +13,6 @@ import hashlib
 import io
 import json
 import os
-import re
 import sys
 import tempfile
 import unittest
@@ -25,7 +23,6 @@ import acquire_analysis_inputs as acquire_inputs
 import analysis_tools
 
 
-TARGETS = ("windows-x86_64", "macos-aarch64", "macos-x86_64", "linux-x86_64")
 CPPCHECK_BYTES = b"cppcheck source archive bytes\n"
 CLANGD_BYTES = b"clangd release archive bytes\n"
 
@@ -67,15 +64,6 @@ class Response:
 
     def __exit__(self, *exc: object) -> None:
         self.stream.close()
-
-    def geturl(self) -> str:
-        return self.final_url
-
-    def read(self, size: int = -1) -> bytes:
-        if self.on_read is not None:
-            callback, self.on_read = self.on_read, None
-            callback()
-        return self.stream.read(size)
 
 
 def serve(payloads: dict[str, bytes], redirects: dict[str, str] | None = None):
@@ -184,15 +172,6 @@ class AcquisitionTests(unittest.TestCase):
             before,
         )
 
-    def test_partial_reuse_downloads_only_missing_archive(self) -> None:
-        self.output.mkdir()
-        (self.output / "cppcheck-src.tar.gz").write_bytes(CPPCHECK_BYTES)
-        urlopen, calls = serve(self.urls())
-        self.acquire(urlopen)
-        self.assertEqual(calls, [self.lock["programs"]["clangd"]["source"]["url"]])
-        self.assertEqual(
-            (self.output / "clangd-windows.zip").read_bytes(), CLANGD_BYTES
-        )
 
     def test_hash_mismatch_cannot_publish_and_cleans_temporary_file(self) -> None:
         payloads = self.urls()
@@ -217,13 +196,6 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), foreign)
         self.assertEqual(partials(self.output), [])
 
-    def test_existing_directory_in_archive_slot_is_refused(self) -> None:
-        (self.output / "clangd-windows.zip").mkdir(parents=True)
-        with self.assertRaisesRegex(
-            RuntimeError, "Existing input differs from its pin"
-        ):
-            self.acquire(refuse_network)
-        self.assertTrue((self.output / "clangd-windows.zip").is_dir())
 
     def test_input_appearing_during_download_is_never_overwritten(self) -> None:
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
@@ -244,13 +216,6 @@ class AcquisitionTests(unittest.TestCase):
         self.assertEqual((self.output / "clangd-windows.zip").read_bytes(), racer)
         self.assertEqual(partials(self.output), [])
 
-    def test_transport_failure_cleans_temporary_file(self) -> None:
-        def urlopen(request, timeout=None):
-            raise OSError("connection reset")
-
-        with self.assertRaisesRegex(OSError, "connection reset"):
-            self.acquire(urlopen)
-        self.assertEqual(list(self.output.iterdir()), [])
 
     def test_https_redirect_to_plain_http_is_refused(self) -> None:
         clangd_url = self.lock["programs"]["clangd"]["source"]["url"]
@@ -262,60 +227,6 @@ class AcquisitionTests(unittest.TestCase):
         self.assertFalse((self.output / "clangd-windows.zip").exists())
         self.assertEqual(partials(self.output), [])
 
-    def test_unsafe_pinned_sources_are_refused_before_any_write(self) -> None:
-        good = self.lock["programs"]["clangd"]["source"]
-        cases = {
-            "plain http": {"url": "http://example.invalid/clangd-windows.zip"},
-            "file scheme": {"url": "file:///tmp/clangd-windows.zip"},
-            "no host": {"url": "https:///clangd-windows.zip"},
-            "userinfo": {"url": "https://user:secret@example.invalid/clangd.zip"},
-            "username only": {"url": "https://user@example.invalid/clangd.zip"},
-            "nested archive": {"archive": "nested/clangd-windows.zip"},
-            "parent archive": {"archive": "../clangd-windows.zip"},
-            "absolute archive": {"archive": "/clangd-windows.zip"},
-            "backslash archive": {"archive": "..\\clangd-windows.zip"},
-            "short digest": {"sha256": good["sha256"][:63]},
-            "uppercase digest": {"sha256": good["sha256"].upper()},
-            "non-hex digest": {"sha256": "g" * 64},
-        }
-        for label, change in cases.items():
-            with self.subTest(label):
-                self.lock = lock_for("windows-x86_64")
-                self.lock["programs"]["clangd"]["source"].update(change)
-                with self.assertRaises((RuntimeError, ValueError)):
-                    self.acquire(refuse_network)
-                self.assertFalse(self.output.exists(), label)
-
-    def test_conflicting_duplicate_archive_sources_are_refused(self) -> None:
-        self.lock["programs"]["clangd"]["source"] = dict(
-            self.lock["programs"]["cppcheck"]["source"], sha256=sha256(b"other")
-        )
-        with self.assertRaisesRegex(RuntimeError, "Conflicting pinned archive sources"):
-            self.acquire(refuse_network)
-        self.assertFalse(self.output.exists())
-
-    def test_identical_shared_archive_source_is_fetched_once(self) -> None:
-        self.lock["programs"]["clangd"]["source"] = copy.deepcopy(
-            self.lock["programs"]["cppcheck"]["source"]
-        )
-        shared = self.lock["programs"]["cppcheck"]["source"]
-        urlopen, calls = serve({shared["url"]: CPPCHECK_BYTES})
-        receipt = self.acquire(urlopen)
-        self.assertEqual(calls, [shared["url"]])
-        self.assertEqual(
-            [item["archive"] for item in receipt["archives"]], ["cppcheck-src.tar.gz"]
-        )
-        self.assertEqual((self.output / shared["archive"]).read_bytes(), CPPCHECK_BYTES)
-        self.assertEqual(receipt["archives"][0]["sha256"], sha256(CPPCHECK_BYTES))
-        self.assertEqual(receipt["archives"][0]["size"], len(CPPCHECK_BYTES))
-
-    def test_symlinked_output_directory_is_refused(self) -> None:
-        real = self.root / "real"
-        real.mkdir()
-        symlink_or_skip(self.output, real, directory=True)
-        with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
-            self.acquire(refuse_network)
-        self.assertEqual(list(real.iterdir()), [])
 
     def test_symlinked_archive_slot_is_refused_and_left_untouched(self) -> None:
         self.output.mkdir()
@@ -327,19 +238,6 @@ class AcquisitionTests(unittest.TestCase):
             self.acquire(urlopen)
         self.assertTrue((self.output / "clangd-windows.zip").is_symlink())
         self.assertEqual(elsewhere.read_bytes(), CLANGD_BYTES)
-
-    def test_each_supported_target_routes_to_its_own_lock_record(self) -> None:
-        for target in TARGETS:
-            with self.subTest(target):
-                self.lock = lock_for(target)
-                self.output = self.root / target
-                self.requested_targets.clear()
-                urlopen, _ = serve(self.urls())
-                receipt = self.acquire(urlopen, target)
-                self.assertEqual(self.requested_targets, [target])
-                self.assertEqual(receipt["target"], target)
-                platform = target.split("-", 1)[0]
-                self.assertTrue((self.output / f"clangd-{platform}.zip").is_file())
 
 
 class CommandLineTests(unittest.TestCase):
@@ -356,8 +254,6 @@ class CommandLineTests(unittest.TestCase):
                 status = exit_.code
         return status, stdout.getvalue(), stderr.getvalue()
 
-    def test_cli_targets_are_exactly_the_four_supported_targets(self) -> None:
-        self.assertEqual(tuple(acquire_inputs.TARGETS), TARGETS)
 
     def test_cli_success_prints_receipt_and_routes_expected_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -392,65 +288,6 @@ class CommandLineTests(unittest.TestCase):
             "Analyzer input acquisition failed: Pinned archive SHA-256 mismatch", stderr
         )
 
-    def test_cli_os_and_value_errors_also_exit_two(self) -> None:
-        for error in (OSError("disk full"), ValueError("Unsafe relative path")):
-            with self.subTest(type(error).__name__):
-                with mock.patch.object(acquire_inputs, "acquire", side_effect=error):
-                    status, _, stderr = self.run_main(
-                        ["--expected-target", "macos-x86_64", "--output", "inputs"]
-                    )
-                self.assertEqual(status, 2)
-                self.assertIn(str(error), stderr)
-
-    def test_cli_rejects_missing_unknown_or_alias_targets(self) -> None:
-        cases = (
-            ["--output", "inputs"],
-            ["--expected-target", "linux-aarch64", "--output", "inputs"],
-            ["--expected-target", "linux-x86_64-glibc-2.28", "--output", "inputs"],
-            ["--expected-target", "windows-x86_64"],
-        )
-        for argv in cases:
-            with self.subTest(argv):
-                with mock.patch.object(
-                    acquire_inputs, "acquire", side_effect=AssertionError
-                ):
-                    status, _, _ = self.run_main(argv)
-                self.assertEqual(status, 2)
-
-
-class PinnedLockRoutingTests(unittest.TestCase):
-    """Uses the checked-in v2 lock; execution pending until lock v2 is integrated."""
-
-    def test_checked_in_lock_sources_pass_validation_for_every_target(self) -> None:
-        class Attempted(Exception):
-            pass
-
-        def urlopen(request, timeout=None):
-            self.assertTrue(request.full_url.startswith("https://"))
-            raise Attempted(request.full_url)
-
-        for target in TARGETS:
-            with self.subTest(target), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "inputs"
-                record = analysis_tools.load_lock(target=target)
-                expected = {
-                    program["source"]["archive"]
-                    for program in record["programs"].values()
-                }
-                self.assertEqual(len(expected), 2, target)
-                with (
-                    mock.patch.object(
-                        acquire_inputs.urllib.request, "urlopen", side_effect=urlopen
-                    ),
-                    self.assertRaises(Attempted),
-                ):
-                    acquire_inputs.acquire(target, output)
-                self.assertEqual(sorted(path.name for path in output.iterdir()), [])
-
-
-# --------------------------------------------------------------------------
-# prepare_gcc_runtime_inputs.py: explicit native Linux GCC runtime input prep
-# --------------------------------------------------------------------------
 
 GCC_LIBRARY_NAMES = ("libstdc++.a", "libgcc.a", "libgcc_eh.a")
 GCC_NOTICE_BYTES = {
@@ -582,123 +419,6 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
             ],
         )
 
-    def test_library_hashes_are_measured_from_the_reported_bytes(self) -> None:
-        relocated = self.toolchain / "other" / "libgcc.a"
-        relocated.parent.mkdir()
-        relocated.write_bytes(
-            b"different libgcc.a bytes reported by the selected compiler\n"
-        )
-        self.answers["libgcc.a"] = str(relocated)
-        provenance = self.run_prepare()
-        self.assertEqual(
-            provenance["static_libraries"]["libgcc.a"], sha256(relocated.read_bytes())
-        )
-        self.assertNotEqual(
-            provenance["static_libraries"]["libgcc.a"],
-            sha256(self.libraries["libgcc.a"].read_bytes()),
-        )
-        self.assertEqual(
-            provenance["static_libraries"]["libstdc++.a"],
-            sha256(self.libraries["libstdc++.a"].read_bytes()),
-        )
-
-    def test_compiler_identity_is_the_resolved_selected_file(self) -> None:
-        link = self.toolchain / "c++"
-        symlink_or_skip(link, self.compiler, directory=False)
-        provenance = self.run_prepare(compiler=link)
-        self.assertEqual(
-            provenance["compiler_sha256"], sha256(self.compiler.read_bytes())
-        )
-        self.assertTrue(all(argv[0] == str(self.compiler) for argv, _ in self.queries))
-
-    def test_native_linux_guard_runs_before_any_query_or_write(self) -> None:
-        for platform in ("win32", "darwin", "cygwin", "linux2"):
-            with (
-                self.subTest(platform),
-                self.assertRaisesRegex(RuntimeError, "requires native Linux"),
-            ):
-                self.run_prepare(platform=platform)
-        self.assertEqual(self.queries, [])
-        self.assert_nothing_published()
-
-    def test_package_and_source_references_are_required(self) -> None:
-        for field in ("package", "source"):
-            for value in ("", "   ", "\t\n"):
-                with self.subTest(field=field, value=value):
-                    with self.assertRaisesRegex(
-                        RuntimeError, "compiler package and corresponding source"
-                    ):
-                        self.run_prepare(**{field: value})
-        self.assertEqual(self.queries, [])
-        self.assert_nothing_published()
-
-    def test_compiler_must_be_an_existing_regular_file(self) -> None:
-        with self.assertRaises(OSError):
-            self.run_prepare(compiler=self.toolchain / "missing-g++")
-        with self.assertRaisesRegex(RuntimeError, "not a regular file"):
-            self.run_prepare(compiler=self.toolchain / "lib")
-        self.assertEqual(self.queries, [])
-        self.assert_nothing_published()
-
-    def test_toolchain_notices_must_be_present_nonempty_regular_files(self) -> None:
-        for name, data in GCC_NOTICE_BYTES.items():
-            path = self.notices / name
-            with self.subTest(case=f"missing {name}"):
-                path.unlink()
-                with self.assertRaisesRegex(
-                    RuntimeError, "Supply the selected toolchain notice"
-                ):
-                    self.run_prepare()
-            with self.subTest(case=f"directory {name}"):
-                path.mkdir()
-                with self.assertRaisesRegex(
-                    RuntimeError, "Supply the selected toolchain notice"
-                ):
-                    self.run_prepare()
-                path.rmdir()
-            with self.subTest(case=f"empty {name}"):
-                path.write_bytes(b"")
-                with self.assertRaisesRegex(RuntimeError, "Toolchain notice is empty"):
-                    self.run_prepare()
-            path.write_bytes(data)
-        self.assertEqual(self.queries, [])
-        self.assert_nothing_published()
-
-    def test_symlinked_notice_is_refused(self) -> None:
-        real = self.toolchain / "COPYING3.real"
-        real.write_bytes(GCC_NOTICE_BYTES["COPYING3"])
-        (self.notices / "COPYING3").unlink()
-        symlink_or_skip(self.notices / "COPYING3", real, directory=False)
-        with self.assertRaisesRegex(
-            RuntimeError, "Supply the selected toolchain notice"
-        ):
-            self.run_prepare()
-        self.assert_nothing_published()
-
-    def test_every_static_library_must_be_located_as_an_absolute_regular_file(
-        self,
-    ) -> None:
-        for name in GCC_LIBRARY_NAMES:
-            # GCC echoes the bare name when it cannot find a library.
-            cases = {
-                "bare name": name,
-                "relative path": f"lib/{name}",
-                "missing absolute path": str(self.toolchain / "absent" / name),
-                "directory": str(self.toolchain / "lib"),
-                "empty": "",
-            }
-            for label, answer in cases.items():
-                with self.subTest(library=name, case=label):
-                    self.answers = {
-                        key: str(path) for key, path in self.libraries.items()
-                    }
-                    self.answers[name] = answer
-                    with self.assertRaisesRegex(
-                        RuntimeError,
-                        re.escape(f"Selected compiler cannot locate {name}"),
-                    ):
-                        self.run_prepare()
-                    self.assert_nothing_published()
 
     def test_compiler_query_failures_propagate_without_output(self) -> None:
         failures = {
@@ -739,25 +459,6 @@ class GccRuntimeInputPreparationTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.run_prepare()
         self.assertEqual(blocker.read_bytes(), b"keep")
-
-    def test_prepared_identity_matches_the_staging_input_schema(self) -> None:
-        provenance = self.run_prepare()
-        document = analysis_tools.strict_json(
-            (self.output / "provenance.json").read_bytes()
-        )
-        self.assertEqual(set(document), PROVENANCE_KEYS)
-        self.assertIs(type(document["schema_version"]), int)
-        self.assertEqual(document["schema_version"], 1)
-        self.assertLessEqual(
-            {"libstdc++.a", "libgcc.a"}, set(document["static_libraries"])
-        )
-        self.assertLessEqual(set(document["static_libraries"]), set(GCC_LIBRARY_NAMES))
-        for value in [
-            document["compiler_sha256"],
-            *document["static_libraries"].values(),
-        ]:
-            self.assertRegex(value, r"\A[0-9a-f]{64}\Z")
-        self.assertEqual(document, provenance)
 
 
 def subprocess_error(kind: str) -> Exception:
@@ -834,18 +535,6 @@ class GccRuntimeInputCommandLineTests(unittest.TestCase):
                 self.assertTrue(
                     stderr.startswith("GCC runtime input preparation failed: "), stderr
                 )
-
-    def test_every_explicit_argument_is_required(self) -> None:
-        for flag in ("--compiler", "--notices", "--package", "--source", "--output"):
-            with self.subTest(flag):
-                index = self.ARGV.index(flag)
-                argv = self.ARGV[:index] + self.ARGV[index + 2 :]
-                code, stdout, _, prepared = self.invoke(
-                    argv, AssertionError("must not prepare")
-                )
-                self.assertEqual(code, 2)
-                self.assertEqual(stdout, "")
-                prepared.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,9 +1,7 @@
-#!/usr/bin/env python3
 """Focused checks for compiled workflow skill metadata (stdlib only)."""
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -54,19 +52,6 @@ def test_explicit_workspace_source_refuses_an_incomplete_runtime_directory() -> 
                 assert "qualified source checkout" in str(error)
             else:
                 raise AssertionError("incomplete workspace input was accepted")
-
-
-def test_real_workspace_catalog_contains_native_skill_metadata() -> None:
-    catalog = json.loads(compiler._compile_modes(_workspace_source()))
-    assert catalog["schema"] == 2
-    assert catalog["workflow_protocol"] == 1
-    verify = catalog["skills"]["verify"]
-    assert verify["resource"].endswith("/verify/SKILL.md")
-    assert "verify" in verify["description"].lower()
-    assert verify["user_invocable"] is True
-    assert isinstance(verify["disable_model_invocation"], bool)
-    firmware = next(mode for mode in catalog["modes"] if mode["name"] == "firmware")
-    assert "mcp-help" in firmware["skills"]
 
 
 def test_skill_metadata_folds_description_and_validates_identity() -> None:

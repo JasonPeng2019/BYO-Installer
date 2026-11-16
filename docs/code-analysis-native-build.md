@@ -156,11 +156,11 @@ its firmware corpus into real ARM objects and records the toolchain identity;
 a host compiler or synthetic ARM object is not a substitute.
 
 ```sh
-python3 release/scripts/test_code_analysis_portable_smoke.py \
-  --expected-target TARGET --archive /absolute/archive \
-  --bundle /absolute/expanded-bundle --workspace-source /absolute/AgentWorkspace \
-  --arm-gxx /absolute/arm-none-eabi-g++ --arm-gxx-sha256 "$ARM_GXX_SHA256" \
-  --evidence /absolute/new/smoke-evidence --artifact-label YOUR_RUN_ID
+# Automated execution belongs in Actions with a genuine, separately built bundle.
+export BYO_INSTALLED_BUNDLE=/absolute/expanded-bundle
+export BYO_TEST_WORKSPACE_SOURCE=/absolute/AgentWorkspace
+export BYO_TEST_ARM_GNU_ROOT=/absolute/acquired-arm-toolchain
+python -m pytest -v release/scripts/test_installed_analysis.py --junitxml=results.xml
 ```
 
 On Windows, use the `.exe` ARM toolchain executable and add

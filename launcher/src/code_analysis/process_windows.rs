@@ -453,22 +453,8 @@ mod tests {
         if !root.join(".byo-windows-child-fixture").is_file() {
             return;
         }
-        crate::final_child_receipt!(
-            "helper-start",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::version_probe_fixture",
-                "phase": "version", "cwd": root
-            })
-        );
         fs::write(root.join("version-ready"), b"ready").unwrap();
         std::thread::sleep(Duration::from_secs(60));
-        crate::final_child_receipt!(
-            "helper-complete",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::version_probe_fixture",
-                "phase": "version"
-            })
-        );
     }
     #[test]
     #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
@@ -477,22 +463,8 @@ mod tests {
         if !root.join(".byo-windows-child-fixture").is_file() {
             return;
         }
-        crate::final_child_receipt!(
-            "helper-start",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_leaf_fixture",
-                "phase": "deadline-leaf", "cwd": root
-            })
-        );
         fs::write(root.join("leaf-ready"), b"ready").unwrap();
         std::thread::sleep(Duration::from_secs(60));
-        crate::final_child_receipt!(
-            "helper-complete",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_leaf_fixture",
-                "phase": "deadline-leaf"
-            })
-        );
     }
     #[test]
     #[ignore = "owned subprocess fixture; runs only from its sentinel directory"]
@@ -501,13 +473,6 @@ mod tests {
         if !root.join(".byo-windows-child-fixture").is_file() {
             return;
         }
-        crate::final_child_receipt!(
-            "helper-start",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_parent_fixture",
-                "phase": "deadline-parent", "cwd": root
-            })
-        );
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .creation_flags(CREATE_NO_WINDOW)
             .args([
@@ -521,14 +486,6 @@ mod tests {
             .stderr(std::fs::File::create(root.join("leaf.stderr.log")).unwrap())
             .spawn()
             .unwrap();
-        crate::final_child_receipt!(
-            "child-spawned",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_leaf_fixture",
-                "phase": "deadline-leaf", "child_pid": child.id(),
-                "argv": ["--ignored", "--exact", "code_analysis::process::platform::tests::deadline_leaf_fixture", "--test-threads=1"]
-            })
-        );
         let ready_start = Instant::now();
         while !root.join("leaf-ready").is_file() && ready_start.elapsed() < Duration::from_secs(5) {
             std::thread::sleep(Duration::from_millis(5));
@@ -546,13 +503,6 @@ mod tests {
         .unwrap();
         // Keep the witnessed descendant live until the owning test's deadline.
         child.wait().unwrap();
-        crate::final_child_receipt!(
-            "helper-complete",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_parent_fixture",
-                "phase": "deadline-parent"
-            })
-        );
     }
     #[test]
     fn exited_job_descendant_does_not_require_a_live_identity() {
@@ -606,13 +556,6 @@ mod tests {
             "--exact".into(),
             "--test-threads=1".into(),
         ];
-        crate::final_child_receipt!(
-            "dispatch",
-            json!({
-                "outer_test": "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget",
-                "child_name": argv[1], "phase": "version", "argv": argv, "cwd": root
-            })
-        );
         let mut budget = Budget::new();
         budget.configure(4.0).unwrap();
         let mut events = Vec::new();
@@ -628,20 +571,6 @@ mod tests {
         let out = fs::read(root.join("version.stdout.log"));
         let err = fs::read(root.join("version.stderr.log"));
         write_json(&root.join("owned-processes.json"), &events).unwrap();
-        crate::final_child_receipt!(
-            "owned-command-complete",
-            json!({
-                "outer_test": "code_analysis::process::platform::tests::version_phase_cap_is_inside_the_existing_request_budget",
-                "child_name": argv[1], "phase": "version", "result": format!("{outcome:?}"),
-                "process_events": events,
-                "exit": events.last().and_then(|event| event.get("process_exit_code")),
-                "terminal_exit": events.last().and_then(|event| event.get("terminal_exit_code")),
-                "stream_read_errors": [out.as_ref().err().map(|error| error.to_string()), err.as_ref().err().map(|error| error.to_string())],
-                "source_streams_present": root.join("version.stdout.log").is_file() && root.join("version.stderr.log").is_file()
-            }),
-            out.as_deref().unwrap_or(b""),
-            err.as_deref().unwrap_or(b"")
-        );
         assert_eq!(outcome.unwrap_err().code, "analysis/timeout", "{events:?}");
         assert!(
             root.join("version-ready").is_file(),
@@ -673,13 +602,6 @@ mod tests {
         // request, including the unchanged production cleanup reserve.
         budget.configure(10.0).unwrap();
         let mut events = Vec::new();
-        crate::final_child_receipt!(
-            "dispatch",
-            json!({
-                "outer_test": "code_analysis::process::platform::tests::deadline_terminates_owned_child_and_descendant_by_creation_identity",
-                "child_name": argv[1], "phase": "deadline-parent", "argv": argv, "cwd": root
-            })
-        );
         let outcome = run_owned(
             &argv,
             &root,
@@ -691,35 +613,8 @@ mod tests {
         );
         let out = fs::read(root.join("owned-test.stdout.log"));
         let err = fs::read(root.join("owned-test.stderr.log"));
-        crate::final_child_receipt!(
-            "owned-command-complete",
-            json!({
-                "outer_test": "code_analysis::process::platform::tests::deadline_terminates_owned_child_and_descendant_by_creation_identity",
-                "child_name": argv[1], "phase": "deadline-parent", "result": format!("{outcome:?}"),
-                "exit": events.last().and_then(|event| event.get("process_exit_code")),
-                "terminal_exit": events.last().and_then(|event| event.get("terminal_exit_code")),
-                "stream_read_errors": [out.as_ref().err().map(|error| error.to_string()), err.as_ref().err().map(|error| error.to_string())],
-                "process_events": events,
-                "source_streams_present": root.join("owned-test.stdout.log").is_file() && root.join("owned-test.stderr.log").is_file()
-            }),
-            out.as_deref().unwrap_or(b""),
-            err.as_deref().unwrap_or(b"")
-        );
         let leaf_out = fs::read(root.join("leaf.stdout.log"));
         let leaf_err = fs::read(root.join("leaf.stderr.log"));
-        crate::final_child_receipt!(
-            "owned-descendant-streams",
-            json!({
-                "child_name": "code_analysis::process::platform::tests::deadline_leaf_fixture",
-                "phase": "deadline-leaf", "process_events": events,
-                "exit": null, "exit_limit": "The existing owner exposes descendant identity/cleanup, not a waited leaf exit status",
-                "stream_read_errors": [leaf_out.as_ref().err().map(|error| error.to_string()), leaf_err.as_ref().err().map(|error| error.to_string())],
-                "source_streams_present": root.join("leaf.stdout.log").is_file() && root.join("leaf.stderr.log").is_file(),
-                "limit": "Intentional deadline termination; no fabricated libtest completion"
-            }),
-            leaf_out.as_deref().unwrap_or(b""),
-            leaf_err.as_deref().unwrap_or(b"")
-        );
         let error = outcome.unwrap_err();
         assert_eq!(error.code, "analysis/timeout");
         assert_eq!(events.last().unwrap()["cleanup"], "confirmed");

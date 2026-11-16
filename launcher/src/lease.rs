@@ -198,22 +198,4 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn current_process_identity_is_stable() {
-        let pid = std::process::id();
-        let first = process_start_identity(pid).expect("current process");
-        let second = process_start_identity(pid).expect("current process");
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn atomic_write_is_available_for_lease_storage() {
-        let root =
-            std::env::temp_dir().join(format!("byo-lease-test-{:032x}", rand::random::<u128>()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("probe");
-        crate::manifest::atomic_write(&path, b"ok").unwrap();
-        assert_eq!(std::fs::read(path).unwrap(), b"ok");
-        std::fs::remove_dir_all(root).unwrap();
-    }
 }

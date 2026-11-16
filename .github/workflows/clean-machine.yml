@@ -63,9 +63,11 @@ jobs:
       - name: Execute exact signed candidate contract
         shell: bash
         run: |
-          args=(--candidate candidate --junit "evidence/${{ matrix.target }}.xml" --receipt "evidence/${{ matrix.target }}.json")
-          if test "$RUNNER_OS" = Linux; then args+=(--public-key "$RUNNER_TEMP/byo-release-public.pem"); fi
-          python "test-kit/release/scripts/clean_candidate.py" "${args[@]}"
+          python -m pip install pytest psutil
+          export BYO_SIGNED_CANDIDATE="$GITHUB_WORKSPACE/candidate"
+          export BYO_TEST_FAILURES="$GITHUB_WORKSPACE/evidence/failed-inputs"
+          if test "$RUNNER_OS" = Linux; then export BYO_RELEASE_PUBLIC_KEY="$RUNNER_TEMP/byo-release-public.pem"; fi
+          python -m pytest -v test-kit/release/scripts/test_installed_analysis.py -k signed_clean_candidate --junitxml=evidence/results.xml
 
       - name: Check exact target analysis archive and native formats
         shell: bash

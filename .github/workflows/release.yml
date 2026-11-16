@@ -52,7 +52,8 @@ jobs:
           path: |
             install.sh
             install.ps1
-            release/scripts/clean_candidate.py
+            release/scripts/installed_support.py
+            release/scripts/test_installed_analysis.py
             release/scripts/test_installed_e2e.py
             release/scripts/verify_build_output.py
             release/scripts/analysis_*.py

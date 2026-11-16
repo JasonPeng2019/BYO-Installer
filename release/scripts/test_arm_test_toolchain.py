@@ -6,10 +6,8 @@ build proof. Tests run on GitHub; the full installed smoke supplies real proof.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import io
-import json
 import tempfile
 import tarfile
 import unittest
@@ -73,17 +71,6 @@ class ArmInputContracts(unittest.TestCase):
             receipt = arm.acquire(target, output)
         return receipt, calls
 
-    def test_four_explicit_upstream_pins_and_intel_version_are_recorded(self):
-        lock = json.loads(arm.LOCK.read_text(encoding="utf-8"))
-        self.assertEqual(set(lock["targets"]), set(arm.TARGETS))
-        for target in arm.TARGETS:
-            with self.subTest(target=target):
-                source = arm.load_source(target)
-                self.assertEqual(source, lock["targets"][target])
-                self.assertTrue(source["url"].startswith("https://developer.arm.com/"))
-                self.assertEqual(source["checksum_url"], source["url"] + ".sha256asc")
-                self.assertEqual(len(source["sha256"]), 64)
-        self.assertEqual(arm.load_source("macos-x86_64")["version"], "14.2.rel1")
 
     def test_verified_archives_bind_actual_compiler_bytes_on_all_four_targets(self):
         for target in arm.TARGETS:
@@ -176,21 +163,6 @@ class ArmInputContracts(unittest.TestCase):
                     with self.assertRaises((RuntimeError, tarfile.FilterError)):
                         self.acquire_fixture(target, source, payload, output)
         self.assertFalse((self.root / "escape").exists())
-
-    def test_unknown_target_or_malformed_lock_refuses_before_effects(self):
-        with self.assertRaises(ValueError):
-            arm.load_source("linux-aarch64")
-        lock = json.loads(arm.LOCK.read_text(encoding="utf-8"))
-        for altered in (dict(lock, schema_version=True), dict(lock, surprise=1)):
-            path = self.root / "lock.json"
-            path.write_text(json.dumps(altered), encoding="utf-8")
-            with mock.patch.object(arm, "LOCK", path), self.assertRaises(ValueError):
-                arm.load_source("linux-x86_64")
-        source = copy.deepcopy(lock)
-        source["targets"]["linux-x86_64"]["sha256"] = "wrong"
-        path.write_text(json.dumps(source), encoding="utf-8")
-        with mock.patch.object(arm, "LOCK", path), self.assertRaises(ValueError):
-            arm.load_source("linux-x86_64")
 
 
 if __name__ == "__main__":

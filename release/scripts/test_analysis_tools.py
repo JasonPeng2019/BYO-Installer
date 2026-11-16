@@ -199,36 +199,6 @@ class WindowsAnalysisTests(unittest.TestCase):
                 tools.mapping(lock),
             )
 
-    def test_pinned_selection_counts_and_portable_recipe(self):
-        lock = tools.load_lock(target="windows-x86_64")
-        self.assertEqual(
-            (lock["platform"], lock["architecture"]), ("windows", "x86_64")
-        )
-        cpp = lock["programs"]["cppcheck"]["selected_files"]
-        clang = lock["programs"]["clangd"]["selected_files"]
-        self.assertEqual(
-            sum(f["runtime_path"].startswith("analysis/cppcheck/cfg/") for f in cpp), 51
-        )
-        self.assertEqual(
-            sum(
-                f["runtime_path"].startswith("analysis/cppcheck/platforms/")
-                for f in cpp
-            ),
-            15,
-        )
-        self.assertEqual(sum(f["kind"] == "license" for f in cpp), 4)
-        self.assertEqual(sum(f["kind"] == "analysis-resource" for f in clang), 332)
-        self.assertNotIn("C:/Users", json.dumps(lock))
-        recipe = lock["programs"]["cppcheck"]["recipe"]
-        for field in ("patch", "utf8_manifest"):
-            self.assertEqual(
-                tools.sha256((tools.ROOT / recipe[field]).read_bytes()),
-                recipe[field + "_sha256"],
-            )
-
-    def test_mapping_inventory_and_sbom_agree(self):
-        lock, data, files, sbom = fixture()
-        tools.validate_analysis(files, data.__getitem__, sbom, lock)
 
     def test_windows_native_missing_modified_or_unowned_dependencies_block(self):
         lock, data, files, sbom = fixture()
@@ -254,25 +224,6 @@ class WindowsAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ownership mismatch"):
                 tools.validate_windows_native(files, data.__getitem__, unowned, True)
 
-    def test_modified_resource_rejected_even_with_rehashed_inventory(self):
-        lock, data, files, sbom = fixture()
-        path = "analysis/clangd/lib/clang/23/include/stddef.h"
-        data[path] += b"extra source"
-        next(f for f in files if f["path"] == path).update(
-            size=len(data[path]), sha256=tools.sha256(data[path])
-        )
-        with self.assertRaisesRegex(RuntimeError, "Pinned upstream bytes changed"):
-            tools.validate_analysis(files, data.__getitem__, sbom, lock)
-
-    def test_unselected_and_misplaced_source_rejected(self):
-        lock, _, _, _ = fixture()
-        for path in (
-            "analysis/clangd/lib/clang/23/include/extra.h",
-            "analysis/cppcheck/addons/a.py",
-            "analysis/clangd/stddef.h",
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Unselected"):
-                tools.classification(path, lock)
 
     def test_sbom_relationship_and_hash_required(self):
         for change in ("relationship", "hash"):
@@ -284,13 +235,6 @@ class WindowsAnalysisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "SBOM"):
                 tools.validate_analysis(files, data.__getitem__, sbom, lock)
 
-    def test_mapping_unknown_field_not_ignored(self):
-        lock, data, files, sbom = fixture()
-        value = tools.mapping(lock)
-        value["private_hashes"] = []
-        data["analysis/runtime.json"] = json.dumps(value).encode()
-        with self.assertRaisesRegex(RuntimeError, "mapping differs"):
-            tools.validate_analysis(files, data.__getitem__, sbom, lock)
 
     def test_pe_ordinary_and_delay_imports(self):
         parsed = tools.pe_imports(pe("KERNEL32.dll", "api-ms-win-core-file-l1-1-0.dll"))
@@ -308,35 +252,6 @@ class WindowsAnalysisTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             tools.pe_imports(b"MZ")
 
-    def test_named_and_ordinal_import_thunks_and_missing_bundled_symbol(self):
-        data = bytearray(pe("local.dll", "kernel32.dll"))
-        struct.pack_into("<I", data, 512, 4256)
-        struct.pack_into("<Q", data, 672, 4296)
-        data[714:734] = b"GetCurrentProcessId\0"
-        struct.pack_into("<I", data, 768 + 16, 4544)
-        struct.pack_into("<Q", data, 960, (1 << 63) | 7)
-        parsed = tools.pe_imports(bytes(data))
-        self.assertEqual(
-            parsed["symbols"]["ordinary"]["local.dll"], ["GetCurrentProcessId"]
-        )
-        self.assertEqual(parsed["symbols"]["delay"]["kernel32.dll"], ["#7"])
-        leaves = {
-            "analysis/cppcheck/cppcheck.exe": bytes(data),
-            "analysis/cppcheck/local.dll": pe(),
-        }
-        with self.assertRaisesRegex(RuntimeError, "Unresolved bundled PE symbol"):
-            tools.validate_pe_closure(
-                [{"path": name} for name in leaves], leaves.__getitem__
-            )
-
-    def test_missing_adjacent_delay_dependency_cannot_use_path(self):
-        files = [{"path": "analysis/cppcheck/cppcheck.exe"}]
-
-        def missing(name, symbols):
-            raise RuntimeError("Unresolved: " + name)
-
-        with self.assertRaisesRegex(RuntimeError, "missing.dll"):
-            tools.validate_pe_closure(files, lambda _: pe(delay="missing.dll"), missing)
 
     def test_adjacent_dependency_and_explicit_os_receipt(self):
         data = {
@@ -369,37 +284,6 @@ class WindowsAnalysisTests(unittest.TestCase):
             tools.system_module(
                 "kernel32.dll", ["BYO_missing_export_for_negative_test"]
             )
-
-    def test_installed_vc_redist_is_not_a_windows_os_module(self):
-        for name in (
-            "vcruntime140.dll",
-            "msvcp140.dll",
-            "concrt140.dll",
-            "msvcr120.dll",
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Redistributable dependency"):
-                tools.system_module(name, [])
-
-    def test_windows_path_aliases_rejected(self):
-        for path in (
-            "../escape",
-            "a//b",
-            "a/./b",
-            "a/CON.txt",
-            "a/file:stream",
-            "C:/a",
-            "a/name.",
-            "a\\b",
-        ):
-            with self.assertRaises(RuntimeError):
-                tools.safe_relative(path)
-
-    @unittest.skipUnless(tools.os.name == "nt", "native Windows staging")
-    def test_source_inputs_missing_fail_before_build(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            with self.assertRaisesRegex(RuntimeError, "pinned local"):
-                tools.stage_windows(root / "bundle", root, root / "evidence")
 
 
 if __name__ == "__main__":

@@ -52,8 +52,8 @@ preserve original failures and partial output. No observer/receipt platform
 or duplicate raw archive is needed.
 
 Existing external drivers can check a verified extracted bundle, for example
-`python release/scripts/final_public_mcp.py --bundle <bundle> --firmware-source
-<source> --evidence <new-directory>`. Such automated execution remains in
+`BYO_INSTALLED_BUNDLE=<bundle> python -m pytest -v
+release/scripts/test_installed_analysis.py`. Such automated execution remains in
 Actions. Reuse is valid only when all actual build inputs are unchanged,
 including packaged data/tests, dependency/toolchain/profile/recipe and
 generated metadata. Record the original build commit and artifact digest

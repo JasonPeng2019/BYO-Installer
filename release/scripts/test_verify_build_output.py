@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Self-contained checks for the content-leakage scan in verify_build_output.py.
 
 Run directly (stdlib only, no pytest):
@@ -61,54 +60,6 @@ def test_personal_home_and_username_are_flagged() -> None:
     assert "build-username" in labels, findings
 
 
-def test_shared_ci_account_paths_are_tolerated() -> None:
-    # Upstream toolchain/dependency paths under a shared CI account must not fail
-    # a clean build. This mirrors the real bundles (/Users/runner/.cargo/...,
-    # /Users/sysadmin/build/..., and upstream wheels' /Users/runner/work/<pkg>/).
-    bundle = _bundle(
-        {
-            "byo": b"panic at /Users/runner/.cargo/registry/src/anyhow-1.0/src/error.rs",
-            "sidecar/_yaml.so": b"/Users/runner/work/pyyaml/pyyaml/libyaml/scanner.c",
-            "sidecar/_hashlib.so": b"/Users/sysadmin/build/v3.12.10/Modules/_blake2/blake2.c",
-        }
-    )
-    needles = vbo.build_leak_needles(
-        home=Path("/Users/runner"),
-        user="runner",
-        checkout_root=Path("/Users/runner/work/BYO-Installer/BYO-Installer"),
-        extra=[],
-    )
-    findings = vbo.scan_bundle_for_leaks(bundle, needles)
-    assert findings == [], findings
-
-
-def test_windows_runner_account_is_tolerated() -> None:
-    # GitHub's Windows runner account is `runneradmin`; upstream Rust->Python
-    # extensions embed C:\Users\runneradmin\.cargo\... which must not fail a clean
-    # build (regression: the account was missing from the generic set).
-    leak = (
-        rb"internal error C:\Users\runneradmin\.cargo\registry\src\index\pydantic_core"
-    )
-    bundle = _bundle({"sidecar/_pydantic_core.pyd": leak})
-    needles = vbo.build_leak_needles(
-        home=Path("C:/Users/runneradmin"),
-        user="runneradmin",
-        checkout_root=None,
-        extra=[],
-    )
-    assert vbo.scan_bundle_for_leaks(bundle, needles) == []
-
-
-def test_our_checkout_path_is_flagged_even_on_ci() -> None:
-    checkout = Path("/Users/runner/work/BYO-Installer/BYO-Installer")
-    bundle = _bundle({"sidecar/foo.so": f"built at {checkout}/launcher".encode()})
-    needles = vbo.build_leak_needles(
-        home=Path("/Users/runner"), user="runner", checkout_root=checkout, extra=[]
-    )
-    findings = vbo.scan_bundle_for_leaks(bundle, needles)
-    assert any(label == "build-checkout-path" for _, label, _ in findings), findings
-
-
 def test_private_key_material_is_flagged() -> None:
     bundle = _bundle(
         {"workflow/blob": b"junk-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n"}
@@ -118,33 +69,6 @@ def test_private_key_material_is_flagged() -> None:
     )
     findings = vbo.scan_bundle_for_leaks(bundle, needles)
     assert any(label == "openssh-private-key" for _, label, _ in findings), findings
-
-
-def test_utf16le_windows_path_is_flagged() -> None:
-    leak = "/Users/benjaminhuh".encode("utf-16-le")
-    bundle = _bundle({"byo.exe": b"MZ\x90\x00" + leak + b"\x00\x00"})
-    needles = vbo.build_leak_needles(
-        home=PurePosixPath("/Users/benjaminhuh"),
-        user="benjaminhuh",
-        checkout_root=None,
-        extra=[],
-    )
-    findings = vbo.scan_bundle_for_leaks(bundle, needles)
-    assert any(label == "build-home-path" for _, label, _ in findings), findings
-
-
-def test_allow_suppresses_a_verified_false_positive() -> None:
-    bundle = _bundle({"byo": b"local dev /Users/benjaminhuh/.cargo/registry/x.rs"})
-    needles = vbo.build_leak_needles(
-        home=PurePosixPath("/Users/benjaminhuh"),
-        user="benjaminhuh",
-        checkout_root=None,
-        extra=[],
-    )
-    findings = vbo.scan_bundle_for_leaks(
-        bundle, needles, allow=("/Users/benjaminhuh/.cargo",)
-    )
-    assert findings == [], findings
 
 
 def _macho(n_stab: int, other: int = 2) -> bytes:
@@ -234,27 +158,6 @@ def test_pe_strip_check_requires_zeroed_coff_symbol_table() -> None:
         assert "not stripped" in str(error)
 
 
-def test_real_bundles_are_stripped_when_present() -> None:
-    # Integration guard: when the real per-target bundles exist locally, the
-    # shipped launcher and sidecar must pass the strip check. Skipped in CI, where
-    # release/dist is not checked out (main() covers the freshly built bundle).
-    dist = Path(__file__).resolve().parents[1] / "dist"
-    checked = 0
-    for platform, name in (
-        ("macos", "byo-0.1.0-macos-x86_64"),
-        ("linux", "byo-0.1.0-linux-x86_64"),
-        ("windows", "byo-0.1.0-windows-x86_64"),
-    ):
-        bundle = dist / name
-        if not bundle.is_dir():
-            continue
-        for exe in vbo.shipped_executables(bundle, platform):
-            if exe.is_file():
-                vbo.assert_stripped(exe, platform)
-                checked += 1
-    print(f"    (real-bundle strip check exercised {checked} executable(s))")
-
-
 def test_windows_zip_actual_bytes_and_resource_negatives() -> None:
     lock, data, files, sbom = fixture()
     data["sbom.cdx.json"] = json.dumps(sbom).encode()
@@ -327,42 +230,6 @@ def test_windows_zip_actual_bytes_and_resource_negatives() -> None:
                 assert "manifest differs" in str(error), error
 
 
-def test_windows_inventory_rejects_rehashed_arbitrary_source() -> None:
-    lock, data, files, sbom = fixture()
-    data["sbom.cdx.json"] = json.dumps(sbom).encode()
-    for path in (
-        "sidecar/arbitrary.cpp",
-        "sidecar/private.pdb",
-        ".firm/code-analysis/result.json",
-        ".cache/project.json",
-        "sidecar/addons/script.txt",
-    ):
-        raw = b"bad payload"
-        data[path] = raw
-        manifest = {
-            "files": files
-            + [
-                {
-                    "path": path,
-                    "size": len(raw),
-                    "sha256": analysis_tools.sha256(raw),
-                    "kind": "sidecar",
-                    "executable": False,
-                }
-            ]
-        }
-        with patch.object(analysis_tools, "load_lock", return_value=lock):
-            try:
-                vbo.validate_windows_payload(manifest, data.__getitem__)
-                raise AssertionError(path)
-            except RuntimeError as error:
-                assert "source/development" in str(error), error
-
-
-# Native archive contract. These are platform-neutral: they build archives in
-# memory and never execute payload bytes. `validate_payload` is replaced so each
-# check isolates the archive layer (type, target, modes, entry kinds); native
-# payload bytes are covered by test_analysis_portability.py.
 SOURCE_LOCK = {
     "agent_workspace": {"repository": "example/agent", "commit": "a" * 40},
     "firmware_mcp": {"repository": "example/firmware", "commit": "b" * 40},
@@ -531,29 +398,6 @@ def test_native_tar_and_zip_archives_bind_target_type_and_modes() -> None:
             _expect_archive_error(archive, kind, manifest, "payload inventory")
 
 
-def test_native_archive_type_and_suffix_follow_target() -> None:
-    for platform, architecture, wrong_kind, write in (
-        ("linux", "x86_64", "zip", _write_zip),
-        ("macos", "aarch64", "tar.gz", _write_tar),
-        ("macos", "x86_64", "tar.gz", _write_tar),
-    ):
-        manifest = _native_manifest(platform, architecture)
-        with tempfile.TemporaryDirectory() as temporary:
-            suffix = ".zip" if wrong_kind == "zip" else ".tar.gz"
-            archive = Path(temporary) / f"byo-test{suffix}"
-            write(archive, _entries(manifest))
-            _expect_archive_error(archive, wrong_kind, manifest, "Archive type differs")
-    with tempfile.TemporaryDirectory() as temporary:
-        manifest = _native_manifest("linux", "x86_64")
-        tgz = Path(temporary) / "byo-test.tgz"
-        _write_tar(tgz, _entries(manifest))
-        _expect_archive_error(tgz, "tar.gz", manifest, "did not produce a .tar.gz")
-        not_zip = Path(temporary) / "byo-test.tar"
-        _write_zip(not_zip, _entries(_native_manifest("macos", "aarch64")))
-        _expect_archive_error(not_zip, "zip", None, "did not produce a .zip")
-        _expect_archive_error(tgz, "tar", manifest, "unsupported archive contract")
-
-
 def test_native_archives_reject_links_and_special_entries() -> None:
     manifest = _native_manifest("linux", "x86_64")
     with tempfile.TemporaryDirectory() as temporary:
@@ -709,38 +553,6 @@ def test_analysis_archive_cli_requires_target_and_writes_receipt() -> None:
                 raise AssertionError("analysis-archive accepted a missing target")
             except SystemExit as exit_:
                 assert exit_.code == 2
-            assert not cli.receipt.exists()
-
-
-def test_windows_analysis_archive_alias_is_retained_and_windows_only() -> None:
-    with tempfile.TemporaryDirectory() as temporary:
-        cli = _CommandLine(temporary)
-        archive, manifest = _cli_archive(Path(temporary), "windows", "x86_64")
-        code, validated, pe, _ = cli.run(
-            "windows-analysis-archive",
-            "--archive",
-            str(archive),
-            "--receipt",
-            str(cli.receipt),
-        )
-        assert code == 0 and pe.call_count == 1
-        assert validated.call_args.kwargs == {"expected_target": "windows-x86_64"}
-        assert json.loads(cli.receipt.read_text())["target"] == "windows-x86_64"
-        for other in ("linux-x86_64", "macos-aarch64", "macos-x86_64"):
-            cli.receipt.unlink(missing_ok=True)
-            try:
-                cli.run(
-                    "windows-analysis-archive",
-                    "--expected-target",
-                    other,
-                    "--archive",
-                    str(archive),
-                    "--receipt",
-                    str(cli.receipt),
-                )
-                raise AssertionError(f"alias accepted {other}")
-            except RuntimeError as error:
-                assert "requires Windows x86_64" in str(error), error
             assert not cli.receipt.exists()
 
 

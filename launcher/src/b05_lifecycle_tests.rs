@@ -87,29 +87,6 @@ fn refresh(project: &Path, paths: &ProductPaths) -> Result<()> {
     refresh_project_locked(project, paths, &lock)
 }
 
-#[test]
-fn semantic_comparisons_preserve_values_and_refuse_ambiguous_keys() {
-    assert!(same_owned_text("skill.md", "instructions\r\n\r\n", "instructions\n").unwrap());
-    assert!(!same_owned_text("skill.md", "other instructions\n", "instructions\n").unwrap());
-    assert!(same_owned_text("mode.json", "{\"b\": 2,\"a\":1}", "{\"a\":1,\"b\":2}\n").unwrap());
-    assert!(same_owned_text("mode.json", "{\"a\":0,\"a\":1}", "{\"a\":1}").is_err());
-    assert!(parse_project_json::<serde_json::Value>(
-        br#"{"permissions":{"allow":false,"allow":true}}"#
-    )
-    .is_err());
-    let a = "command = 'byo'\nargs = ['mcp', 'serve']\nenv = { FOO = 'bar', BAZ = 'qux' }\n"
-        .parse::<DocumentMut>()
-        .unwrap();
-    let b = "# comment\nenv={BAZ=\"qux\",FOO=\"bar\"}\nargs=[\"mcp\",\"serve\"] # comment\ncommand=\"byo\"\n".parse::<DocumentMut>().unwrap();
-    assert_eq!(
-        toml_semantics(a.as_item()).unwrap(),
-        toml_semantics(b.as_item()).unwrap()
-    );
-    assert!("command='byo'\ncommand='other'"
-        .parse::<DocumentMut>()
-        .is_err());
-}
-
 #[cfg(feature = "development")]
 #[test]
 fn formatting_survives_doctor_guard_and_init_but_meaningful_changes_refuse() {
@@ -151,6 +128,19 @@ fn formatting_survives_doctor_guard_and_init_but_meaningful_changes_refuse() {
     doctor_project(&project, &paths).unwrap();
     assert_eq!(guard_mode(&project).unwrap(), "firmware");
     let original = std::fs::read(&codex).unwrap();
+    let mode = project.join(".generated/byo/active-mode.json");
+    let mode_original = std::fs::read(&mode).unwrap();
+    for (path, bytes) in [
+        (&codex, b"[mcp_servers.byo]\ncommand='byo'\ncommand='other'\n".as_slice()),
+        (&mode, br#"{"permissions":{"allow":false,"allow":true}}"#.as_slice()),
+    ] {
+        std::fs::write(path, bytes).unwrap();
+        assert!(doctor_project(&project, &paths).is_err());
+        assert!(init_project(&project, "firmware", false, false, &paths).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), bytes, "refusal preserves the user's input");
+        std::fs::write(&codex, &original).unwrap();
+        std::fs::write(&mode, &mode_original).unwrap();
+    }
     std::fs::write(
         &codex,
         String::from_utf8(original.clone())
@@ -1097,22 +1087,8 @@ fn review_legacy_archive_error_before_directory_recreation_restores_originals() 
 #[test]
 fn legacy_archive_recovery_subprocess() {
     let Some(case_file) = std::env::var_os("BYO_B05_LEGACY_RECOVERY_CASE") else {
-        crate::final_child_receipt!(
-            "helper-declaration",
-            serde_json::json!({
-                "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
-                "reason": "No private case supplied; helper body did not execute"
-            })
-        );
         return;
     };
-    crate::final_child_receipt!(
-        "helper-start",
-        serde_json::json!({
-            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
-            "phase": std::env::var("BYO_FINAL_CHILD_PHASE").ok(), "case_file": PathBuf::from(&case_file)
-        })
-    );
     let case: serde_json::Value = parse_project_json(&std::fs::read(case_file).unwrap()).unwrap();
     let project = PathBuf::from(case["project"].as_str().unwrap());
     let paths: ProductPaths = serde_json::from_value(case["paths"].clone()).unwrap();
@@ -1142,11 +1118,6 @@ fn legacy_archive_recovery_subprocess() {
                         write_json(&paths.state.join("projects.json"), &registry)?;
                         // Abrupt process exit bypasses the caught-error rollback
                         // and all Rust destructors, leaving the real durable state.
-                        crate::final_child_receipt!("interruption-boundary", serde_json::json!({
-                            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
-                            "phase": "archive", "expected_exit": 73,
-                            "boundary": "legacy-archived; real pending journal retained"
-                        }));
                         std::process::exit(73);
                     }
                     Ok(())
@@ -1162,13 +1133,6 @@ fn legacy_archive_recovery_subprocess() {
         }
         phase => panic!("unexpected legacy recovery fixture phase {phase}"),
     }
-    crate::final_child_receipt!(
-        "helper-complete",
-        serde_json::json!({
-            "child_name": "project::b05_lifecycle_tests::legacy_archive_recovery_subprocess",
-            "phase": std::env::var("BYO_FINAL_CHILD_PHASE").ok()
-        })
-    );
 }
 
 #[cfg(feature = "development")]
@@ -1219,7 +1183,6 @@ fn legacy_archive_interruption_recovers_real_journal_in_fresh_process() {
             "child_name": argv[1], "argv": argv, "phase": observation,
             "helper_phase": phase, "case_file": case_file
         });
-        crate::final_child_receipt!("dispatch", &details);
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(argv)
             .env("BYO_B05_LEGACY_RECOVERY_CASE", &case_file)
@@ -1230,12 +1193,6 @@ fn legacy_archive_interruption_recovers_real_journal_in_fresh_process() {
         let mut completed = details;
         completed["exit"] = serde_json::json!(output.status.code());
         completed["success"] = serde_json::json!(output.status.success());
-        crate::final_child_receipt!(
-            "command-complete",
-            completed,
-            &output.stdout,
-            &output.stderr
-        );
         output
     };
     let interrupted = child("archive", "archive");
