@@ -1,14 +1,14 @@
 {
   "schema": "canonical-exact-source-inputs/v1",
-  "candidate": "fixture-minimal-20261116-07",
-  "source_parent": "8b53d74c0831c9c1d817885a9ba25deaeb458cfc",
-  "predecessor_input_sha256": "e5e24ccf74aff95f8a94940ca9575d119ee30de5a7c5b2a936a7929221de9a20",
+  "candidate": "fixture-minimal-20261116-08",
+  "source_parent": "f8fd471a60ec6dd4f75e6160fb15ab600ef5ad30",
+  "predecessor_input_sha256": "c2b4615bf653f8db072aa1e566e33ef9d8a1f31734ccf040340f9e6eccd3416e",
   "firmware_export": {
     "commit": "f2e41e1ace3305c207d4a56d51d86f35c5793707",
     "tree": "c10a84bc6e8a8d326d402100d6c5b99251a4f3fd"
   },
   "installer_source": {
-    "base_commit": "c51619fd9016c0a15d18418498f2eaae48b0ebb8",
+    "base_commit": "28414b9f32a2e86435fb5fa29f09b0be2785718f",
     "current_commit": "GITHUB_SHA; exact checkout bound by committed input index"
   },
   "verification_scope": "Standalone fixture minimization; source fixtures only; no product build, FR/FT, installed/client/model/hardware acceptance",
@@ -1898,8 +1898,8 @@
       "sha256": "a1d1ff7d6a8c0024525e5cc6d4a65f331e6b20f84e92ea46eff7df0bb2c73ac8"
     },
     "hil/run_hil.py": {
-      "bytes": 6601,
-      "sha256": "cf2bc84b6e1e3ade5e59f8177b3b1f9b2ee4cff4c104b59171eda2ee51bf1b1e"
+      "bytes": 6804,
+      "sha256": "c0856ee84f8cd3800463b8cba20caff91846d5b26619a17d4eb1649c4f1e172c"
     },
     "install.ps1": {
       "bytes": 11138,

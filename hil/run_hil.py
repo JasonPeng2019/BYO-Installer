@@ -104,7 +104,9 @@ def main() -> int:
     results: list[dict[str, object]] = []
     try:
         env = os.environ.copy()
-        version = invoke([str(byo), "--version"], env=env, cwd=project).stdout.split()[-1]
+        version = invoke([str(byo), "--version"], env=env, cwd=project).stdout.split()[
+            -1
+        ]
         with Mcp(
             byo,
             project,
@@ -120,15 +122,23 @@ def main() -> int:
             )
             for call in calls:
                 if call["name"] not in available:
-                    raise RuntimeError(f"reviewed HIL tool is unavailable: {call['name']}")
+                    raise RuntimeError(
+                        f"reviewed HIL tool is unavailable: {call['name']}"
+                    )
                 encoded = json.dumps(call["arguments"])
                 if fixture["board_id"] not in encoded:
-                    raise RuntimeError("HIL call is not bound to the allowlisted board ID")
-                result = call_tool(client, call["name"], call["arguments"], call["expect"])
+                    raise RuntimeError(
+                        "HIL call is not bound to the allowlisted board ID"
+                    )
+                result = call_tool(
+                    client, call["name"], call["arguments"], call["expect"]
+                )
                 result_text = json.dumps(result)
-                if call["name"] in {"connect", "connect_override", "get_board_info"} and (
-                    fixture["probe_uid"] not in result_text
-                ):
+                if call["name"] in {
+                    "connect",
+                    "connect_override",
+                    "get_board_info",
+                } and (fixture["probe_uid"] not in result_text):
                     raise RuntimeError(
                         "live probe identity does not match the allowlisted fixture"
                     )
