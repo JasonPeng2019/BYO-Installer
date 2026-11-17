@@ -284,9 +284,10 @@ class OwnedChild:
 class Mcp:
     """One ordinary installed MCP connection, including natural-EOF assertions."""
 
-    def __init__(self, byo, project, env, version, *, logs):
+    def __init__(self, byo, project, env, version, *, logs, read_timeout=90):
         logs.mkdir(parents=True, exist_ok=True)
         self.path = logs / "protocol.jsonl"
+        self.read_timeout = read_timeout
         self.server = start_initialized_mcp(
             byo, project, env, version, diagnostics_path=logs / "stderr.log"
         )
@@ -309,13 +310,16 @@ class Mcp:
             process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
             process.stdin.flush()
             while True:
-                line = read_line(process.stdout, timeout=90)
+                line = read_line(process.stdout, timeout=self.read_timeout)
                 transcript.write(line)
                 response = json.loads(line)
                 if response.get("id") == self.next_id:
                     if "error" in response:
                         raise AcceptanceFailure(f"{method}: {response['error']}")
-                    return response["result"]
+                    result = response.get("result")
+                    if not isinstance(result, dict):
+                        raise AcceptanceFailure(f"Malformed MCP result: {response}")
+                    return result
 
     def tool(self, name, arguments):
         result = self.request("tools/call", {"name": name, "arguments": arguments})

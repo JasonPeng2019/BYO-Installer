@@ -11,6 +11,14 @@ attached. There is no GitHub Actions or self-hosted runner route, and
 quality gates stay in Actions; the release test kit still carries these files
 for local use.
 
+The adapter shares `release/scripts/installed_support.py` with the installed
+scenarios; keep that directory beside `hil/` when using the release test kit.
+Use the locked Firmware Python environment, which includes `psutil` for owned
+process cleanup. Protocol replies keep their 30-second deadline, and natural
+EOF keeps its 20-second deadline. The adapter also checks the MCP version
+against the exact launcher's `--version`. Protocol and stderr logs are retained
+beside the requested receipt in `<receipt-stem>-mcp/` even if a call fails.
+
 `run_hil.py` operates only on an already installed, exact candidate whose
 launcher hash matches. It refuses placeholder identities, changed fixture
 artifacts, unexpected probes, unlisted tool calls, and destructive execution

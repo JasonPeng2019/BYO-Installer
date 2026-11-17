@@ -1052,7 +1052,7 @@ jobs:
       - name: Check changed Installer test helpers
         if: ${{ !cancelled() && steps.fixture-dependencies.outcome == 'success' }}
         run: |
-          files=(release/scripts/test_*.py release/scripts/installed_support.py release/scripts/fixtures/code-analysis-installed/availability/generate.py)
+          files=(release/scripts/test_*.py release/scripts/installed_support.py release/scripts/fixtures/code-analysis-installed/availability/generate.py hil/run_hil.py)
           uv run --no-sync --project "Firmware MCP New" python -m ruff check --diff "${files[@]}" > release/build/fixture-cleanup/installer-lint.patch || true
           uv run --no-sync --project "Firmware MCP New" python -m ruff format --diff "${files[@]}" > release/build/fixture-cleanup/installer-format.patch || true
           uv run --no-sync --project "Firmware MCP New" python -m ruff check "${files[@]}"
